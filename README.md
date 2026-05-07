@@ -55,21 +55,18 @@ Place built web content in:
 
 ```text
 YourProject/Content/html/
-
-````
+```
 
 Example:
 
 ```
 YourProject/Content/html/MainHUD/dist/index.html
-
 ```
 
 Load it with:
 
 ```
 local://MainHUD/dist/index.html
-
 ```
 
 ## C++ naming
@@ -82,7 +79,6 @@ USwuiView
 USwuiBindingAsset
 FSwuiPayload
 ISwuiBackend
-
 ```
 
 ## Status
