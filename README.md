@@ -1,4 +1,3 @@
-````
 # SWUI
 
 **SWUI** is a web UI layer for Unreal Engine.
