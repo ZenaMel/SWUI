@@ -2,9 +2,9 @@ using UnrealBuildTool;
 using System.IO;
 using System;
 
-public class BluLoader : ModuleRules
+public class SwuiLoader : ModuleRules
 {
-	public BluLoader(ReadOnlyTargetRules Target) : base(Target)
+	public SwuiLoader(ReadOnlyTargetRules Target) : base(Target)
     {
         PublicDependencyModuleNames.AddRange(
 			new string[]

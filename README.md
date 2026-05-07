@@ -1,106 +1,99 @@
-[![release](https://img.shields.io/github/release/getnamo/BLUI.svg?style=flat-square)](https://github.com/getnamo/BLUI-Unreal/releases)
-![BLUI-logo](https://cloud.githubusercontent.com/assets/1334174/5969395/201a1202-a7f1-11e4-98a4-12bc6793f830.png)
-[![Github All Releases](https://img.shields.io/github/downloads/getnamo/BLUI-Unreal/total.svg)](https://github.com/getnamo/BLUI-Unreal/releases)
+````
+# SWUI
 
-## Getnamo Fork Notes
+**SWUI** is a web UI layer for Unreal Engine.
 
-A fork of BLUI that is kept relatively up to date.
+It lets you build HUDs, menus, overlays, and interactive game UI with HTML, CSS, and TypeScript, while keeping gameplay state and event wiring inside Unreal.
 
-Latest release is updated to [CEF 128.0.6613.138](https://bitbucket.org/chromiumembedded/cef/src/6613/). See https://github.com/getnamo/BLUbrowser for repo for cef process build.
+SWUI uses a bundled CEF/Chromium runtime through its initial BLUI-derived backend.
 
-To install check out the latest releases https://github.com/getnamo/BLUI-Unreal/releases and drag and drop *Plugins* folder into your project root folder
+## What SWUI does
 
-[Discord Server](https://discord.gg/qfJUyxaW4s)
+SWUI connects reflected Unreal properties and events to a generated TypeScript API.
 
-### Convenience Blueprints
+Instead of manually building JSON, calling JavaScript, or matching raw string event names, you define the UI contract from Unreal objects, properties, and delegates.
 
-The native plugin didn't contain any self contained drag and drop examples so I've added some.
+SWUI then handles:
 
-![examples](https://i.imgur.com/UOCEHM8.png)
+- reading reflected Unreal values
+- inferring value types and ranges
+- forwarding gameplay events
+- generating TypeScript bindings
+- updating the web UI only when values change
+- previewing the UI without launching Unreal Editor
 
-### BluiWidget
+## Workflow
 
-A user widget (UMG) blueprint which embeds a BLU texture as an image brush. Contains various utility functions to allow loading and parsing urls easily. Call ```InitBluEye``` with starting url and browser window size to start this widget. See *BluiWorldWidgetActorExample* for an example of how it's used in practice.
+1. Select Unreal properties and events for your UI.
+2. SWUI generates a typed TypeScript facade.
+3. Build the visual layer with HTML, CSS, and TypeScript.
+4. Preview the UI in a dedicated CEF window.
+5. Run the same UI in Unreal.
 
+## Example use cases
 
-### BluiWorldWidgetActorExample
+- HUDs
+- dynamic crosshairs
+- health, ammo, and stamina displays
+- interaction prompts
+- objective trackers
+- menus
+- inventory screens
+- dialogue UI
+- debug overlays
 
-Encapsulated *BluiWidget* user widget in an actor. Drag and drop this actor into your scene and it will auto-spawn the required *BluTickActor* to make everything work.
+## Preview
 
-![example output](https://i.imgur.com/bso2ah6.png)
+SWUI includes a standalone preview window.
 
-*3 BluiWorldWIdgetActorExample actors with ```youtube.com```, ```blui ue4``` and ```local://test.html``` specified as their URL respectively*
+The preview uses the same bundled CEF/Chromium runtime as the Unreal backend, so the UI is tested in the same browser environment it will use at runtime.
 
+Generated preview controls allow values such as numbers, booleans, strings, enums, and events to be changed live.
 
-#### Url
+## Local UI files
 
-By default the actor will check the url for ```local://``` protocol and load local content first if detected. This should be placed inside the following directory: ```{project root}/Content/html```. NB: You can still use the vanilla ```blui://``` protocol which will load content relative to your project root.
+Place built web content in:
 
-![local url](https://i.imgur.com/30hk67Z.png)
+```text
+YourProject/Content/html/
 
-*e.g. having a test.html file inside your Content/html folder*
+````
 
+Example:
 
-Basic URL validity is also tested, but you can safely ignore http:// etc. E.g. just specifying youtube.com will resolve correctly
+```
+YourProject/Content/html/MainHUD/dist/index.html
 
-![](https://i.imgur.com/R6we4jO.png)
+```
 
+Load it with:
 
-If your URL isn't valid however, it will redirect the string as a search term e.g. typing a sentance or a search term.
+```
+local://MainHUD/dist/index.html
 
-![auto-search](https://i.imgur.com/iDoXyFy.png)
+```
 
+## C++ naming
 
-You can untick *Should Auto Search Invalid Url* to disable this behavior.
+SWUI uses readable Unreal-style class names such as:
 
-#### Resize
-By default the actor has a BLUI resolution of 1000x1000, you can change this by just changing the user widget draw size.
+```
+USwuiBridge
+USwuiView
+USwuiBindingAsset
+FSwuiPayload
+ISwuiBackend
 
-![resize](https://i.imgur.com/kB8X4I5.png)
+```
 
+## Status
 
+SWUI is an early-stage project derived from the BLUI/SimpleWebUI plugin lineage.
 
-### BluTickActor
+The initial focus is a reflection-driven HUD workflow, using a dynamic crosshair sample to dogfood the API and preview system.
 
-Since 4.0.0 - This actor is no longer needed. Ticking happens internally.
+## Credits
 
-Older verions:
-Instead of ticking in your level bp, I prefer to use a simple actor to do the ticking. Other convenience blueprints may spawn this as necessary so if you use those, you don't ever need to use this directly.
+SWUI is derived from the BLUI/SimpleWebUI lineage and keeps the CEF-backed Unreal browser integration model.
 
-## Demo Project
-
-Thanks to @oivio we have the Demo project updated to the latest release. See https://github.com/oivio/BLUI-Demo
-
-### Video of Demo project
-
-[![Demo Project](https://img.youtube.com/vi/R0xylXhBm-0/0.jpg)](https://youtu.be/R0xylXhBm-0)
-
-Click on image to take you to video.
-
-
-What is it?
----------------------------------------
-BLUI is an Unreal Engine 4 plugin that allows easy interaction with the Chromium Embedded Framework. It provides a simple Material Instance and input functions to help streamline the rendering of rich HTML interfaces.
-
-BLUI tries to stay out of the way as much as possible. All rendering of the DOM and processing of the JavaScript happens in a separate process, just like Chromium. BLUI only updates the texture inside the material instance when Chromium requests a redraw, not every tick, saving a bit more processing along the way.
-
-Features
----------------------------------------
-+ Chromium Powered (same thing that powers Google Chrome!)
-+ Fully compatible with every web technology that Chrome/Chromium works with. (HTML5, WebAudio, WebSockets etc.)
-+ No specific ties to ***any*** in game class, simple use Blueprints (or C++) to create a new "BluEye" object and grab its material instance, then you can paint it on anything!
-+ Execute JavaScript in the "browser" from your game to pass data to the web page
-+ Using `blu_event` JS native function you can pass data from the page's JavaScript back into UE4!
-+ C++ or Blueprints, works with both!
-
-Setting up the editor and project
----------------------------------------
-Then copy the `BLUI` folder into the "Plugins" folder within your **project** directory, and enable the plugin.
-
-Re-generate your project's Visual Studio file and load up the editor. Then check the plugin list to ensure it has been loaded!
-
-
-Loading Local Files
----------------------------------------
-Set your default URL or use the "Load URL" node/method to load a URL that starts with `local://` this will point to the Content/html directory root of the project or the game (if packaged). So if you wanted to load an HTML file from `YourProject/Content/html/UI/file.html`, set the URL to `local://UI/file.html`
-
+Original license notices and credits are preserved according to the upstream license.

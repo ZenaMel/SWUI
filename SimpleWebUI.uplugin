@@ -1,0 +1,27 @@
+{
+	"FileVersion": 3,
+	"FriendlyName": "SimpleWebUI (SWUI)",
+	"Version": 3,
+	"VersionName": "5.0.0",
+	"Description": "Chromium Embedded Framework (CEF) powered HTML UI and HUD for Unreal Engine 4",
+	"Category": "UI",
+	"CreatedBy": "Aaron M. Shea, Getnamo, & Contributors",
+	"CreatedByURL": "github.com/getnamo",
+	"DocsURL": "https://github.com/SimpleWebUI",
+	"EnabledByDefault": true,
+	"CanContainContent": true,
+	"Modules": [
+		{
+			"Name": "SwuiLoader",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault",
+			"BlacklistPlatforms": [ "Android", "IOS" ]
+		},
+		{
+			"Name": "SwuiRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault",
+			"BlacklistPlatforms": [ "Android", "IOS" ]
+		}
+	],
+}

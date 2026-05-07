@@ -4,8 +4,8 @@ import platform, urllib2, os, shutil, sys, argparse, glob, fileinput
 
 CEF_VERSION = "2623"
 CEF_BUILD_SCRIPT_URL = "https://bitbucket.org/chromiumembedded/cef/raw/master/tools/automate/automate-git.py"
-BLUI_PATCH = [
-	["./cefbuild/cef/libcef/common/main_delegate.cc", "./browser/cef3_macosx_framework_pathBLUI.patch"],
+SWUI_PATCH = [
+	["./cefbuild/cef/libcef/common/main_delegate.cc", "./browser/cef3_macosx_framework_pathSWUI.patch"],
 	["./cefbuild/cef/libcef/resources/framework-Info.plist", "./browser/framework-id-osx.patch"],
 	["./cefbuild/cef/include/cef_base.h", "./browser/cef_base.patch"],
 	["./cefbuild/cef/include/base/cef_thread_collision_warner.h", "./browser/cef_thread_collision_warner.patch"]
@@ -15,11 +15,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--msvc')
 args = parser.parse_args()
 
-class BLUIBuilder():
+class SWUIBuilder():
 	def __init__(self):
 		self.pre_reqs = []
 		# Non platform specific things
-		self.git_commands = ["git clone https://github.com/AaronShea/BLUI.git blui", 
+		self.git_commands = ["git clone https://github.com/AaronShea/SWUI.git SWUI", 
 				"git clone https://github.com/AaronShea/BluBrowser.git browser"]
 
 	def init(self):
@@ -62,7 +62,7 @@ class BLUIBuilder():
 
 	def patch_files(self):
 		print "Applying patches..."
-		for patchpair in BLUI_PATCH:
+		for patchpair in SWUI_PATCH:
 				cmd = "patch --verbose %s < %s" % (patchpair[0], patchpair[1])
 				os.system(cmd)
 
@@ -116,23 +116,23 @@ class BLUIBuilder():
                 packInclude = "./cefbuild/cef/include/"
 
                 # Copy libs
-                shutil.copytree(packLibReleasePath, "./blui/ThirdParty/cef/Win/lib")
-                shutil.copytree(packLibDebugPath, "./blui/ThirdParty/cef/Win/lib/Debug")
+                shutil.copytree(packLibReleasePath, "./SWUI/ThirdParty/cef/Win/lib")
+                shutil.copytree(packLibDebugPath, "./SWUI/ThirdParty/cef/Win/lib/Debug")
 
                 # Copy shipping files
-                shutil.copytree(packShipping, "./blui/ThirdParty/cef/Win/shipping")
+                shutil.copytree(packShipping, "./SWUI/ThirdParty/cef/Win/shipping")
 
                 # Copy include files
-                shutil.copytree(packInclude, "./blui/ThirdParty/cef/Win/include")
+                shutil.copytree(packInclude, "./SWUI/ThirdParty/cef/Win/include")
 
-                print "=== ALL DONE! BLUI has been packaged for Windows! [in ./blui]"
+                print "=== ALL DONE! SWUI has been packaged for Windows! [in ./SWUI]"
         ######## End Windows Build Commands ########     
                 
 
 	def get_os(self):
 		return platform.system()
 
-builder = BLUIBuilder()
+builder = SWUIBuilder()
 
 builder.init()
 builder.check_pre_reqs()

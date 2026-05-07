@@ -4,9 +4,9 @@
 #pragma once
 #include "Modules/ModuleManager.h"
 
-DECLARE_LOG_CATEGORY_EXTERN(LogBluLoader, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogSwuiRuntime, Log, All);
 
-class IBluLoader : public IModuleInterface
+class SWUIRUNTIME_API ISwuiRuntime : public IModuleInterface
 {
 public:
 
@@ -16,9 +16,9 @@ public:
 	*
 	* @return Returns singleton instance, loading the module on demand if needed
 	*/
-	static inline IBluLoader& Get()
+	static inline ISwuiRuntime& Get()
 	{
-		return FModuleManager::LoadModuleChecked<IBluLoader>("BluLoader");
+		return FModuleManager::LoadModuleChecked<ISwuiRuntime>("SwuiRuntime");
 	}
 
 	/**
@@ -28,7 +28,6 @@ public:
 	*/
 	static inline bool IsAvailable()
 	{
-		return FModuleManager::Get().IsModuleLoaded("BluLoader");
+		return FModuleManager::Get().IsModuleLoaded("SwuiRuntime");
 	}
-
 };

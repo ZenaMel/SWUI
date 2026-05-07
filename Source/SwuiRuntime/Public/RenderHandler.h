@@ -1,15 +1,15 @@
 #pragma once
 
 #include "CEFInclude.h"
-#include "BluTypes.h"
+#include "SwuiTypes.h"
 
-class UBluEye;
+class USwuiEye;
 
 
 class RenderHandler : public CefRenderHandler
 {
 	public:
-		UBluEye* ParentUI;
+		USwuiEye* ParentUI;
 
 		int32 Width;
 		int32 Height;
@@ -19,7 +19,7 @@ class RenderHandler : public CefRenderHandler
 
 		void OnPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type, const RectList &DirtyRects, const void *Buffer, int Width, int Height) override;
 
-		RenderHandler(int32 Width, int32 Height, UBluEye* UI);
+		RenderHandler(int32 Width, int32 Height, USwuiEye* UI);
 
 		// CefBase interface
 		// NOTE: Must be at bottom

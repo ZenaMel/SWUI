@@ -1,54 +1,54 @@
 #pragma once
 
 #include "RenderHandler.h"
-#include "BluTypes.h"
-#include "BluManager.h"
+#include "SwuiTypes.h"
+#include "SwuiManager.h"
 #include "UObject/Object.h"
-#include "BluEye.generated.h"
+#include "SwuiEye.generated.h"
 
-UCLASS(ClassGroup = Blu, Blueprintable)
-class BLU_API UBluEye : public UObject
+UCLASS(ClassGroup = Swui, Blueprintable)
+class SWUIRUNTIME_API USwuiEye : public UObject
 {
 	GENERATED_BODY()
 
-	UBluEye(const class FObjectInitializer& PCIP);
+	USwuiEye(const class FObjectInitializer& PCIP);
 
 public:
 
 	//Event delegates
-	UPROPERTY(BlueprintAssignable, Category = "Blu Browser Events")
+	UPROPERTY(BlueprintAssignable, Category = "Swui Browser Events")
 	FDownloadCompleteSignature DownloadComplete;
 
-	UPROPERTY(BlueprintAssignable, Category = "Blu Browser Events")
+	UPROPERTY(BlueprintAssignable, Category = "Swui Browser Events")
 	FDownloadUpdatedSignature DownloadUpdated;
 
 	//GENERATED_UCLASS_BODY()
 
 	/** Initialize function, should be called after properties are set */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void Init();
 
 	/** The default URL this UI component will load */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	FString DefaultURL;
 
 	/** Is this UI component current active? */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bEnabled;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
-	FBluEyeSettings Settings;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
+	FSwuiEyeSettings Settings;
 
 	/** Material that will be instanced to load UI texture into it */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	UMaterialInterface* BaseMaterial;
 
 	/** Name of parameter to load UI texture into material */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Blu")
-	FName TextureParameterName = "BluTexture";
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SwuiRuntime")
+	FName TextureParameterName = "SwuiTexture";
 
-	UFUNCTION(BlueprintCallable, Category = "Blu")
-	UBluEye* SetProperties(const int32 SetWidth,
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
+	USwuiEye* SetProperties(const int32 SetWidth,
 							const int32 SetHeight,
 							const bool SetIsTransparent,
 							const bool SetEnabled,
@@ -58,11 +58,11 @@ public:
 							UMaterialInterface* SetBaseMaterial);
 
 	/** Get the texture data from our UI component */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	UTexture2D* GetTexture() const;
 
 	/** Execute JS code inside the browser */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void ExecuteJS(const FString& code);
 
 	/** 
@@ -72,59 +72,59 @@ public:
 	 * If you want to pass a number, do similar: 10.5
 	 * To pass as a string, place quotes around the param when adding to the array: "10.5" and "hello" are strings
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Blu", meta = (DisplayName = "Execute Javascript With Params", Keywords = "js javascript parameters"))
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime", meta = (DisplayName = "Execute Javascript With Params", Keywords = "js javascript parameters"))
 	void ExecuteJSMethodWithParams(const FString& methodName, const TArray<FString> params);
 
 	/** Load a new URL into the browser */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void LoadURL(const FString& newURL);
 
 	/** Get the currently loaded URL */
-	UFUNCTION(BlueprintPure, Category = "Blu")
+	UFUNCTION(BlueprintPure, Category = "SwuiRuntime")
 	FString GetCurrentURL();
 
 	/** Trigger Zoom */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void SetZoom(const float scale = 1);
 
 	/** Get our zoom level */
-	UFUNCTION(BlueprintPure, Category = "Blu")
+	UFUNCTION(BlueprintPure, Category = "SwuiRuntime")
 	float GetZoom();
 
 	/** Download a file */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void DownloadFile(const FString& fileUrl);
 
 	/** Trigger a LEFT click in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerLeftClick(const FVector2D& pos, const float scale = 1);
 
 	/** Trigger a RIGHT click in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerRightClick(const FVector2D& pos, const float scale = 1);
 
 	/** Trigger a LEFT MOUSE DOWN in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerLeftMouseDown(const FVector2D& pos, const float scale = 1);
 
 	/** Trigger a RIGHT MOUSE DOWN in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerRightMouseDown(const FVector2D& pos, const float scale = 1);
 
 	/** Trigger a LEFT MOUSE UP in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerLeftMouseUp(const FVector2D& pos, const float scale = 1);
 
 	/* Trigger a RIGHT MOUSE UP in the browser via a Vector2D */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerRightMouseUp(const FVector2D& pos, const float scale = 1);
 
 	/** Move the mouse in the browser */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerMouseMove(const FVector2D& pos, const float scale = 1);
 
 	/** Move the mouse in the browser */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void TriggerMouseWheel(const float MouseWheelDelta, const FVector2D& pos, const float scale = 1);
 
 	/** Javascript event emitter */
@@ -135,27 +135,27 @@ public:
 	FLogEvent LogEventEmitter;
 
 	/** Trigger a key down event */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void KeyDown(FKeyEvent InKey);
 
 	/** Trigger a key up event */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void KeyUp(FKeyEvent InKey);
 
 	/** Trigger a key press event */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void KeyPress(FKeyEvent InKey);
 
 	/** Trigger a character key event as if typing input */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void CharKeyInput(FCharacterEvent CharEvent);
 
 	/** Trigger a character key event as if pressing like a keyboard shortcut */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void CharKeyDownUp(FCharacterEvent CharEvent);
 
 	/** Trigger a raw keypress via a character */
-	UFUNCTION(BlueprintCallable, Category = "Blu", meta = (AdvancedDisplay = "2"))
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime", meta = (AdvancedDisplay = "2"))
 	void RawCharKeyPress(const FString CharToPress, bool bIsRepeat,
 								bool LeftShiftDown,
 								bool RightShiftDown,
@@ -168,7 +168,7 @@ public:
 								bool CapsLocksOn);
 
 	/** Trigger a raw keypress via a character */
-	UFUNCTION(BlueprintCallable, Category = "Blu", meta = (AdvancedDisplay = "2"))
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime", meta = (AdvancedDisplay = "2"))
 	void RawCharKeyDownUp(const FString CharToPress, bool bIsRepeat,
 		bool LeftShiftDown,
 		bool RightShiftDown,
@@ -180,8 +180,8 @@ public:
 		bool RightCommandDown,
 		bool CapsLocksOn);
 
-	UFUNCTION(BlueprintCallable, Category = "Blu", meta = (AdvancedDisplay = "2"))
-	void SpecialKeyPress(EBluSpecialKeys key,
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime", meta = (AdvancedDisplay = "2"))
+	void SpecialKeyPress(ESwuiSpecialKeys key,
 								bool LeftShiftDown,
 								bool RightShiftDown,
 								bool LeftControlDown,
@@ -193,31 +193,31 @@ public:
 								bool CapsLocksOn);
 
 	/** Close the browser */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void CloseBrowser();
 
 	/** Check if the browser is still loading */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	bool IsBrowserLoading();
 
 	/** Reloads the browser's current page */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void ReloadBrowser(bool IgnoreCache);
 
 	/** Navigate back in this web view's history */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void NavBack();
 
 	/** Navigate forward in this web view's history */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	void NavForward();
 
 	/** Resize the browser's viewport */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	UTexture2D* ResizeBrowser(const int32 NewWidth, const int32 NewHeight);
 
 	//This cropping function doesn't work atm
-	//UFUNCTION(BlueprintCallable, Category = "Blu")
+	//UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	UTexture2D* CropWindow(const int32 Y, const int32 X, const int32 NewWidth, const int32 NewHeight);
 
 	void TextureUpdate(const void* Buffer, FUpdateTextureRegion2D * UpdateRegions, uint32  RegionCount);
@@ -225,7 +225,7 @@ public:
 	void BeginDestroy() override;
 
 	/** Use this to pause the tick loop in the new system */
-	UFUNCTION(BlueprintCallable, Category = "Blu")
+	UFUNCTION(BlueprintCallable, Category = "SwuiRuntime")
 	static void SetShouldTickEventLoop(bool ShouldTick = true);
 
 protected:
@@ -261,6 +261,6 @@ protected:
 
 private:
 
-	FBluTextureParams RenderParams;
+	FSwuiTextureParams RenderParams;
 	FThreadSafeBool bValidTexture;
 };

@@ -1,6 +1,6 @@
-### BLUI CEF Chromium Build Script
+### SWUI CEF Chromium Build Script
 
-Current CEF building instructions: https://github.com/getnamo/blubrowser
+Current CEF building instructions: see the SWUI browser process repository.
 
 #### Archived - Windows Steps
 
@@ -18,6 +18,6 @@ Git
 * Use command prompt to navigate to the builder.py location.
 * Run `python builder.py` and provide the Visual Studio version (2015 is recommended)
 * Wait. A very long time. Really.
-* If no errors. Folder `blui` will contain all source and binary files needed for the `Plugins` folder.
+* If no errors. Folder `SWUI` will contain all source and binary files needed for the `Plugins` folder.
 
 > Other platforms for this script are still a WIP...

@@ -3,7 +3,7 @@ using UnrealBuildTool;
 using System.IO;
 using System;
 
-public class Blu : ModuleRules
+public class SwuiRuntime : ModuleRules
 {
 
 	private string ThirdPartyPath
@@ -19,7 +19,7 @@ public class Blu : ModuleRules
 		}
 	}
 
-	public Blu(ReadOnlyTargetRules Target) : base(Target)
+	public SwuiRuntime(ReadOnlyTargetRules Target) : base(Target)
 	{
         PublicDependencyModuleNames.AddRange(
 			new string[] {
@@ -104,7 +104,7 @@ public class Blu : ModuleRules
 		}
 		else
 		{
-			throw new BuildException("BLUI: Platform not supported");
+			throw new BuildException("SWUI: Platform not supported");
 		}
 	}
 }

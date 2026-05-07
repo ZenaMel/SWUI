@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "BluTypes.generated.h"
+#include "SwuiTypes.generated.h"
 
 struct FTickEventLoopData
 {
@@ -17,7 +17,7 @@ struct FTickEventLoopData
 	}
 };
 
-struct FBluTextureParams
+struct FSwuiTextureParams
 {
 	// Pointer to our Texture's resource
 	FTexture2DResource* Texture2DResource;
@@ -34,7 +34,7 @@ struct FUpdateTextureRegionsData
 };
 
 UENUM(BlueprintType)
-enum EBluSpecialKeys
+enum ESwuiSpecialKeys
 {
 	backspacekey = 8 UMETA(DisplayName = "Backspace"),
 	tabkey = 9 UMETA(DisplayName = "Tab"),
@@ -58,34 +58,34 @@ enum EBluSpecialKeys
 
 
 USTRUCT(BlueprintType)
-struct FBluEyeSettings
+struct FSwuiEyeSettings
 {
 	GENERATED_USTRUCT_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "BluSettings")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiSettings")
 	float FrameRate;
 
 	/** Should this be rendered in game to be transparent? */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bIsTransparent;
 
 	/** Width(X) and Height(Y) of the view resolution */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	FVector2D ViewSize;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bEnableWebGL;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bAudioMuted;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bAutoPlayEnabled;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Blu")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "SwuiRuntime")
 	bool bDebugLogTick;
 
-	FBluEyeSettings();
+	FSwuiEyeSettings();
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FScriptEvent, const FString&, EventName, const FString&, EventMessage);

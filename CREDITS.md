@@ -1,6 +1,6 @@
-# BluI third-party Licenses
+# SWUI third-party Licenses
 
-BluI makes use of various third-party code and libraries. Below are the names and their appropriate licenses:
+SWUI makes use of various third-party code and libraries. Below are the names and their appropriate licenses:
 
 ## VaQuoleUI
 

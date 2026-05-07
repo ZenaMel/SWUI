@@ -1,8 +1,8 @@
 #include "RenderHandler.h"
 #include "Interfaces/IPluginManager.h"
-#include "BluEye.h"
+#include "SwuiEye.h"
 
-RenderHandler::RenderHandler(int32 Width, int32 Height, UBluEye* UI)
+RenderHandler::RenderHandler(int32 Width, int32 Height, USwuiEye* UI)
 {
 	this->Width = Width;
 	this->Height = Height;
@@ -115,9 +115,9 @@ FString ReversePathSlashes(FString ForwardPath)
 {
 	return ForwardPath.Replace(TEXT("/"), TEXT("\\"));
 }
-FString UtilityBLUIDownloadsFolder()
+FString UtilitySWUIDownloadsFolder()
 {
-	return ReversePathSlashes(FPaths::ConvertRelativePathToFull(IPluginManager::Get().FindPlugin("BLUI")->GetBaseDir() + "/Downloads/"));
+	return ReversePathSlashes(FPaths::ConvertRelativePathToFull(IPluginManager::Get().FindPlugin("SimpleWebUI")->GetBaseDir() + "/Downloads/"));
 }
 
 
@@ -141,7 +141,7 @@ bool BrowserClient::OnBeforeDownload(
 	UNREFERENCED_PARAMETER(DownloadItem);
 
 	//We use this concatenation method to mix c_str with regular FString and then convert the result back to c_str
-	FString DownloadPath = UtilityBLUIDownloadsFolder() + FString(SuggestedName.ToWString().c_str());
+	FString DownloadPath = UtilitySWUIDownloadsFolder() + FString(SuggestedName.ToWString().c_str());
 
 	Callback->Continue(*DownloadPath, false);	//don't show the download dialog, just go for it
 

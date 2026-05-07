@@ -2,13 +2,13 @@
 
 #include "CEFInclude.h"
 
-class BLU_API BluManager : public CefApp
+class SWUIRUNTIME_API SwuiManager : public CefApp
 {
 public:
 
-	BluManager();
+	SwuiManager();
 
-	static void DoBluMessageLoop();
+	static void DoSwuiMessageLoop();
 	static CefSettings Settings;
 	static CefMainArgs MainArgs;
 	static bool CPURenderSettings;
@@ -17,6 +17,6 @@ public:
 	virtual void OnBeforeCommandLineProcessing(const CefString& ProcessType,
 			CefRefPtr< CefCommandLine > CommandLine) override;
 
-	IMPLEMENT_REFCOUNTING(BluManager);
+	IMPLEMENT_REFCOUNTING(SwuiManager);
 };
 

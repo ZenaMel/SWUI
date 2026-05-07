@@ -1,10 +1,10 @@
-#include "BluManager.h"
+#include "SwuiManager.h"
 
-BluManager::BluManager()
+SwuiManager::SwuiManager()
 {
 }
 
-void BluManager::OnBeforeCommandLineProcessing(const CefString& process_type,
+void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	CefRefPtr< CefCommandLine > CommandLine)
 {
 
@@ -14,7 +14,7 @@ void BluManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	* If set to "true": CEF will use less CPU, but rendering performance will be lower. CSS3 and WebGL are not be usable
 	* If set to "false": CEF will use more CPU, but rendering will be better, CSS3 and WebGL will also be usable
 	*/
-	BluManager::CPURenderSettings = false;
+	SwuiManager::CPURenderSettings = false;
 	/////////////////
 
 	CommandLine->AppendSwitch("off-screen-rendering-enabled");
@@ -49,12 +49,12 @@ void BluManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 
 }
 
-void BluManager::DoBluMessageLoop()
+void SwuiManager::DoSwuiMessageLoop()
 {
 	CefDoMessageLoopWork();
 }
 
-CefSettings BluManager::Settings;
-CefMainArgs BluManager::MainArgs;
-bool BluManager::CPURenderSettings = false;
-bool BluManager::AutoPlay = true;
+CefSettings SwuiManager::Settings;
+CefMainArgs SwuiManager::MainArgs;
+bool SwuiManager::CPURenderSettings = false;
+bool SwuiManager::AutoPlay = true;
