@@ -2,6 +2,7 @@
 
 #include "Components/ActorComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "SwuiBindingSource.h"
 #include "Swui.generated.h"
 
 /**
@@ -29,6 +30,7 @@ class SWUIRUNTIME_API USwui : public UActorComponent
 
 public:
 	USwui();
+	void EnsureOwnerBindingSource();
 
 	// Used as the TypeScript interface name and generated file prefix.
 	// e.g. "PlayerHUD" → Content/UI/generated/PlayerHUD.generated.ts
@@ -61,18 +63,11 @@ public:
 	FName TextureParameterName = TEXT("SwuiTexture");
 
 	// ---- Bindings ----------------------------------------------------------
-	// The class you pass to "SWUI Observe" at runtime (e.g. your Character class).
-	// Used ONLY for TypeScript codegen — has zero effect at runtime.
-	// Tip: set this to whatever class owns the properties in the checklist below.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings",
-		meta=(DisplayName="Codegen Source Class",
-		      ToolTip="The class whose properties you are observing via SWUI Observe nodes (e.g. your Character or PlayerState class). Only used to generate TypeScript types — ignored at runtime."))
-	TSubclassOf<UObject> CodegenSourceClass;
-
-	// Properties checked in the Details panel checklist.
-	// Each entry is registered with the SWUI subsystem on BeginPlay.
+	// One entry per class you are observing (Character, Weapon, PlayerController, etc.).
+	// First entry is auto-populated with the owner actor's class.
+	// Each entry has its own property checklist. Used for TypeScript codegen only.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings")
-	TArray<FName> ExposedProperties;
+	TArray<FSwuiBindingSource> BindingSources;
 
 	// Stop syncing all observed properties/events for a source object.
 	// Call from PlayerController's OnUnPossess, passing the old pawn.

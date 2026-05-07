@@ -12,4 +12,5 @@ public:
 
 private:
 	TWeakObjectPtr<USwui> SwuiPtr;
+	IDetailLayoutBuilder* CachedDetailBuilder = nullptr;
 };

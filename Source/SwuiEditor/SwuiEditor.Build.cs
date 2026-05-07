@@ -21,6 +21,8 @@ public class SwuiEditor : ModuleRules
 			"KismetCompiler",
 			"GraphEditor",
 			"Kismet",
+			// Class picker widget in Details panel
+			"ClassViewer",
 		});
 
 		PrivateIncludePaths.Add("SwuiEditor/Private");
