@@ -35,7 +35,7 @@ void FSwuiDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 
 	// Force panel rebuild when the source class changes
 	TSharedRef<IPropertyHandle> SourceClassHandle =
-		DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USwui, BindingSourceClass));
+		DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USwui, CodegenSourceClass));
 
 	SourceClassHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([&DetailBuilder]()
 	{
@@ -50,7 +50,7 @@ void FSwuiDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 	// Show the source class picker in the category
 	Cat.AddProperty(SourceClassHandle);
 
-	UClass* SourceClass = Bridge->BindingSourceClass;
+	UClass* SourceClass = Bridge->CodegenSourceClass;
 	if (!SourceClass) return;
 
 	// Section header

@@ -4,8 +4,11 @@
 #include "Blueprint/UserWidget.h"
 #include "Swui.generated.h"
 
-class USwuiView;
-
+/**
+ * Minimal concrete UUserWidget subclass used to host the CEF render surface.
+ * UUserWidget::StaticClass() is abstract-flagged in some UE builds; this
+ * concrete subclass avoids the CreateWidget assertion.
+ */
 UCLASS()
 class SWUIRUNTIME_API USwuiWidget : public UUserWidget
 {
@@ -13,9 +16,11 @@ class SWUIRUNTIME_API USwuiWidget : public UUserWidget
 };
 
 /**
- * USwui — Add this to any Actor to render a web UI and sync
- * reflected game state into it. Configure which properties to expose
- * via the "Web UI Bindings" section in the Details panel.
+ * USwui — Add this to any Actor to configure and launch a SimpleWebUI surface.
+ * Place on a PlayerController for a HUD, or any Actor for world-space surfaces.
+ *
+ * To sync game state into the web UI, call "SWUI Observe" Blueprint nodes on
+ * any object in the game world — no component needed on those objects.
  */
 UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent))
 class SWUIRUNTIME_API USwui : public UActorComponent
@@ -25,27 +30,24 @@ class SWUIRUNTIME_API USwui : public UActorComponent
 public:
 	USwui();
 
-	// ---- Display ----
-
-	// Used as the TypeScript interface name and generated file name.
-	// e.g. "MainHUD" → Content/UI/generated/MainHUD.generated.ts
+	// Used as the TypeScript interface name and generated file prefix.
+	// e.g. "PlayerHUD" → Content/UI/generated/PlayerHUD.generated.ts
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI")
 	FString InterfaceName = TEXT("MyHUD");
 
-	// URI to load. Bare paths (e.g. "UI/hud") resolve under Content/ with .html implicit.
+	// URI to load. Bare paths and swui:// resolve under Content/ (.html implicit).
 	// http://, https://, and localhost URIs are passed through directly.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI")
 	FString DefaultURI;
 
-	// When enabled, the web surface automatically matches the game render resolution.
+	// When true the surface automatically matches the game render resolution.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI")
 	bool bIsHUD = true;
 
-	// Ignored when bIsHUD is true.
+	// Manual resolution — ignored when bIsHUD is true.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI", meta=(EditCondition="!bIsHUD"))
 	int32 ViewWidth = 1280;
 
-	// Ignored when bIsHUD is true.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI", meta=(EditCondition="!bIsHUD"))
 	int32 ViewHeight = 720;
 
@@ -58,45 +60,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SimpleWebUI")
 	FName TextureParameterName = TEXT("SwuiTexture");
 
-	// ---- Bindings ----
+	// ---- Bindings ----------------------------------------------------------
+	// The class you pass to "SWUI Observe" at runtime (e.g. your Character class).
+	// Used ONLY for TypeScript codegen — has zero effect at runtime.
+	// Tip: set this to whatever class owns the properties in the checklist below.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings",
+		meta=(DisplayName="Codegen Source Class",
+		      ToolTip="The class whose properties you are observing via SWUI Observe nodes (e.g. your Character or PlayerState class). Only used to generate TypeScript types — ignored at runtime."))
+	TSubclassOf<UObject> CodegenSourceClass;
 
-	// The class whose properties appear in the Web UI Bindings checklist.
-	// Set this to your Character, PlayerController, or other game class.
+	// Properties checked in the Details panel checklist.
+	// Each entry is registered with the SWUI subsystem on BeginPlay.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings")
-	TSubclassOf<AActor> BindingSourceClass;
-
-	// Properties checked in the Details panel checklist — synced to the web UI at runtime.
-	// Prefer using the checklist rather than editing this array directly.
-	UPROPERTY(EditAnywhere, Category="SimpleWebUI|Bindings")
 	TArray<FName> ExposedProperties;
 
-	// How often (seconds) state values are pushed to the web UI. Default: 0.05s (20 Hz).
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings", meta=(ClampMin="0.016"))
-	float StateSyncInterval = 0.05f;
-
-	// ---- Blueprint API ----
-
-	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
-	void LoadURI(const FString& URI);
-
-	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
-	void ExecuteJavaScript(const FString& Script);
-
-	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
-	USwuiView* GetView() const { return View; }
-
 private:
-	UPROPERTY()
-	USwuiView* View = nullptr;
-
-	UPROPERTY()
-	UUserWidget* Widget = nullptr;
-
-	FTimerHandle StateTickHandle;
-
-	void InitView();
-	void PushStateToJS();
-
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 };
