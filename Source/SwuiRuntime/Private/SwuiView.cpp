@@ -62,7 +62,7 @@ void USwuiView::LoadURL(const FString& URI)
 		return;
 	}
 
-	// http/https/localhost → pass through directly
+	// http/https/localhost/file → pass through directly
 	if (URI.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase)
 		|| URI.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase)
 		|| URI.StartsWith(TEXT("localhost"), ESearchCase::IgnoreCase)
@@ -72,14 +72,21 @@ void USwuiView::LoadURL(const FString& URI)
 		return;
 	}
 
-	// swui:// or bare path → resolve relative to project directory
-	FString GameDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	// swui:// or bare path → resolve under Content/
 	FString Relative = URI;
 	if (Relative.StartsWith(TEXT("swui://"), ESearchCase::IgnoreCase))
 	{
 		Relative = Relative.RightChop(7); // strip "swui://"
 	}
-	FString LocalFile = FString(TEXT("file:///")) + GameDir + Relative;
+
+	// Append .html if no extension provided
+	if (FPaths::GetExtension(Relative).IsEmpty())
+	{
+		Relative += TEXT(".html");
+	}
+
+	FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir());
+	FString LocalFile = FString(TEXT("file:///")) + ContentDir + Relative;
 	CefData->Browser->GetMainFrame()->LoadURL(*LocalFile);
 }
 
