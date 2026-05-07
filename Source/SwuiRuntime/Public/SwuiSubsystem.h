@@ -47,6 +47,9 @@ public:
 	void ShutdownRenderer();
 
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
+	void SetWidgetVisible(bool bVisible);
+
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
 	void LoadURI(const FString& URI);
 
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")

@@ -149,6 +149,12 @@ void USwuiSubsystem::ShutdownRenderer()
 	View   = nullptr;
 }
 
+void USwuiSubsystem::SetWidgetVisible(bool bVisible)
+{
+	if (Widget)
+		Widget->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+}
+
 void USwuiSubsystem::LoadURI(const FString& URI)
 {
 	if (View) View->LoadURL(URI);

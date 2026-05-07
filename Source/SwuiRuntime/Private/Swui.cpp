@@ -44,3 +44,12 @@ void USwui::Unobserve(UObject* Source)
 			Sub->Unobserve(Source);
 }
 
+void USwui::SetHUDVisible(bool bVisible)
+{
+	UWorld* World = GetWorld();
+	if (!World) return;
+	if (UGameInstance* GI = World->GetGameInstance())
+		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
+			Sub->SetWidgetVisible(bVisible);
+}
+

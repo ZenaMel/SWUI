@@ -79,6 +79,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))
 	void Unobserve(UObject* Source);
 
+	// Show or hide the web surface. The CEF browser keeps running in the background.
+	// Use to suppress the HUD during cutscenes, loading screens, etc.
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
+	void SetHUDVisible(bool bVisible);
+
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
+	void ShowHUD() { SetHUDVisible(true); }
+
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
+	void HideHUD() { SetHUDVisible(false); }
+
 private:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
