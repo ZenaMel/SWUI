@@ -1,6 +1,7 @@
 #include "SwuiHudElement.h"
 #include "SwuiView.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
 #include "Components/Image.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
@@ -16,11 +17,7 @@ USwuiHudElement::USwuiHudElement()
 void USwuiHudElement::BeginPlay()
 {
 	Super::BeginPlay();
-
-	if (!DefaultURL.IsEmpty())
-	{
-		Init();
-	}
+	// Init is driven by USwuiBridge after binding asset resolution.
 }
 
 void USwuiHudElement::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -34,15 +31,28 @@ void USwuiHudElement::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void USwuiHudElement::Init()
+void USwuiHudElement::Init(const FString& URI)
 {
 	if (!GetWorld())
 	{
 		return;
 	}
 
+	if (bIsHUD && GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
+	{
+		// Use the actual render resolution, not the DPI-scaled window size
+		FIntPoint RenderSize = GEngine->GameViewport->Viewport->GetSizeXY();
+		if (RenderSize.X > 0 && RenderSize.Y > 0)
+		{
+			ViewWidth  = RenderSize.X;
+			ViewHeight = RenderSize.Y;
+		}
+	}
+
+	FString ResolvedURI = URI.IsEmpty() ? DefaultURI : URI;
+
 	View = NewObject<USwuiView>(this);
-	View->DefaultURL = DefaultURL;
+	View->DefaultURL = ResolvedURI;
 	View->Width = ViewWidth;
 	View->Height = ViewHeight;
 	View->bIsTransparent = true;
@@ -50,7 +60,7 @@ void USwuiHudElement::Init()
 	View->TextureParameterName = TextureParameterName;
 	View->Init();
 
-	Widget = CreateWidget<UUserWidget>(GetWorld(), UUserWidget::StaticClass());
+	Widget = CreateWidget<UUserWidget>(GetWorld(), USwuiWidget::StaticClass());
 	if (!Widget)
 	{
 		return;
@@ -61,30 +71,41 @@ void USwuiHudElement::Init()
 
 	UImage* Image = NewObject<UImage>(Widget);
 	Image->SetBrushFromTexture(View->GetTexture());
-	Image->Brush.ImageSize = FVector2D(ViewWidth, ViewHeight);
-	Image->Brush.DrawAs = ESlateBrushDrawType::Image;
+	FSlateBrush NewBrush = Image->GetBrush();
+	NewBrush.ImageSize = FVector2D(ViewWidth, ViewHeight);
+	NewBrush.DrawAs = ESlateBrushDrawType::Image;
+	Image->SetBrush(NewBrush);
 	Image->SynchronizeProperties();
 
 	UPanelSlot* Slot = RootPanel->AddChild(Image);
 	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Slot))
 	{
-		CanvasSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
-		CanvasSlot->SetPosition(FVector2D(0, 0));
-		CanvasSlot->SetSize(FVector2D(ViewWidth, ViewHeight));
-		CanvasSlot->SetAutoSize(false);
+		if (bIsHUD)
+		{
+			// Stretch to fill the entire viewport
+			CanvasSlot->SetAnchors(FAnchors(0.f, 0.f, 1.f, 1.f));
+			CanvasSlot->SetOffsets(FMargin(0.f));
+		}
+		else
+		{
+			CanvasSlot->SetAnchors(FAnchors(0.5f, 0.5f, 0.5f, 0.5f));
+			CanvasSlot->SetPosition(FVector2D(0, 0));
+			CanvasSlot->SetSize(FVector2D(ViewWidth, ViewHeight));
+			CanvasSlot->SetAutoSize(false);
+		}
 	}
 
 	Widget->WidgetTree->RootWidget = RootPanel;
-	Widget->bIsFocusable = false;
+	Widget->SetIsFocusable(false);
 
 	Widget->AddToViewport(ZOrder);
 }
 
-void USwuiHudElement::LoadURL(const FString& URL)
+void USwuiHudElement::LoadURI(const FString& URI)
 {
 	if (View)
 	{
-		View->LoadURL(URL);
+		View->LoadURL(URI);
 	}
 }
 

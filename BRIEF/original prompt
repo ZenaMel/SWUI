@@ -1,0 +1,1692 @@
+Below is a full engineer-facing markdown brief. It assumes the project name **GameWebUI** for now and **BLUI/getnamo** as the first backend, but both can be renamed later.
+
+---
+
+# GameWebUI Engineering Brief
+
+## 1. Project summary
+
+**GameWebUI** is a higher-level Unreal Engine game UI framework built on top of a CEF/WebView backend, initially **BLUI-Unreal**.
+
+The goal is not to build another raw browser plugin.
+
+The goal is to build a **reflection-driven Unreal-to-Web UI workflow** where Unreal owns the gameplay state/event contract, automatically infers types and preview metadata, generates a typed TypeScript frontend facade, and lets the web side focus almost entirely on rendering, styling, and animation.
+
+The final developer experience should feel like:
+
+```text
+In Unreal:
+  Pick reflected properties and delegates from dropdowns.
+  Let GameWebUI infer types, ranges, enums, event payloads.
+  Let GameWebUI generate TypeScript facade + preview schema.
+
+In TypeScript:
+  Import generated HUD facade.
+  Bind generated state fields to DOM/CSS.
+  Handle generated event methods.
+  No raw string event names.
+  No manual patch inspection.
+  No hand-written JSON plumbing.
+
+In preview:
+  Open dedicated preview window without running Unreal.
+  Use sliders/dropdowns/toggles generated from UE metadata.
+  Use the same CEF/Chromium runtime as the Unreal backend for accurate preview.
+```
+
+The dynamic crosshair HUD is the primary **dogfooding sample**. It must prove the design works, not merely demonstrate the renderer.
+
+---
+
+# 2. Non-negotiable design principles
+
+## 2.1 UE is the source of truth
+
+The authoritative UI contract lives in Unreal through reflected properties, reflected types, metadata, and delegates/events.
+
+The generated schema and TypeScript files are output artifacts.
+
+Developers should not manually maintain a duplicate frontend schema unless they explicitly opt into an override.
+
+```text
+UE reflection
+  -> infer state keys
+  -> infer JS/TS types
+  -> infer enum values
+  -> infer numeric ranges
+  -> infer event payloads
+  -> generate schema JSON
+  -> generate TypeScript facade
+  -> generate preview controls
+  -> drive runtime bridge
+```
+
+## 2.2 Normal user code should not use raw string matching
+
+This is not acceptable as the happy path:
+
+```ts
+ui.on("PlayerFiredShot", payload => {});
+ui.bindStyle("#crosshair", "--spread", "currentSpread", v => `${v}px`);
+```
+
+That API may exist internally or as a low-level escape hatch, but normal frontend code should use a generated facade:
+
+```ts
+const hud = createMainHUD();
+
+hud.state.currentSpread.bindStyle("#crosshair", "--spread", v => `${v}px`);
+
+hud.state.crosshairMode.bindClass("#crosshair", mode => `crosshair ${mode}`);
+
+hud.events.PlayerFiredShot.on(({ gunType, ammoRemaining, spread }) => {
+  playCrosshairKick(gunType, spread);
+});
+```
+
+The user should get autocomplete for:
+
+```ts
+hud.state.currentSpread
+hud.state.crosshairMode
+hud.events.PlayerFiredShot
+hud.events.HitConfirmed
+```
+
+If a UE property or delegate is renamed or removed, generated TypeScript should change and frontend compile errors should reveal the mismatch.
+
+## 2.3 State and events are separate
+
+Persistent state and one-shot events must not be mixed.
+
+| Concept | Meaning            | Examples                                                 |
+| ------- | ------------------ | -------------------------------------------------------- |
+| State   | Current UI state   | health, ammo, spread, interaction prompt, crosshair mode |
+| Event   | Something happened | PlayerFiredShot, HitConfirmed, TookDamage, ReloadStarted |
+
+State is dirty-checked and patched.
+
+Events are emitted when they occur.
+
+## 2.4 The frontend handles presentation, not game glue
+
+The web side should handle:
+
+```text
+layout
+styling
+animation
+DOM/CSS updates
+visual reactions to typed events
+```
+
+The web side should not handle:
+
+```text
+figuring out what UE properties exist
+manually matching raw event strings
+manual JSON parsing
+manual dirty checking
+manual schema maintenance
+manual bridge setup
+```
+
+## 2.5 The dynamic HUD sample is dogfooding
+
+The dynamic crosshair sample must be built using the exact public generated API intended for users.
+
+No special crosshair-specific API should be used initially.
+
+The sample should prove:
+
+```text
+property inference works
+enum inference works
+event inference works
+preview controls work
+generated TS facade is pleasant
+no raw strings needed in normal frontend code
+same HUD code works in preview and UE runtime
+```
+
+---
+
+# 3. Backend assumption: BLUI first
+
+Initial backend: **getnamo/BLUI-Unreal**.
+
+BLUI provides the browser/rendering layer:
+
+```text
+CEF/Chromium runtime
+HTML/CSS/JS execution
+UMG widget / browser texture integration
+local:// loading from project web content
+ExecuteJS / browser interop primitives
+```
+
+GameWebUI should initially wrap BLUI rather than rewrite its renderer.
+
+Long-term, the backend should remain replaceable:
+
+```text
+GameWebUI core
+  -> BLUI backend
+  -> UCefView backend later
+  -> built-in WebBrowser backend later
+```
+
+The user-facing API should not change if the backend changes.
+
+---
+
+# 4. High-level architecture
+
+```text
+GameWebUI
+├─ Unreal Runtime Module
+│  ├─ UGameWebUIRuntimeBridge
+│  ├─ UGameWebUIWidget
+│  ├─ UGameWebUIBindingAsset
+│  ├─ reflected property readers
+│  ├─ reflected delegate/event bridge
+│  ├─ dirty checker
+│  ├─ patch batcher
+│  ├─ event serializer
+│  ├─ source registry
+│  └─ backend adapter interface
+│
+├─ Unreal Editor Module
+│  ├─ binding asset editor
+│  ├─ source/class picker
+│  ├─ property picker
+│  ├─ delegate/event picker
+│  ├─ metadata/range inference
+│  ├─ schema generator
+│  ├─ TypeScript facade generator
+│  ├─ stub generator
+│  └─ preview launcher
+│
+├─ BLUI Backend Module
+│  ├─ wraps BLUI widget/browser instance
+│  ├─ sends state patches to JS
+│  ├─ sends events to JS
+│  ├─ receives JS ready/invoke calls
+│  └─ exposes backend runtime capabilities
+│
+├─ JS Client Runtime
+│  ├─ low-level transport
+│  ├─ state store
+│  ├─ generated facade base classes
+│  ├─ DOM binding helpers
+│  ├─ event dispatch
+│  └─ preview transport
+│
+└─ Preview Host
+   ├─ dedicated preview window
+   ├─ same CEF runtime as backend
+   ├─ generated control panel
+   ├─ schema-driven sliders/dropdowns/toggles
+   └─ event trigger buttons
+```
+
+---
+
+# 5. Unreal-side binding model
+
+## 5.1 Binding asset
+
+Create a `UGameWebUIBindingAsset`.
+
+Example asset:
+
+```text
+MainHUD.bindings
+```
+
+It contains selected sources, state bindings, and event bindings.
+
+Conceptual editor view:
+
+```text
+MainHUD Binding Setup
+
+Sources:
+  Player       -> BP_PlayerCharacter
+  Weapon       -> BP_WeaponComponent
+  HUDState     -> BP_HUDState
+  Interaction  -> BP_InteractionComponent
+  Combat       -> BP_CombatComponent
+
+State:
+  Player.Health
+  Player.MaxHealth
+  Weapon.CurrentAmmo
+  Weapon.CurrentSpread
+  HUDState.CrosshairMode
+  Interaction.bCanInteract
+  Interaction.Prompt
+
+Events:
+  Weapon.OnPlayerFiredShot(GunType, AmmoRemaining, Spread)
+  Combat.OnHitConfirmed()
+  Player.OnTookDamage(Amount, Direction)
+```
+
+The user selects those through UI dropdowns.
+
+The asset should store stable references to:
+
+```text
+source alias
+source class
+property path or property FName
+delegate/event path or FName
+optional web-facing alias override
+optional preview/range override
+optional update/tolerance override
+```
+
+## 5.2 Source aliases
+
+Bindings are usually designed against classes, but runtime needs actual object instances.
+
+At runtime, a bridge registers objects against the aliases used by the binding asset.
+
+C++ example:
+
+```cpp
+WebUI->RegisterSource(TEXT("Player"), PlayerCharacter);
+WebUI->RegisterSource(TEXT("Weapon"), WeaponComponent);
+WebUI->RegisterSource(TEXT("HUDState"), HudStateObject);
+WebUI->RegisterSource(TEXT("Interaction"), InteractionComponent);
+WebUI->RegisterSource(TEXT("Combat"), CombatComponent);
+
+WebUI->LoadBindings(MainHUDBindings);
+```
+
+Blueprint equivalent:
+
+```text
+Register Game Web UI Source
+  Source: Player
+  Object: BP_PlayerCharacter instance
+
+Register Game Web UI Source
+  Source: Weapon
+  Object: BP_WeaponComponent instance
+
+Load Game Web UI Bindings
+  Binding Asset: MainHUD
+```
+
+The C++ API may still accept `FName` internally, but the normal user workflow should be picker-driven.
+
+---
+
+# 6. Automatic property inference
+
+## 6.1 Supported state types
+
+Initial required support:
+
+| UE type                         | TypeScript type        | Preview control                     |
+| ------------------------------- | ---------------------- | ----------------------------------- |
+| `bool`                          | `boolean`              | checkbox                            |
+| `int32`, `int64`, `uint8`, etc. | `number`               | slider + number input               |
+| `float`, `double`               | `number`               | slider + number input               |
+| `FString`                       | `string`               | text input                          |
+| `FName`                         | `string`               | text input or dropdown if enum-like |
+| `FText`                         | `string`               | text input                          |
+| `UENUM` / enum byte             | string union preferred | dropdown                            |
+
+Later support should include:
+
+```text
+FVector2D
+FVector
+FLinearColor
+FGameplayTag
+FGameplayTagContainer
+simple USTRUCT payloads
+arrays/lists
+object references by display name/id
+```
+
+## 6.2 Property reader
+
+Use Unreal reflection:
+
+```cpp
+FProperty* Property = SourceObject->GetClass()->FindPropertyByName(PropertyName);
+```
+
+Then use `CastField`:
+
+```cpp
+FBoolProperty
+FNumericProperty
+FStrProperty
+FNameProperty
+FTextProperty
+FEnumProperty
+FByteProperty
+FStructProperty
+FArrayProperty
+```
+
+All values must be converted to a JS-compatible JSON value.
+
+Example mapping:
+
+```cpp
+bool          -> true / false
+int32         -> number
+float         -> number
+FString       -> string
+FName         -> string
+FText         -> string
+enum          -> string name, not raw number, unless configured otherwise
+```
+
+Enums should default to generated string unions:
+
+```ts
+crosshairMode: "Default" | "Combat" | "Interact";
+```
+
+---
+
+# 7. Automatic range/control inference
+
+The preview system must infer controls from reflection metadata.
+
+## 7.1 Metadata to read
+
+For numeric properties, inspect metadata such as:
+
+```cpp
+ClampMin
+ClampMax
+UIMin
+UIMax
+Delta
+Multiple
+SliderExponent
+Units
+```
+
+Example:
+
+```cpp
+UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="100", UIMin="0", UIMax="100"))
+float Health;
+```
+
+Generated preview schema:
+
+```json
+{
+  "health": {
+    "type": "number",
+    "min": 0,
+    "max": 100,
+    "step": 1,
+    "default": 100
+  }
+}
+```
+
+## 7.2 Preview defaults
+
+If metadata is missing, use safe heuristics.
+
+| Property hint                       | Default              |
+| ----------------------------------- | -------------------- |
+| health, stamina, energy             | `0..100`, step `1`   |
+| percent, alpha, opacity, normalized | `0..1`, step `0.01`  |
+| spread, recoil                      | `0..40`, step `0.1`  |
+| ammo, count, charges                | `0..100`, step `1`   |
+| generic float                       | `0..100`, step `0.1` |
+| generic int                         | `0..100`, step `1`   |
+| bool                                | checkbox             |
+| enum                                | dropdown             |
+| string/text                         | text input           |
+
+Metadata always overrides heuristics.
+
+## 7.3 Overrides
+
+The binding asset should allow optional overrides:
+
+```text
+web-facing field name
+default preview value
+min/max/step
+enum display labels
+update rate
+float tolerance
+hidden from preview
+read-only in preview
+```
+
+But these are overrides, not the normal contract source.
+
+---
+
+# 8. Automatic event inference
+
+## 8.1 Event sources
+
+Support at least:
+
+```text
+BlueprintAssignable dynamic multicast delegates
+C++ dynamic multicast delegates
+explicit manual Emit calls
+```
+
+The normal final UX should be picker-driven:
+
+```text
+Source: Weapon
+Event: OnPlayerFiredShot
+Web event name: PlayerFiredShot, auto-suggested
+Payload: inferred from delegate params
+```
+
+## 8.2 Delegate payload inference
+
+Example C++ delegate:
+
+```cpp
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
+    FOnPlayerFiredShot,
+    FString, GunType,
+    int32, AmmoRemaining,
+    float, Spread
+);
+
+UPROPERTY(BlueprintAssignable)
+FOnPlayerFiredShot OnPlayerFiredShot;
+```
+
+Generated TypeScript:
+
+```ts
+PlayerFiredShot: {
+  gunType: string;
+  ammoRemaining: number;
+  spread: number;
+};
+```
+
+The generator should normalize names:
+
+```text
+GunType -> gunType
+AmmoRemaining -> ammoRemaining
+Spread -> spread
+```
+
+Allow override if the generated names are wrong.
+
+## 8.3 Event transport
+
+At runtime, when a bound delegate fires:
+
+```text
+UE delegate fires
+-> bridge receives params
+-> converts params to JS-compatible payload
+-> sends typed event to JS runtime
+-> generated facade dispatches to hud.events.EventName
+```
+
+Events must not be treated as dirty state.
+
+---
+
+# 9. Dirty checking and batching
+
+## 9.1 Runtime state patching
+
+The runtime bridge should track last-sent values per binding.
+
+Loop:
+
+```text
+for each bound state value:
+  resolve source object
+  read property
+  convert to JSON value
+  compare to last sent value
+  if changed:
+    add to patch
+    update last sent value
+
+if patch not empty:
+  send one batched patch
+```
+
+Example patch:
+
+```json
+{
+  "currentAmmo": 12,
+  "currentSpread": 18.5,
+  "crosshairMode": "Combat",
+  "canInteract": true
+}
+```
+
+## 9.2 Float tolerance
+
+Float and double values should support tolerance to avoid noise:
+
+```text
+currentSpread tolerance: 0.05
+health tolerance: 0.01
+```
+
+Default tolerance should be conservative.
+
+## 9.3 Update rate
+
+The bridge should support global and per-binding update rates.
+
+Examples:
+
+```text
+currentSpread: 60 Hz
+health: on change / 20 Hz
+prompt: on change / 10 Hz
+```
+
+Implementation can start with tick polling plus rate limiting.
+
+## 9.4 Initial sync
+
+When the browser page reports ready:
+
+```text
+send full current state once
+then resume dirty patches
+```
+
+The page-ready handshake is required. Do not send initial state before JS is ready.
+
+---
+
+# 10. Generated TypeScript facade
+
+This is central.
+
+The generated TS facade is what prevents stringly typed frontend code.
+
+## 10.1 Generated files
+
+For `MainHUD`, generate:
+
+```text
+src/generated/MainHUD.generated.ts
+src/generated/MainHUD.schema.json
+src/generated/MainHUD.preview.json
+```
+
+The generated TS file is overwritten whenever the UE binding changes.
+
+User-authored files must live outside `generated/`.
+
+## 10.2 Generated facade example
+
+```ts
+// src/generated/MainHUD.generated.ts
+// AUTO-GENERATED. DO NOT EDIT.
+
+import {
+  createGameWebUI,
+  type GameWebUIRuntime,
+  type StateField,
+  type EventField,
+} from "@gamewebui/client";
+
+export type MainHUDState = {
+  currentSpread: number;
+  crosshairMode: "Default" | "Combat" | "Interact";
+  canInteract: boolean;
+  currentAmmo: number;
+  prompt: string;
+};
+
+export type MainHUDEvents = {
+  PlayerFiredShot: {
+    gunType: string;
+    ammoRemaining: number;
+    spread: number;
+  };
+
+  HitConfirmed: void;
+
+  TookDamage: {
+    amount: number;
+    direction: number;
+  };
+};
+
+export type MainHUDRuntime = GameWebUIRuntime<MainHUDState, MainHUDEvents>;
+
+export function createMainHUD(): MainHUDRuntime & {
+  state: {
+    currentSpread: StateField<MainHUDState, "currentSpread">;
+    crosshairMode: StateField<MainHUDState, "crosshairMode">;
+    canInteract: StateField<MainHUDState, "canInteract">;
+    currentAmmo: StateField<MainHUDState, "currentAmmo">;
+    prompt: StateField<MainHUDState, "prompt">;
+  };
+
+  events: {
+    PlayerFiredShot: EventField<MainHUDEvents, "PlayerFiredShot">;
+    HitConfirmed: EventField<MainHUDEvents, "HitConfirmed">;
+    TookDamage: EventField<MainHUDEvents, "TookDamage">;
+  };
+} {
+  const ui = createGameWebUI<MainHUDState, MainHUDEvents>({
+    contractName: "MainHUD"
+  });
+
+  return ui.withFacade({
+    stateKeys: {
+      currentSpread: "currentSpread",
+      crosshairMode: "crosshairMode",
+      canInteract: "canInteract",
+      currentAmmo: "currentAmmo",
+      prompt: "prompt",
+    },
+    eventKeys: {
+      PlayerFiredShot: "PlayerFiredShot",
+      HitConfirmed: "HitConfirmed",
+      TookDamage: "TookDamage",
+    },
+  }) as any;
+}
+```
+
+The raw strings exist inside generated code only.
+
+Normal user code uses properties and methods.
+
+## 10.3 User frontend code example
+
+```ts
+import { createMainHUD } from "./generated/MainHUD.generated";
+
+const hud = createMainHUD();
+
+hud.state.currentSpread.bindStyle("#crosshair", "--spread", value => `${value}px`);
+
+hud.state.crosshairMode.bindClass("#crosshair", mode => `crosshair ${mode}`);
+
+hud.state.currentAmmo.bindText("#ammo", ammo => `${ammo}`);
+
+hud.state.canInteract.bindVisible("#interaction-prompt");
+
+hud.state.prompt.bindText("#interaction-prompt");
+
+hud.events.PlayerFiredShot.on(({ gunType, ammoRemaining, spread }) => {
+  playCrosshairKick(gunType, spread);
+});
+
+hud.events.HitConfirmed.on(() => {
+  playHitmarker();
+});
+
+hud.ready();
+```
+
+No raw event string.
+No raw state key string.
+No manual patch inspection.
+
+---
+
+# 11. Generated stubs
+
+## 11.1 Purpose
+
+The generator should optionally create user-editable starter stubs.
+
+These are created once and not overwritten unless explicitly requested.
+
+Suggested layout:
+
+```text
+src/generated/MainHUD.generated.ts       overwritten
+src/generated/MainHUD.schema.json        overwritten
+src/MainHUD.bindings.ts                  created once, user-owned
+src/MainHUD.events.ts                    created once, user-owned
+src/MainHUD.demo.ts                      optional sample
+```
+
+## 11.2 Event stub example
+
+```ts
+// src/MainHUD.events.ts
+// Created by GameWebUI. Safe to edit.
+
+import { hud } from "./MainHUD.instance";
+
+hud.events.PlayerFiredShot.on(({ gunType, ammoRemaining, spread }) => {
+  // TODO: visual handling for PlayerFiredShot
+});
+
+hud.events.HitConfirmed.on(() => {
+  // TODO: visual handling for HitConfirmed
+});
+
+hud.events.TookDamage.on(({ amount, direction }) => {
+  // TODO: visual handling for TookDamage
+});
+```
+
+## 11.3 State binding stub example
+
+```ts
+// src/MainHUD.bindings.ts
+// Created by GameWebUI. Safe to edit.
+
+import { hud } from "./MainHUD.instance";
+
+hud.state.currentSpread.bindStyle("#crosshair", "--spread", value => `${value}px`);
+
+hud.state.crosshairMode.bindClass("#crosshair", mode => `crosshair ${mode}`);
+
+hud.state.currentAmmo.bindText("#ammo", ammo => `${ammo}`);
+
+hud.state.canInteract.bindVisible("#interaction-prompt");
+
+hud.state.prompt.bindText("#interaction-prompt");
+```
+
+---
+
+# 12. JS client runtime
+
+## 12.1 Generic internal client
+
+The generated facade wraps a generic runtime.
+
+The generic API may exist, but it is not the primary user-facing API.
+
+Internal-ish primitives:
+
+```ts
+createGameWebUI<State, Events>()
+ui.bindText(selector, key, mapper?)
+ui.bindStyle(selector, property, key, mapper)
+ui.bindClass(selector, key, mapper)
+ui.bindVisible(selector, key, mapper?)
+ui.watch(key, callback)
+ui.on(eventName, callback)
+ui.onPatch(callback)
+ui.emitPreviewEvent(...)
+ui.applyPreviewPatch(...)
+```
+
+Generated `StateField` methods should wrap those:
+
+```ts
+hud.state.currentSpread.bindStyle(...)
+hud.state.currentAmmo.bindText(...)
+hud.events.PlayerFiredShot.on(...)
+```
+
+## 12.2 Required generated field APIs
+
+For state fields:
+
+```ts
+field.get(): T
+field.watch(callback: (value: T) => void): Unsubscribe
+field.bindText(selector, mapper?)
+field.bindStyle(selector, cssProperty, mapper)
+field.bindClass(selector, mapper)
+field.bindAttr(selector, attrName, mapper)
+field.bindVisible(selector?, mapper?)
+```
+
+For event fields:
+
+```ts
+event.on(callback): Unsubscribe
+event.once(callback): Unsubscribe
+```
+
+For multi-field derived bindings, provide generated runtime helpers:
+
+```ts
+hud.derive(["health", "maxHealth"], ({ health, maxHealth }) => ...)
+```
+
+Or facade-friendly version:
+
+```ts
+hud.derive(
+  [hud.state.health, hud.state.maxHealth],
+  ({ health, maxHealth }) => ...
+);
+```
+
+---
+
+# 13. Dedicated preview system
+
+## 13.1 Core requirement
+
+The HUD must be previewable without running Unreal.
+
+The preview should open in a small dedicated window.
+
+The preview must support:
+
+```text
+sliders for numbers
+checkboxes for booleans
+dropdowns for enums
+text fields for strings
+buttons for events
+payload forms for events with params
+live updates in real time
+```
+
+No timeline simulation is required.
+
+## 13.2 Same CEF runtime requirement
+
+Accurate preview must use the same CEF/Chromium binaries as the runtime backend.
+
+Do not use Electron for accurate preview.
+
+Do not rely only on installed Chrome.
+
+Reason:
+
+```text
+UE runtime uses BLUI CEF.
+If preview uses another Chromium build, layout/rendering bugs may be hidden.
+```
+
+So there are two preview modes:
+
+| Mode             | Browser engine        | Purpose                       |
+| ---------------- | --------------------- | ----------------------------- |
+| Fast dev preview | normal browser/Vite   | fast iteration                |
+| Accurate preview | same BLUI CEF runtime | authoritative rendering check |
+
+The dedicated preview window should target accurate preview.
+
+## 13.3 Preview host
+
+Create a `GameWebUIPreview` executable.
+
+Responsibilities:
+
+```text
+load same backend CEF runtime used by BLUI backend
+load HUD URL or local dist/index.html
+load generated schema JSON
+inject GameWebUI preview transport
+render HUD area
+render generated controls panel
+push preview state patches into HUD
+trigger preview events into HUD
+```
+
+UI layout:
+
+```text
+┌───────────────────────────────────────────────┬────────────────────┐
+│                                               │ State              │
+│       HUD rendered in same CEF runtime        │ currentSpread [---]│
+│                                               │ crosshairMode [v]  │
+│                                               │ canInteract [x]    │
+│                                               │ currentAmmo [ 12 ] │
+│                                               │ prompt [text]      │
+│                                               │                    │
+│                                               │ Events             │
+│                                               │ [PlayerFiredShot]  │
+│                                               │ [HitConfirmed]     │
+└───────────────────────────────────────────────┴────────────────────┘
+```
+
+## 13.4 Preview schema
+
+Generated from UE inference:
+
+```json
+{
+  "contractName": "MainHUD",
+  "state": {
+    "currentSpread": {
+      "type": "number",
+      "min": 0,
+      "max": 40,
+      "step": 0.1,
+      "default": 8
+    },
+    "crosshairMode": {
+      "type": "enum",
+      "values": ["Default", "Combat", "Interact"],
+      "default": "Default"
+    },
+    "canInteract": {
+      "type": "boolean",
+      "default": false
+    },
+    "currentAmmo": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "default": 30
+    },
+    "prompt": {
+      "type": "string",
+      "default": ""
+    }
+  },
+  "events": {
+    "PlayerFiredShot": {
+      "payload": {
+        "gunType": {
+          "type": "string",
+          "default": "Rifle"
+        },
+        "ammoRemaining": {
+          "type": "number",
+          "default": 29
+        },
+        "spread": {
+          "type": "number",
+          "default": 12
+        }
+      }
+    },
+    "HitConfirmed": {
+      "payload": null
+    }
+  }
+}
+```
+
+The preview control panel should be generated from this.
+
+## 13.5 Preview transport
+
+The HUD code must not care where values came from.
+
+Same frontend code should work in:
+
+```text
+UE runtime
+accurate CEF preview
+browser dev preview
+```
+
+Runtime transport:
+
+```text
+BLUI/CEF receives UE patches/events
+```
+
+Preview transport:
+
+```text
+preview control panel calls applyPatch / emitEvent
+```
+
+The generated facade should call the same client runtime in all modes.
+
+---
+
+# 14. Dynamic crosshair dogfood sample
+
+## 14.1 Goal
+
+This sample is the validation target for the whole API.
+
+It must be built using:
+
+```text
+reflected UE state
+reflected UE events
+generated TS facade
+generated preview controls
+generic field/event methods
+same runtime/preview frontend code
+```
+
+No manual JSON.
+
+No raw strings in normal frontend code.
+
+No crosshair-specific helper API initially.
+
+## 14.2 UE dogfood types
+
+Example UE enum:
+
+```cpp
+UENUM(BlueprintType)
+enum class ECrosshairMode : uint8
+{
+    Default,
+    Combat,
+    Interact
+};
+```
+
+Example state:
+
+```cpp
+UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="40", UIMin="0", UIMax="40"))
+float CurrentSpread;
+
+UPROPERTY(EditAnywhere, BlueprintReadWrite)
+ECrosshairMode CrosshairMode;
+
+UPROPERTY(EditAnywhere, BlueprintReadWrite)
+bool bCanInteract;
+
+UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="100"))
+int32 CurrentAmmo;
+
+UPROPERTY(EditAnywhere, BlueprintReadWrite)
+FText Prompt;
+```
+
+Example events:
+
+```cpp
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
+    FOnPlayerFiredShot,
+    FString, GunType,
+    int32, AmmoRemaining,
+    float, Spread
+);
+
+UPROPERTY(BlueprintAssignable)
+FOnPlayerFiredShot OnPlayerFiredShot;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnHitConfirmed);
+
+UPROPERTY(BlueprintAssignable)
+FOnHitConfirmed OnHitConfirmed;
+```
+
+## 14.3 Generated facade usage
+
+```ts
+import { createMainHUD } from "./generated/MainHUD.generated";
+
+const hud = createMainHUD();
+
+hud.state.currentSpread.bindStyle("#crosshair", "--spread", value => `${value}px`);
+
+hud.state.crosshairMode.bindClass("#crosshair", mode => `crosshair ${mode}`);
+
+hud.state.currentAmmo.bindText("#ammo", ammo => `${ammo}`);
+
+hud.state.canInteract.bindVisible("#interaction-prompt");
+
+hud.state.prompt.bindText("#interaction-prompt");
+
+hud.events.PlayerFiredShot.on(({ gunType, ammoRemaining, spread }) => {
+  playCrosshairKick(gunType, spread);
+});
+
+hud.events.HitConfirmed.on(() => {
+  playHitmarker();
+});
+
+hud.ready();
+```
+
+## 14.4 HTML
+
+```html
+<div id="crosshair" class="crosshair Default">
+  <div class="line top"></div>
+  <div class="line bottom"></div>
+  <div class="line left"></div>
+  <div class="line right"></div>
+  <div class="dot"></div>
+</div>
+
+<div id="hitmarker" class="hitmarker">×</div>
+
+<div id="ammo"></div>
+
+<div id="interaction-prompt"></div>
+```
+
+## 14.5 CSS
+
+```css
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.crosshair {
+  --spread: 10px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+.line {
+  position: absolute;
+  background: white;
+  box-shadow: 0 0 4px black;
+}
+
+.top,
+.bottom {
+  width: 2px;
+  height: 12px;
+  left: -1px;
+}
+
+.left,
+.right {
+  width: 12px;
+  height: 2px;
+  top: -1px;
+}
+
+.top {
+  transform: translateY(calc(-1 * var(--spread) - 12px));
+}
+
+.bottom {
+  transform: translateY(var(--spread));
+}
+
+.left {
+  transform: translateX(calc(-1 * var(--spread) - 12px));
+}
+
+.right {
+  transform: translateX(var(--spread));
+}
+
+.dot {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  left: -2px;
+  top: -2px;
+  border-radius: 50%;
+  background: white;
+}
+
+.crosshair.Combat .line,
+.crosshair.Combat .dot {
+  background: #ffdddd;
+}
+
+.crosshair.Interact .line,
+.crosshair.Interact .dot {
+  background: #8efcff;
+}
+
+.hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.8);
+}
+
+.hitmarker.active {
+  animation: hit 120ms ease-out;
+}
+
+@keyframes hit {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+}
+```
+
+---
+
+# 15. Runtime UE API sketch
+
+## 15.1 Runtime component
+
+```cpp
+UCLASS(ClassGroup=(UI), meta=(BlueprintSpawnableComponent))
+class GAMEWEBUI_API UGameWebUIBridgeComponent : public UActorComponent
+{
+    GENERATED_BODY()
+
+public:
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void LoadBindings(UGameWebUIBindingAsset* BindingAsset);
+
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void RegisterSource(FName SourceName, UObject* SourceObject);
+
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void ForceSync();
+
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void SetGlobalUpdateRate(float UpdatesPerSecond);
+
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void EmitManualEvent(FName EventName);
+
+    UFUNCTION(BlueprintCallable, Category="GameWebUI")
+    void EmitManualEventWithPayload(FName EventName, const FGameWebUIEventPayload& Payload);
+};
+```
+
+Manual emit is still useful, but the preferred design is reflected delegate binding.
+
+## 15.2 Backend interface
+
+```cpp
+class IGameWebUIBackend
+{
+public:
+    virtual ~IGameWebUIBackend() = default;
+
+    virtual void LoadURL(const FString& URL) = 0;
+    virtual bool IsReady() const = 0;
+
+    virtual void SendStatePatch(const FString& PatchJson) = 0;
+    virtual void SendEvent(const FString& EventName, const FString& PayloadJson) = 0;
+
+    virtual void ExecuteJavaScript(const FString& Script) = 0;
+};
+```
+
+The BLUI backend implements this using BLUI primitives.
+
+---
+
+# 16. Build/dev workflow
+
+Suggested project web layout:
+
+```text
+YourProject/
+  Content/
+    html/
+      MainHUD/
+        package.json
+        src/
+          main.ts
+          MainHUD.bindings.ts
+          MainHUD.events.ts
+          generated/
+            MainHUD.generated.ts
+            MainHUD.schema.json
+            MainHUD.preview.json
+        dist/
+          index.html
+          assets/
+```
+
+Scripts:
+
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview:hud": "gamewebui-preview MainHUD"
+  }
+}
+```
+
+Runtime URL:
+
+```text
+local://MainHUD/dist/index.html
+```
+
+Editor/dev URL:
+
+```text
+http://localhost:5173
+```
+
+---
+
+# 17. Implementation completion criteria
+
+The handover is considered complete only when the following are true:
+
+## UE/editor side
+
+```text
+Binding asset can select reflected properties from dropdowns.
+Binding asset can select reflected delegates/events from dropdowns.
+Type inference works for bool/int/float/string/FName/FText/enums.
+Range inference reads ClampMin/ClampMax/UIMin/UIMax.
+Event payload inference works for selected dynamic multicast delegates.
+Generated TS facade avoids raw string usage in normal frontend code.
+Generated stubs are created once and not overwritten.
+Runtime bridge dirty-checks and batches patches.
+Runtime bridge forwards reflected events with payloads.
+Initial sync happens after JS ready handshake.
+Manual escape hatches exist but are not the primary path.
+```
+
+## JS side
+
+```text
+Generated facade exposes hud.state.field and hud.events.event.
+State fields support bindText/bindStyle/bindClass/bindVisible/watch.
+Event fields support on/once.
+No raw string state/event names are needed in the dogfood sample.
+Same frontend code works in runtime and preview.
+```
+
+## Preview side
+
+```text
+Dedicated preview window opens without UE running.
+Preview controls are generated from UE-inferred schema.
+Sliders/toggles/dropdowns update HUD live.
+Event buttons trigger typed frontend event handlers.
+Accurate preview uses the same CEF runtime as the BLUI backend where technically feasible.
+```
+
+## Dogfood sample
+
+```text
+Dynamic crosshair uses reflected UE values.
+Crosshair spread updates from generated state facade.
+Crosshair mode updates from generated enum facade.
+Ammo text updates from generated state facade.
+Interaction prompt visibility/text updates from generated state facade.
+PlayerFiredShot event triggers visual recoil animation.
+HitConfirmed event triggers hitmarker animation.
+Preview can test all of the above without UE running.
+```
+
+---
+
+# 18. What this project is not
+
+It is not merely:
+
+```text
+a BLUI fork
+a CEF wrapper
+a WebBrowser widget
+a raw ExecuteJS helper
+a manually authored JSON schema system
+```
+
+It is:
+
+```text
+a reflection-driven Unreal-to-Web UI framework
+with generated TypeScript facade
+generated preview controls
+automatic state/event bridge
+and a backend-accurate standalone preview window
+```
+
+That is the engineering target.
+
+
+Yep — that should be an explicit amendment, because it changes the preview philosophy quite a bit.
+
+Add this to the brief as an **Amendments / Corrections** section, and update the preview/dev workflow sections accordingly.
+
+---
+
+# Amendments to GameWebUI Engineering Brief
+
+## Amendment 1: No separate “fast browser preview” mode
+
+Remove the idea of having two preview modes:
+
+```text
+Fast browser preview
+Accurate CEF preview
+```
+
+The project should only offer **one official preview path**:
+
+```text
+GameWebUI Preview
+→ always uses the bundled CEF/Chromium runtime from the active backend
+→ never relies on the user’s installed browser
+→ never relies on Electron’s Chromium
+→ never uses “normal Chrome” as the authoritative preview
+```
+
+Reason:
+
+```text
+The preview should be trustworthy by default.
+If runtime uses BLUI’s bundled CEF, preview must use the same bundled CEF.
+A slightly slower but accurate preview is better than a fast preview that lies.
+```
+
+The preview is expected to be fast enough for practical HUD iteration.
+
+### Replace previous preview mode table with this
+
+```md
+## Preview system
+
+GameWebUI provides a dedicated preview window that runs without launching Unreal Editor.
+
+The preview window must use the same bundled CEF/Chromium runtime as the selected runtime backend. For the initial BLUI backend, this means the preview host must use BLUI’s bundled CEF/Chromium runtime.
+
+There is no separate official “fast browser preview” mode. The dedicated preview is the development preview.
+
+| Mode | Backend | Purpose |
+|---|---|---|
+| GameWebUI Preview | Bundled backend CEF runtime | Normal HUD/UI iteration without UE running |
+| In-UE runtime | Unreal + backend CEF runtime | Final in-engine validation |
+```
+
+### Replace the old scripts section with this
+
+```json
+{
+  "scripts": {
+    "build": "vite build",
+    "preview:hud": "gamewebui-preview MainHUD"
+  }
+}
+```
+
+Optional web tooling such as Vite can still be used for bundling, TypeScript, CSS tooling, Tailwind, SCSS, etc., but the official preview target should open through `gamewebui-preview`, not a normal browser.
+
+---
+
+## Amendment 2: Preview window is a first-class tool, not an optional extra
+
+The preview host should be treated as a core deliverable.
+
+It must:
+
+```text
+- open as a dedicated standalone window
+- use the same bundled CEF runtime as the selected backend
+- load the generated HUD/web app
+- load the generated schema
+- generate controls from inferred UE metadata
+- allow live slider/toggle/dropdown editing
+- allow event buttons with inferred payload forms
+- use the same generated TypeScript facade as runtime
+```
+
+The preview must be good enough that a frontend/UI developer can iterate on HUD styling and behavior without launching UE for every change.
+
+---
+
+## Amendment 3: Generated preview controls remain UE-reflection-driven
+
+The preview control panel should not require a manually authored mock schema.
+
+It is generated from Unreal reflection and metadata:
+
+```text
+UPROPERTY type
+UPROPERTY name
+UENUM values
+ClampMin / ClampMax
+UIMin / UIMax
+BlueprintAssignable delegate params
+optional binding overrides
+```
+
+So a property like:
+
+```cpp
+UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="40", UIMin="0", UIMax="40"))
+float CurrentSpread;
+```
+
+generates:
+
+```text
+currentSpread
+→ TypeScript: number
+→ Preview control: slider 0..40
+```
+
+And a delegate like:
+
+```cpp
+OnPlayerFiredShot(FString GunType, int32 AmmoRemaining, float Spread)
+```
+
+generates:
+
+```text
+PlayerFiredShot event button
+→ payload fields:
+   gunType: text input
+   ammoRemaining: number input
+   spread: slider/number input
+```
+
+---
+
+## Amendment 4: Preview uses the same transport contract as runtime
+
+The HUD code should not know whether it is running in Unreal or in the standalone preview.
+
+Runtime:
+
+```text
+UE bridge
+→ backend CEF
+→ generated JS facade
+```
+
+Preview:
+
+```text
+GameWebUI Preview controls
+→ same backend CEF
+→ generated JS facade
+```
+
+Frontend code remains:
+
+```ts
+const hud = createMainHUD();
+
+hud.state.currentSpread.bindStyle("#crosshair", "--spread", value => `${value}px`);
+
+hud.events.PlayerFiredShot.on(({ gunType, ammoRemaining, spread }) => {
+  playCrosshairKick(gunType, spread);
+});
+```
+
+No alternate preview-only API should be required.
+
+---
+
+## Amendment 5: Remove “browser dev preview” from implementation roadmap
+
+Replace any previous wording like:
+
+```text
+browser preview
+normal browser/Vite preview
+fast browser preview
+Chrome preview
+Electron preview
+```
+
+with:
+
+```text
+dedicated GameWebUI preview window using the backend’s bundled CEF runtime
+```
+
+Vite/build tooling can still exist, but only as the build pipeline for the frontend assets, not as the official preview environment.
+
+Corrected workflow:
+
+```text
+1. UE generates MainHUD.generated.ts and MainHUD.schema.json.
+2. Web developer writes HTML/CSS/TS against generated facade.
+3. Web developer runs npm run build or watch/build tooling.
+4. Web developer launches gamewebui-preview MainHUD.
+5. Preview opens in bundled CEF window.
+6. Sliders/dropdowns/buttons generated from UE schema drive the HUD live.
+7. Final validation happens in UE.
+```
+
+---
+
+## Amendment 6: Updated core preview requirement
+
+Use this as the final preview requirement in the brief:
+
+```md
+## Dedicated CEF preview requirement
+
+GameWebUI must provide a standalone preview application that opens the selected UI contract in its own dedicated window without launching Unreal Editor.
+
+This preview application must use the same bundled CEF/Chromium runtime as the active backend. For the initial BLUI backend, this means reusing BLUI’s bundled CEF runtime and browser process setup.
+
+The preview window must render the user’s actual generated web UI and provide a generated control panel based on Unreal-inferred schema data. Numeric properties become sliders/number inputs, booleans become checkboxes, enums become dropdowns, strings become text inputs, and reflected events become trigger buttons with generated payload fields.
+
+The preview window is the official development preview. No separate normal-browser preview mode is part of the supported workflow.
+```
+
+---
+
+This is the cleaner stance: **one preview, always accurate, always backend CEF.**
+
+
+I want you to jot down this overall plan and as the first step write down for us to fully delete all stuff related to the previous API where we used to go about using stringy refs and glue code. so we have a clean slate and dont get confused down the line.

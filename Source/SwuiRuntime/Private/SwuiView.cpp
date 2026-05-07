@@ -55,25 +55,32 @@ void USwuiView::Init()
 	ResetTexture();
 }
 
-void USwuiView::LoadURL(const FString& URL)
+void USwuiView::LoadURL(const FString& URI)
 {
 	if (!CefData || !CefData->Browser)
 	{
 		return;
 	}
 
-	FString FinalUrl = URL;
-
-	if (URL.Contains(TEXT("swui://"), ESearchCase::IgnoreCase, ESearchDir::FromStart))
+	// http/https/localhost → pass through directly
+	if (URI.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase)
+		|| URI.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase)
+		|| URI.StartsWith(TEXT("localhost"), ESearchCase::IgnoreCase)
+		|| URI.StartsWith(TEXT("file:///"), ESearchCase::IgnoreCase))
 	{
-		FString GameDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-		FString LocalFile = URL.Replace(TEXT("swui://"), *GameDir, ESearchCase::IgnoreCase);
-		LocalFile = FString(TEXT("file:///")) + LocalFile;
-		CefData->Browser->GetMainFrame()->LoadURL(*LocalFile);
+		CefData->Browser->GetMainFrame()->LoadURL(*URI);
 		return;
 	}
 
-	CefData->Browser->GetMainFrame()->LoadURL(*FinalUrl);
+	// swui:// or bare path → resolve relative to project directory
+	FString GameDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	FString Relative = URI;
+	if (Relative.StartsWith(TEXT("swui://"), ESearchCase::IgnoreCase))
+	{
+		Relative = Relative.RightChop(7); // strip "swui://"
+	}
+	FString LocalFile = FString(TEXT("file:///")) + GameDir + Relative;
+	CefData->Browser->GetMainFrame()->LoadURL(*LocalFile);
 }
 
 void USwuiView::ExecuteJavaScript(const FString& Script)

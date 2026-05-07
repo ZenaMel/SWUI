@@ -1,10 +1,16 @@
 #pragma once
 
 #include "Components/ActorComponent.h"
+#include "Blueprint/UserWidget.h"
 #include "SwuiHudElement.generated.h"
 
 class USwuiView;
-class UUserWidget;
+
+UCLASS()
+class SWUIRUNTIME_API USwuiWidget : public UUserWidget
+{
+	GENERATED_BODY()
+};
 
 UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent))
 class SWUIRUNTIME_API USwuiHudElement : public UActorComponent
@@ -14,13 +20,17 @@ class SWUIRUNTIME_API USwuiHudElement : public UActorComponent
 public:
 	USwuiHudElement();
 
+	// When enabled, ViewWidth and ViewHeight are ignored and the game viewport
+	// dimensions are used automatically.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
-	FString DefaultURL;
+	bool bIsHUD = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
+	// Ignored when bIsHUD is true.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime", meta=(EditCondition="!bIsHUD"))
 	int32 ViewWidth = 1280;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
+	// Ignored when bIsHUD is true.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime", meta=(EditCondition="!bIsHUD"))
 	int32 ViewHeight = 720;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
@@ -32,11 +42,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
 	int32 ZOrder = 0;
 
-	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
-	void Init();
+	// URI to load. Bare paths (e.g. "UI/hud.html") and swui:// URIs both resolve
+	// relative to the project directory. http://, https://, and localhost URIs
+	// are passed through directly.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
+	FString DefaultURI;
 
 	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
-	void LoadURL(const FString& URL);
+	void Init(const FString& URI);
+
+	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
+	void LoadURI(const FString& URI);
 
 	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
 	void ExecuteJavaScript(const FString& Script);

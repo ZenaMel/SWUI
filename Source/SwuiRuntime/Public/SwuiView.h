@@ -14,7 +14,7 @@ class SWUIRUNTIME_API USwuiView : public UObject, public ISwuiRenderTarget
 public:
 	USwuiView();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
+	// Internal URL loaded by the backend adapter — not set directly by users.
 	FString DefaultURL;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SwuiRuntime")
@@ -32,13 +32,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SwuiRuntime")
 	FName TextureParameterName = "SwuiTexture";
 
-	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
 	void Init();
 
-	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
-	void LoadURL(const FString& URL);
+	// Internal — called by the backend adapter, not directly from Blueprint.
+	void LoadURL(const FString& URI);
 
-	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
+	// Internal — called by the backend adapter, not directly from Blueprint.
 	void ExecuteJavaScript(const FString& Script);
 
 	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")

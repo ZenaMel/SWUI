@@ -23,5 +23,5 @@
 			"LoadingPhase": "PreDefault",
 			"BlacklistPlatforms": [ "Android", "IOS" ]
 		}
-	],
+	]
 }
