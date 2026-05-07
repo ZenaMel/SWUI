@@ -1,4 +1,4 @@
-#include "SwuiBridge.h"
+#include "Swui.h"
 #include "SwuiView.h"
 #include "ISwuiRuntime.h"
 #include "Blueprint/UserWidget.h"
@@ -10,12 +10,12 @@
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 
-USwuiBridge::USwuiBridge()
+USwui::USwui()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-void USwuiBridge::BeginPlay()
+void USwui::BeginPlay()
 {
 	Super::BeginPlay();
 	InitView();
@@ -23,12 +23,12 @@ void USwuiBridge::BeginPlay()
 	if (ExposedProperties.Num() > 0)
 	{
 		GetWorld()->GetTimerManager().SetTimer(
-			StateTickHandle, this, &USwuiBridge::PushStateToJS,
+			StateTickHandle, this, &USwui::PushStateToJS,
 			StateSyncInterval, true);
 	}
 }
 
-void USwuiBridge::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void USwui::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorld()->GetTimerManager().ClearTimer(StateTickHandle);
 
@@ -41,7 +41,7 @@ void USwuiBridge::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void USwuiBridge::InitView()
+void USwui::InitView()
 {
 	if (!GetWorld()) return;
 
@@ -64,7 +64,7 @@ void USwuiBridge::InitView()
 	View->TextureParameterName = TextureParameterName;
 	View->Init();
 
-	Widget = CreateWidget<UUserWidget>(GetWorld(), USwuiBridgeWidget::StaticClass());
+	Widget = CreateWidget<UUserWidget>(GetWorld(), USwuiWidget::StaticClass());
 	if (!Widget) return;
 
 	UCanvasPanel* RootPanel = NewObject<UCanvasPanel>(Widget);
@@ -100,12 +100,12 @@ void USwuiBridge::InitView()
 	Widget->AddToViewport(ZOrder);
 }
 
-void USwuiBridge::LoadURI(const FString& URI)
+void USwui::LoadURI(const FString& URI)
 {
 	if (View) View->LoadURL(URI);
 }
 
-void USwuiBridge::ExecuteJavaScript(const FString& Script)
+void USwui::ExecuteJavaScript(const FString& Script)
 {
 	if (View) View->ExecuteJavaScript(Script);
 }
@@ -140,7 +140,7 @@ static FString SwuiSerializeProperty(FProperty* Prop, void* Container)
 	return FString(); // unsupported type
 }
 
-void USwuiBridge::PushStateToJS()
+void USwui::PushStateToJS()
 {
 	if (!View || ExposedProperties.Num() == 0) return;
 

@@ -22,6 +22,12 @@
 			"Type": "Runtime",
 			"LoadingPhase": "PreDefault",
 			"BlacklistPlatforms": [ "Android", "IOS" ]
+		},
+		{
+			"Name": "SwuiEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"BlacklistPlatforms": [ "Android", "IOS" ]
 		}
 	]
 }

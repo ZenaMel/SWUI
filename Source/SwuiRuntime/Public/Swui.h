@@ -2,28 +2,28 @@
 
 #include "Components/ActorComponent.h"
 #include "Blueprint/UserWidget.h"
-#include "SwuiBridge.generated.h"
+#include "Swui.generated.h"
 
 class USwuiView;
 
 UCLASS()
-class SWUIRUNTIME_API USwuiBridgeWidget : public UUserWidget
+class SWUIRUNTIME_API USwuiWidget : public UUserWidget
 {
 	GENERATED_BODY()
 };
 
 /**
- * USwuiBridge — Add this to any Actor to render a web UI and sync
+ * USwui — Add this to any Actor to render a web UI and sync
  * reflected game state into it. Configure which properties to expose
  * via the "Web UI Bindings" section in the Details panel.
  */
 UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent))
-class SWUIRUNTIME_API USwuiBridge : public UActorComponent
+class SWUIRUNTIME_API USwui : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	USwuiBridge();
+	USwui();
 
 	// ---- Display ----
 
@@ -85,9 +85,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
 	USwuiView* GetView() const { return View; }
 
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
 private:
 	UPROPERTY()
 	USwuiView* View = nullptr;
@@ -99,4 +96,7 @@ private:
 
 	void InitView();
 	void PushStateToJS();
+
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 };
