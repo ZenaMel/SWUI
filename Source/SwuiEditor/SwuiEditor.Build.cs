@@ -15,7 +15,12 @@ public class SwuiEditor : ModuleRules
 			"SlateCore",
 			"LevelEditor",
 			"ToolMenus",
-			"SwuiRuntime"
+			"SwuiRuntime",
+			// Custom K2 nodes
+			"BlueprintGraph",
+			"KismetCompiler",
+			"GraphEditor",
+			"Kismet",
 		});
 
 		PrivateIncludePaths.Add("SwuiEditor/Private");

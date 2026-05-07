@@ -74,6 +74,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings")
 	TArray<FName> ExposedProperties;
 
+	// Stop syncing all observed properties/events for a source object.
+	// Call from PlayerController's OnUnPossess, passing the old pawn.
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))
+	void Unobserve(UObject* Source);
+
 private:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

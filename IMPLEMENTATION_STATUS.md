@@ -33,6 +33,7 @@ SWUI lets UE developers expose reflected game state and gameplay events to web-b
 | UE-3 | Bind reflected Unreal properties to the interface | `[ ]` |
 | UE-4 | Bind reflected Unreal events/delegates to the interface | `[ ]` |
 | UE-5 | Generate frontend TypeScript bindings and stubs from Unreal bindings | `[ ]` |
+| UE-5a | Auto-derive TypeScript codegen from Blueprint graph (no manual class picker) | `[ ]` |
 | UE-6 | Preview the bound UI contract from Unreal metadata | `[ ]` |
 | UE-7 | Validate the UE workflow with the dynamic crosshair sample | `[D]` |
 
@@ -167,6 +168,31 @@ Expected behavior:
 * Starter stubs are created for the web/UI developer.
 * The generated files reflect the current Unreal binding setup.
 * The web side gets autocomplete for state and events.
+
+Progress: `[ ]`
+
+***
+
+## UE-5a — Auto-derive TypeScript codegen from Blueprint graph (no manual class picker)
+
+As a UE developer, I want `Refresh JS Bindings` to automatically detect what I am observing from the Blueprint graph so I never need to manually specify a source class.
+
+Expected workflow:
+
+```
+1. Wire up SWUI Observe nodes in PlayerController OnPossess (Source: GetPawn())
+2. Tools → SimpleWebUI → Refresh JS Bindings
+3. Generated .ts appears with correct namespaced keys and types — no config needed
+```
+
+Expected behavior:
+
+* The generator scans Blueprint graphs for `UK2Node_SwuiObserve` and `UK2Node_SwuiObserveEvent` nodes.
+* It reads the class from each node's Source pin connection automatically.
+* It derives the namespace from the connected class name (same logic as the runtime subsystem).
+* It derives property types from reflection on that class.
+* `CodegenSourceClass` field is removed from `USwui` entirely — the graph is the source of truth.
+* `ExposedProperties` checklist is retained as a visual manifest and override list.
 
 Progress: `[ ]`
 

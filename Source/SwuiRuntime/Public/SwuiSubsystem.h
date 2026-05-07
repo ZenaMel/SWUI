@@ -52,17 +52,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
 	void ExecuteJavaScript(const FString& Script);
 
-	// ---- Observe API (called from FunctionLibrary BP nodes) ----
+	// ---- K2Node expansion targets — do not call directly from C++ or Blueprint ----
+	// These are the functions the "SWUI Observe" and "SWUI Observe Event" graph nodes
+	// expand into at Blueprint compile time. Namespace is always auto-derived.
 
-	// Register a property to be synced to the web UI each tick.
-	// Namespace defaults to the source class name (lowercased) if empty.
+	UFUNCTION(BlueprintCallable, meta=(BlueprintInternalUseOnly="true"))
+	static void K2_Observe(UObject* Source, FName PropertyName);
+
+	UFUNCTION(BlueprintCallable, meta=(BlueprintInternalUseOnly="true"))
+	static void K2_ObserveEvent(UObject* Source, FName DelegateName);
+
+	// ---- Public API ----
+
 	void ObserveProperty(UObject* Source, const FString& Namespace, const FName& PropertyName);
-
-	// Bind to a BlueprintAssignable delegate — fires a JS CustomEvent when it broadcasts.
-	// Namespace defaults to the source class name (lowercased) if empty.
 	void ObserveDelegate(UObject* Source, const FString& Namespace, const FName& DelegateName);
 
-	// Remove all observations for a source object.
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))
 	void Unobserve(UObject* Source);
 
 	// Access the cached delegate payload shapes (used by TS codegen).

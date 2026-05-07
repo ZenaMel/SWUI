@@ -4,12 +4,27 @@
 #include "LevelEditor.h"
 #include "ToolMenus.h"
 #include "EngineUtils.h"
+#include "EdGraphUtilities.h"
+#include "SGraphNode.h"
 
 #include "Swui.h"
 #include "SwuiDetails.h"
 #include "SwuiTSGenerator.h"
+#include "K2Node_SwuiObserve.h"
+#include "K2Node_SwuiObserveEvent.h"
 
 #define LOCTEXT_NAMESPACE "SwuiEditor"
+
+class FSwuiNodeFactory : public FGraphPanelNodeFactory
+{
+public:
+	virtual TSharedPtr<SGraphNode> CreateNode(UEdGraphNode* Node) const override
+	{
+		if (UK2Node_SwuiObserve*      N = Cast<UK2Node_SwuiObserve>(Node))      return N->CreateVisualWidget();
+		if (UK2Node_SwuiObserveEvent* N = Cast<UK2Node_SwuiObserveEvent>(Node)) return N->CreateVisualWidget();
+		return nullptr;
+	}
+};
 
 class FSwuiEditorModule : public IModuleInterface
 {
@@ -25,11 +40,20 @@ public:
 
 		UToolMenus::RegisterStartupCallback(
 			FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FSwuiEditorModule::RegisterMenus));
+
+		NodeFactory = MakeShareable(new FSwuiNodeFactory);
+		FEdGraphUtilities::RegisterVisualNodeFactory(NodeFactory);
 	}
 
 	virtual void ShutdownModule() override
 	{
 		UToolMenus::UnRegisterStartupCallback(this);
+
+		if (NodeFactory.IsValid())
+		{
+			FEdGraphUtilities::UnregisterVisualNodeFactory(NodeFactory);
+			NodeFactory.Reset();
+		}
 
 		if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
 		{
@@ -40,6 +64,8 @@ public:
 	}
 
 private:
+	TSharedPtr<FSwuiNodeFactory> NodeFactory;
+
 	void RegisterMenus()
 	{
 		FToolMenuOwnerScoped OwnerScoped(this);

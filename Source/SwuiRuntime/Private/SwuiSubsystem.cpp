@@ -254,6 +254,26 @@ void USwuiSubsystem::ObserveDelegate(UObject* Source, const FString& Namespace, 
 	MCProp->AddDelegate(ScriptDelegate, Source);
 }
 
+void USwuiSubsystem::K2_Observe(UObject* Source, FName PropertyName)
+{
+	if (!Source) return;
+	UWorld* World = Source->GetWorld();
+	if (!World) return;
+	if (UGameInstance* GI = World->GetGameInstance())
+		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
+			Sub->ObserveProperty(Source, TEXT(""), PropertyName);
+}
+
+void USwuiSubsystem::K2_ObserveEvent(UObject* Source, FName DelegateName)
+{
+	if (!Source) return;
+	UWorld* World = Source->GetWorld();
+	if (!World) return;
+	if (UGameInstance* GI = World->GetGameInstance())
+		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
+			Sub->ObserveDelegate(Source, TEXT(""), DelegateName);
+}
+
 void USwuiSubsystem::Unobserve(UObject* Source)
 {
 	ObservedProperties.RemoveAll([&](const FSwuiObservedProperty& E) { return E.Source == Source; });

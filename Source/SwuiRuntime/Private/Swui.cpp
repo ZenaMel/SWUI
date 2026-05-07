@@ -29,13 +29,18 @@ void USwui::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		if (UGameInstance* GI = World->GetGameInstance())
 		{
 			if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
-			{
-				if (AActor* Owner = GetOwner())
-					Sub->Unobserve(Owner);
 				Sub->ShutdownRenderer();
-			}
 		}
 	}
 	Super::EndPlay(EndPlayReason);
+}
+
+void USwui::Unobserve(UObject* Source)
+{
+	UWorld* World = GetWorld();
+	if (!World) return;
+	if (UGameInstance* GI = World->GetGameInstance())
+		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
+			Sub->Unobserve(Source);
 }
 
