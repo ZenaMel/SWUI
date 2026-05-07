@@ -29,5 +29,5 @@ class FSwuiTSGenerator
 public:
 	// Generates Content/UI/generated/<InterfaceName>.generated.ts from the
 	// component's ExposedProperties list. Safe to call from any editor context.
-	static void Generate(USwui* Swui);
+	static bool Generate(USwui* Swui);
 };

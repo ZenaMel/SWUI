@@ -74,8 +74,11 @@ void USwui::BeginPlay()
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
 	if (!Sub) return;
 
+	Sub->SetBindingSources(BindingSources);
 	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName);
+	// SetBindingSources already scanned the world and observed all matching actors.
+	// No manual ObserveSource calls needed for the common case.
 }
 
 void USwui::EndPlay(const EEndPlayReason::Type EndPlayReason)

@@ -14,10 +14,10 @@ static FString SwuiComputeNamespace(UClass* SourceClass)
 	return Name.ToLower();
 }
 
-void FSwuiTSGenerator::Generate(USwui* Bridge)
+bool FSwuiTSGenerator::Generate(USwui* Bridge)
 {
-	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return;
-	if (Bridge->BindingSources.IsEmpty()) return;
+	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return false;
+	if (Bridge->BindingSources.IsEmpty()) return false;
 
 	// Collect all namespaces (for the header comment) and all state fields
 	TArray<FString> Namespaces;
@@ -46,7 +46,7 @@ void FSwuiTSGenerator::Generate(USwui* Bridge)
 	if (StateFields.IsEmpty())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SWUI: No supported properties to generate for '%s'. Skipping."), *Bridge->InterfaceName);
-		return;
+		return false;
 	}
 
 	const FString InterfaceName  = Bridge->InterfaceName;
@@ -107,9 +107,11 @@ void FSwuiTSGenerator::Generate(USwui* Bridge)
 	if (FFileHelper::SaveStringToFile(Output, *OutFile))
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated '%s'"), *OutFile);
+		return true;
 	}
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write '%s'"), *OutFile);
+		return false;
 	}
 }

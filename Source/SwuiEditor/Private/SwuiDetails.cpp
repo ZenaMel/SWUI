@@ -6,7 +6,10 @@
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailWidgetRow.h"
+#include "IDetailGroup.h"
 #include "PropertyCustomizationHelpers.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SButton.h"
@@ -33,121 +36,135 @@ USwui* Swui = Cast<USwui>(Objects[0].Get());
 if (!Swui) return;
 SwuiPtr = Swui;
 
-// Ensure slot 0 is the owner actor's class.
-// Must call Modify() before any UPROPERTY mutation so the editor tracks the change.
+// Resolve the owner actor class. Works for:
+//   - Level instances (editor + PIE): GetOwner() returns the actor.
+//   - Blueprint archetypes: GetOwner() is null; the outer chain is
+//     Component -> BlueprintGeneratedClass, which IS a child of AActor.
+auto FindOwnerClass = [](USwui* Comp) -> UClass*
 {
-	AActor* OwnerActor = Swui->GetOwner();
-	if (!OwnerActor) OwnerActor = Swui->GetTypedOuter<AActor>();
-	if (OwnerActor)
+	if (AActor* A = Comp->GetOwner()) return A->GetClass();
+	if (AActor* A = Comp->GetTypedOuter<AActor>()) return A->GetClass();
+	if (UClass* C = Comp->GetTypedOuter<UClass>())
+		if (C->IsChildOf<AActor>()) return C;
+	return nullptr;
+};
+
+// Auto-fill slot 0 with the owner class when needed.
+{
+	UClass* OwnerClass = FindOwnerClass(Swui);
+	if (OwnerClass)
 	{
-		UClass* OwnerClass = OwnerActor->GetClass();
 		const bool bSlot0Wrong = Swui->BindingSources.IsEmpty() ||
 			Swui->BindingSources[0].SourceClass != OwnerClass;
 		if (bSlot0Wrong)
 		{
 			Swui->Modify();
-			Swui->EnsureOwnerBindingSource();
+			Swui->BindingSources.IsEmpty()
+				? [&]{ FSwuiBindingSource S; S.SourceClass = OwnerClass; Swui->BindingSources.Insert(S, 0); }()
+				: [&]{ Swui->BindingSources[0].SourceClass = OwnerClass; }();
 		}
 	}
 }
 
-// Hide the raw array — replaced by our custom UI below
-DetailBuilder.HideProperty(GET_MEMBER_NAME_CHECKED(USwui, BindingSources));
+// Get the array handle before hiding it — child handles remain valid.
+TSharedRef<IPropertyHandle> BindingSourcesHandle =
+	DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USwui, BindingSources));
+DetailBuilder.HideProperty(BindingSourcesHandle);
+TSharedPtr<IPropertyHandleArray> ArrayHandle = BindingSourcesHandle->AsArray();
 
 IDetailCategoryBuilder& Cat = DetailBuilder.EditCategory(
 "SimpleWebUI|Bindings",
 LOCTEXT("BindingsCat", "Web UI Bindings"),
 ECategoryPriority::Important);
 
-// ---- One section per binding source ----
+// ---- One collapsible group per binding source ----
 for (int32 i = 0; i < Swui->BindingSources.Num(); ++i)
 {
 UClass* SourceClass = Swui->BindingSources[i].SourceClass;
 
-// Section header: class picker + Remove button
-Cat.AddCustomRow(FText::Format(LOCTEXT("SourceRow", "Source {0}"), { FText::AsNumber(i + 1) }))
-.NameContent()
-[
-SNew(STextBlock)
-.Text(FText::Format(LOCTEXT("SourceLabel", "Source {0}"), { FText::AsNumber(i + 1) }))
-.Font(IDetailLayoutBuilder::GetDetailFontBold())
-]
-.ValueContent()
-.MinDesiredWidth(250.f)
-[
-SNew(SHorizontalBox)
-+ SHorizontalBox::Slot()
-.FillWidth(1.f)
-[
-SNew(SClassPropertyEntryBox)
-.MetaClass(UObject::StaticClass())
-.AllowNone(true)
-.AllowAbstract(true)
-.ShowDisplayNames(true)
-.IsEnabled(i != 0)
-.SelectedClass_Lambda([Swui, i]() -> const UClass*
+// Group label: include the class name when set so collapsed state is informative.
+const FText SourceLabel = (i == 0)
+	? (SourceClass
+		? FText::Format(LOCTEXT("OwnerGroupNamed", "Owner Class ({0})"), FText::FromString(SourceClass->GetName()))
+		: LOCTEXT("OwnerGroupEmpty", "Owner Class"))
+	: (SourceClass
+		? FText::Format(LOCTEXT("SourceGroupNamed", "Source {0} ({1})"), FText::AsNumber(i + 1), FText::FromString(SourceClass->GetName()))
+		: FText::Format(LOCTEXT("SourceGroupEmpty", "Source {0}"), FText::AsNumber(i + 1)));
+
+const FName SourceGroupId = FName(*FString::Printf(TEXT("SwuiSource%d"), i));
+IDetailGroup& SourceGroup = Cat.AddGroup(SourceGroupId, SourceLabel, false);
+
+// Native property handle for the SourceClass field in this slot.
+TSharedPtr<IPropertyHandle> ElemHandle  = BindingSourcesHandle->GetChildHandle((uint32)i);
+TSharedPtr<IPropertyHandle> ClassHandle = ElemHandle.IsValid()
+	? ElemHandle->GetChildHandle(GET_MEMBER_NAME_CHECKED(FSwuiBindingSource, SourceClass))
+	: nullptr;
+
+if (ClassHandle.IsValid())
 {
-return Swui->BindingSources.IsValidIndex(i)
-? (const UClass*)Swui->BindingSources[i].SourceClass
-: nullptr;
-})
-.OnSetClass_Lambda([Swui, i, this](const UClass* NewClass)
-{
-if (!SwuiPtr.IsValid() || !Swui->BindingSources.IsValidIndex(i)) return;
-Swui->Modify();
-Swui->BindingSources[i].SourceClass = const_cast<UClass*>(NewClass);
-Swui->BindingSources[i].Properties.Empty(); // stale selections cleared
-if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
-})
-]
-+ SHorizontalBox::Slot()
-.AutoWidth()
-.Padding(4.f, 0.f, 0.f, 0.f)
-[
-SNew(SButton)
-.Text(LOCTEXT("RemoveBtn", "Remove"))
-.IsEnabled(i != 0)
-.OnClicked_Lambda([Swui, i, this]()
-{
-if (!SwuiPtr.IsValid()) return FReply::Handled();
-Swui->Modify();
-Swui->BindingSources.RemoveAt(i);
-if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
-return FReply::Handled();
-})
-]
-];
+	ClassHandle->SetOnPropertyValueChanged(FSimpleDelegate::CreateLambda([this]()
+	{
+		if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
+	}));
+
+	if (i == 0)
+	{
+		// Slot 0: greyed standard class picker (auto-filled from owner).
+		SourceGroup.AddPropertyRow(ClassHandle.ToSharedRef())
+			.DisplayName(LOCTEXT("OwnerClassProp", "Class"))
+			.IsEnabled(false);
+	}
+	else
+	{
+		// Other slots: editable picker + Remove button.
+		TSharedPtr<SWidget> DefaultName, DefaultValue;
+		IDetailPropertyRow& Row = SourceGroup.AddPropertyRow(ClassHandle.ToSharedRef())
+			.DisplayName(LOCTEXT("SourceClassProp", "Class"));
+		Row.GetDefaultWidgets(DefaultName, DefaultValue);
+		Row.CustomWidget()
+			.NameContent()
+			[
+				DefaultName.ToSharedRef()
+			]
+			.ValueContent()
+			.MinDesiredWidth(250.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					DefaultValue.ToSharedRef()
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f, 0.f, 0.f).VAlign(VAlign_Center)
+				[
+					PropertyCustomizationHelpers::MakeDeleteButton(
+						FSimpleDelegate::CreateLambda([ArrayHandle, i, this]()
+						{
+							if (ArrayHandle.IsValid()) ArrayHandle->DeleteItem(i);
+							if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
+						}),
+						LOCTEXT("RemoveTip", "Remove this source class"))
+				]
+			];
+	}
+}
 
 if (!SourceClass) continue;
 
-// "State Properties" sub-header
-Cat.AddCustomRow(LOCTEXT("StatePropsHeader", "State Properties"))
-.WholeRowContent()
-	[
-		SNew(SBox)
-		.Padding(FMargin(20.f, 2.f, 0.f, 2.f))
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("StatePropertiesLabel", "State Properties"))
-			.Font(IDetailLayoutBuilder::GetDetailFont())
-			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-		]
-	];
+// Nested collapsible group for the property checkboxes.
+const FName StateGroupId = FName(*FString::Printf(TEXT("SwuiState%d"), i));
+IDetailGroup& StateGroup = SourceGroup.AddGroup(StateGroupId, LOCTEXT("StatePropsGroup", "State Properties"), false);
 
 for (TFieldIterator<FProperty> It(SourceClass); It; ++It)
 {
-FProperty* Prop = *It;
-if (!Prop->HasAnyPropertyFlags(CPF_BlueprintVisible)) continue;
-if (SwuiGetTSType(Prop).IsEmpty()) continue;
+	FProperty* Prop = *It;
+	if (!Prop->HasAnyPropertyFlags(CPF_BlueprintVisible)) continue;
+	if (SwuiGetTSType(Prop).IsEmpty()) continue;
 
-const FName PropName  = Prop->GetFName();
-const FString TSType  = SwuiGetTSType(Prop);
+	const FName PropName = Prop->GetFName();
+	const FString TSType = SwuiGetTSType(Prop);
 
-Cat.AddCustomRow(FText::FromName(PropName))
-.NameContent()
-[
-	SNew(SBox)
-	.Padding(FMargin(28.f, 0.f, 0.f, 0.f))
+	StateGroup.AddWidgetRow()
+	.NameContent()
 	[
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -164,44 +181,40 @@ Cat.AddCustomRow(FText::FromName(PropName))
 			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 		]
 	]
-]
-.ValueContent()
-[
-	SNew(SCheckBox)
-	.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, PropName]()
-	{
-		if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
-		return Swui->BindingSources[i].Properties.Contains(PropName)
-			? ECheckBoxState::Checked
-			: ECheckBoxState::Unchecked;
-	}))
-	.OnCheckStateChanged_Lambda([Swui, i, PropName](ECheckBoxState NewState)
-	{
-		if (!Swui->BindingSources.IsValidIndex(i)) return;
-		Swui->Modify();
-		if (NewState == ECheckBoxState::Checked)
-			Swui->BindingSources[i].Properties.AddUnique(PropName);
-		else
-			Swui->BindingSources[i].Properties.Remove(PropName);
-	})
-];
+	.ValueContent()
+	[
+		SNew(SCheckBox)
+		.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, PropName]()
+		{
+			if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
+			return Swui->BindingSources[i].Properties.Contains(PropName)
+				? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+		}))
+		.OnCheckStateChanged_Lambda([Swui, i, PropName](ECheckBoxState NewState)
+		{
+			if (!Swui->BindingSources.IsValidIndex(i)) return;
+			Swui->Modify();
+			if (NewState == ECheckBoxState::Checked)
+				Swui->BindingSources[i].Properties.AddUnique(PropName);
+			else
+				Swui->BindingSources[i].Properties.Remove(PropName);
+		})
+	];
 }
 }
 
-// ---- Add Source button ----
+// ---- Add Source button (native UE look) ----
 Cat.AddCustomRow(LOCTEXT("AddSourceRow", "Add Source"))
 .WholeRowContent()
+.HAlign(HAlign_Left)
 [
-SNew(SButton)
-.Text(LOCTEXT("AddSourceBtn", "+ Add Source Class"))
-.OnClicked_Lambda([Swui, this]()
-{
-if (!SwuiPtr.IsValid()) return FReply::Handled();
-Swui->Modify();
-Swui->BindingSources.Add(FSwuiBindingSource());
-if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
-return FReply::Handled();
-})
+	PropertyCustomizationHelpers::MakeAddButton(
+		FSimpleDelegate::CreateLambda([ArrayHandle, this]()
+		{
+			if (ArrayHandle.IsValid()) ArrayHandle->AddItem();
+			if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
+		}),
+		LOCTEXT("AddSourceTip", "Add a new source class"))
 ];
 
 // ---- Generate button ----
@@ -215,9 +228,20 @@ SNew(SButton)
 "Generates TypeScript bindings into Content/UI/generated/ from the checked properties."))
 .OnClicked_Lambda([this]()
 {
-if (SwuiPtr.IsValid())
-FSwuiTSGenerator::Generate(SwuiPtr.Get());
-return FReply::Handled();
+	bool bOK = false;
+	if (SwuiPtr.IsValid())
+		bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
+
+	FNotificationInfo Info(bOK
+		? LOCTEXT("GenOK",  "JS Bindings generated successfully.")
+		: LOCTEXT("GenFail", "JS Bindings generation failed — check the Output Log."));
+	Info.bFireAndForget = true;
+	Info.FadeInDuration  = 0.2f;
+	Info.FadeOutDuration = 0.5f;
+	Info.ExpireDuration  = 3.f;
+	Info.Image = FAppStyle::GetBrush(bOK ? TEXT("NotificationList.SuccessImage") : TEXT("NotificationList.FailImage"));
+	FSlateNotificationManager::Get().AddNotification(Info);
+	return FReply::Handled();
 })
 ];
 }

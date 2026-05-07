@@ -3,6 +3,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
+#include "SwuiBindingSource.h"
 #include "SwuiSubsystem.generated.h"
 
 class USwuiView;
@@ -65,6 +66,16 @@ public:
 	UFUNCTION(BlueprintCallable, meta=(BlueprintInternalUseOnly="true"))
 	static void K2_ObserveEvent(UObject* Source, FName DelegateName);
 
+	// Called by USwui on BeginPlay; stores binding config so ObserveSource can look it up.
+	void SetBindingSources(const TArray<FSwuiBindingSource>& Sources);
+
+	// Finds the BindingSource entry whose SourceClass matches Instance's class (or a parent),
+	// then calls ObserveProperty for every checked property in that entry.
+	// Call this once per instance you want to sync (e.g., in OnPossess for your Character).
+	// Slot 0 (owner class) is called automatically by the Swui component — no manual call needed.
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Instance"))
+	void ObserveSource(UObject* Instance, bool bWarnOnMiss = true);
+
 	// ---- Public API ----
 
 	void ObserveProperty(UObject* Source, const FString& Namespace, const FName& PropertyName);
@@ -86,6 +97,7 @@ private:
 
 	TArray<FSwuiObservedProperty> ObservedProperties;
 	TArray<FSwuiObservedDelegate> ObservedDelegates;
+	TArray<FSwuiBindingSource>    CachedBindingSources;
 
 	FTimerHandle StateTickHandle;
 

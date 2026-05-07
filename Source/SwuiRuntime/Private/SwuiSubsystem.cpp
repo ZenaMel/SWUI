@@ -8,6 +8,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "UObject/PropertyIterator.h"
@@ -258,6 +259,48 @@ void USwuiSubsystem::ObserveDelegate(UObject* Source, const FString& Namespace, 
 	FScriptDelegate ScriptDelegate;
 	ScriptDelegate.BindUFunction(this, GET_FUNCTION_NAME_CHECKED(USwuiSubsystem, OnObservedDelegateFired));
 	MCProp->AddDelegate(ScriptDelegate, Source);
+}
+
+// ---- Binding source auto-observe ----
+
+void USwuiSubsystem::SetBindingSources(const TArray<FSwuiBindingSource>& Sources)
+{
+	CachedBindingSources = Sources;
+
+	// At BeginPlay time all actors are already initialized — scan the world once
+	// and auto-observe every actor whose class matches a configured source entry.
+	UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr;
+	if (!World) return;
+
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		ObserveSource(*It, /*bWarnOnMiss=*/false);
+	}
+}
+
+void USwuiSubsystem::ObserveSource(UObject* Instance, bool bWarnOnMiss)
+{
+	if (!Instance) return;
+	UClass* InstanceClass = Instance->GetClass();
+
+	for (const FSwuiBindingSource& Src : CachedBindingSources)
+	{
+		if (!Src.SourceClass || Src.Properties.IsEmpty()) continue;
+		if (!InstanceClass->IsChildOf(Src.SourceClass)) continue;
+
+		// Don't double-register the same instance.
+		const bool bAlreadyObserved = ObservedProperties.ContainsByPredicate(
+			[Instance](const FSwuiObservedProperty& E){ return E.Source == Instance; });
+		if (bAlreadyObserved) return;
+
+		for (const FName& PropName : Src.Properties)
+			ObserveProperty(Instance, TEXT(""), PropName);
+		return;
+	}
+
+	if (bWarnOnMiss)
+		UE_LOG(LogTemp, Warning, TEXT("SWUI ObserveSource: no BindingSource entry found for class '%s'"),
+			*InstanceClass->GetName());
 }
 
 void USwuiSubsystem::K2_Observe(UObject* Source, FName PropertyName)
