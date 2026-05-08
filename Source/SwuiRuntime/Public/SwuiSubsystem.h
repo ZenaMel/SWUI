@@ -48,6 +48,14 @@ public:
 
 	void ShutdownRenderer();
 
+	/** Immediately shuts down SWUI rendering. Safe to call at BeginPlay on any actor.
+	 *  Prevents any further InitRenderer calls for the lifetime of this game instance. */
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI|Debug")
+	void DisablePlugin();
+
+	UFUNCTION(BlueprintPure, Category="SimpleWebUI|Debug")
+	bool IsPluginDisabled() const { return bDisabledAtRuntime; }
+
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
 	void SetWidgetVisible(bool bVisible);
 
@@ -90,6 +98,8 @@ public:
 	const TArray<FSwuiObservedProperty>& GetObservedProperties() const { return ObservedProperties; }
 
 private:
+	bool bDisabledAtRuntime = false;
+
 	UPROPERTY()
 	USwuiView* View = nullptr;
 

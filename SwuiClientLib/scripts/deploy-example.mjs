@@ -7,7 +7,8 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root      = join(__dirname, '..');
-const contentUI = join(root, '..', '..', 'Content', 'UI');
+// SwuiClientLib → SimpleWebUI → Plugins → <GameRoot>
+const contentUI = join(root, '..', '..', '..', 'Content', 'UI');
 
 const copies = [
   ['dist/swui.js',        'swui.js'],

@@ -14,14 +14,30 @@ static FString SwuiComputeNamespace(UClass* SourceClass)
 	return Name.ToLower();
 }
 
+static FString NullableNum(const FString& S)
+{
+	return S.IsEmpty() ? TEXT("null") : S;
+}
+
 bool FSwuiTSGenerator::Generate(USwui* Bridge)
 {
 	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return false;
 	if (Bridge->BindingSources.IsEmpty()) return false;
 
-	// Collect all namespaces (for the header comment) and all state fields
-	TArray<FString> Namespaces;
-	FString StateFields;
+	struct FPropInfo
+	{
+		FString Namespace;
+		FString FullKey;   // "namespace.PropName"
+		FString PropName;  // "Health"
+		FString TSType;    // "number"
+		FString Label;     // DisplayName meta or PropName
+		FString Category;  // Category meta
+		FString MinVal;    // empty or numeric string
+		FString MaxVal;    // empty or numeric string
+	};
+
+	TArray<FPropInfo> Props;
+	TArray<FString>   Namespaces;
 
 	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
 	{
@@ -31,26 +47,73 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		const FString Namespace = SwuiComputeNamespace(SourceClass);
 		Namespaces.AddUnique(Namespace);
 
-		for (const FName& PropName : Source.Properties)
+		for (const FName& PropFName : Source.Properties)
 		{
-			FProperty* Prop = SourceClass->FindPropertyByName(PropName);
+			FProperty* Prop = SourceClass->FindPropertyByName(PropFName);
 			if (!Prop) continue;
+
 			const FString TSType = SwuiGetTSType(Prop);
 			if (TSType.IsEmpty()) continue;
 
-			StateFields += FString::Printf(TEXT("\t\"%s.%s\": %s;\n"),
-				*Namespace, *PropName.ToString(), *TSType);
+			auto GetMeta = [&](const TCHAR* Key) -> FString
+			{
+				return Prop->HasMetaData(Key) ? Prop->GetMetaData(Key) : FString();
+			};
+
+			FPropInfo Info;
+			Info.Namespace = Namespace;
+			Info.PropName  = PropFName.ToString();
+			Info.FullKey   = Namespace + TEXT(".") + Info.PropName;
+			Info.TSType    = TSType;
+			Info.Label     = GetMeta(TEXT("DisplayName"));
+			if (Info.Label.IsEmpty()) Info.Label = Info.PropName;
+			Info.Category  = GetMeta(TEXT("Category"));
+			Info.MinVal    = GetMeta(TEXT("ClampMin"));
+			if (Info.MinVal.IsEmpty()) Info.MinVal = GetMeta(TEXT("UIMin"));
+			Info.MaxVal    = GetMeta(TEXT("ClampMax"));
+			if (Info.MaxVal.IsEmpty()) Info.MaxVal = GetMeta(TEXT("UIMax"));
+
+			Props.Add(MoveTemp(Info));
 		}
 	}
 
-	if (StateFields.IsEmpty())
+	if (Props.IsEmpty())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SWUI: No supported properties to generate for '%s'. Skipping."), *Bridge->InterfaceName);
 		return false;
 	}
 
-	const FString InterfaceName  = Bridge->InterfaceName;
-	const FString NamespacesList = FString::Join(Namespaces, TEXT(", "));
+	const FString IName   = Bridge->InterfaceName;
+	const FString NsList  = FString::Join(Namespaces, TEXT(", "));
+
+	// ── KEYS ─────────────────────────────────────────────────────────────────
+	FString KeysBody;
+	for (const FPropInfo& P : Props)
+		KeysBody += FString::Printf(TEXT("\t%s: '%s',\n"), *P.PropName, *P.FullKey);
+
+	// ── State interface ───────────────────────────────────────────────────────
+	FString InterfaceBody;
+	for (const FPropInfo& P : Props)
+		InterfaceBody += FString::Printf(TEXT("\t'%s': %s;\n"), *P.FullKey, *P.TSType);
+
+	// ── META ──────────────────────────────────────────────────────────────────
+	FString MetaBody;
+	for (const FPropInfo& P : Props)
+	{
+		MetaBody += FString::Printf(
+			TEXT("\t'%s': { label: '%s', category: '%s', min: %s, max: %s },\n"),
+			*P.FullKey, *P.Label, *P.Category,
+			*NullableNum(P.MinVal), *NullableNum(P.MaxVal));
+	}
+
+	// ── Typed helpers ─────────────────────────────────────────────────────────
+	FString HelpersBody;
+	for (const FPropInfo& P : Props)
+	{
+		HelpersBody += FString::Printf(
+			TEXT("export function on%s(fn: (v: %s) => void) { return (window as any).Swui.on(KEYS.%s, fn); }\n"),
+			*P.PropName, *P.TSType, *P.PropName);
+	}
 
 	FString Output = FString::Printf(TEXT(
 		"// %s.generated.ts\n"
@@ -58,60 +121,53 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"// Re-generate via: Tools > SimpleWebUI > Refresh JS Bindings\n"
 		"// Namespaces: %s\n"
 		"\n"
+		"// \u2500\u2500 Key Constants \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+		"export const KEYS = {\n"
+		"%s"
+		"} as const;\n"
+		"\n"
+		"// \u2500\u2500 State Interface \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
 		"export interface I%sState {\n"
 		"%s"
 		"}\n"
 		"\n"
-		"// Returns the current snapshot of all synced state values.\n"
-		"export function swuiGetState(): I%sState {\n"
-		"\treturn ((window as any).__SWUI__?.state ?? {}) as I%sState;\n"
+		"// \u2500\u2500 Metadata \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+		"export interface ISwuiMeta {\n"
+		"\tlabel:    string;\n"
+		"\tcategory: string;\n"
+		"\tmin:      number | null;\n"
+		"\tmax:      number | null;\n"
 		"}\n"
 		"\n"
-		"// Subscribe to changes on a single namespaced state key.\n"
-		"// Key format: \"namespace.PropertyName\" e.g. \"%s.Health\".\n"
-		"// callback fires every time the Unreal side pushes a new value.\n"
-		"export function swuiOnChange<K extends keyof I%sState>(\n"
-		"\tkey: K,\n"
-		"\tcallback: (value: I%sState[K]) => void\n"
-		"): void {\n"
-		"\tconst runtime = ((window as any).__SWUI__ =\n"
-		"\t\t(window as any).__SWUI__ ?? { state: {} as I%sState });\n"
-		"\tconst prev = runtime._notify as ((k: string, v: unknown) => void) | undefined;\n"
-		"\truntime._notify = (k: string, v: unknown) => {\n"
-		"\t\tif (k === (key as string)) callback(v as I%sState[K]);\n"
-		"\t\tprev?.(k, v);\n"
-		"\t};\n"
-		"}\n"
+		"export const META: Record<string, ISwuiMeta> = {\n"
+		"%s"
+		"};\n"
+		"\n"
+		"// \u2500\u2500 Typed Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+		"// Requires Swui global (SwuiClientLib/dist/swui.js loaded before this module).\n"
+		"%s"
 	),
-		*InterfaceName,
-		*NamespacesList,
-		*InterfaceName, *StateFields,
-		*InterfaceName, *InterfaceName,
-		Namespaces.Num() > 0 ? *Namespaces[0] : TEXT("swui"),
-		*InterfaceName,
-		*InterfaceName,
-		*InterfaceName,
-		*InterfaceName,
-		*InterfaceName
+		*IName,
+		*NsList,
+		*KeysBody,
+		*IName, *InterfaceBody,
+		*MetaBody,
+		*HelpersBody
 	);
 
 	const FString OutDir  = FPaths::ProjectContentDir() / TEXT("UI/generated");
-	const FString OutFile = OutDir / InterfaceName + TEXT(".generated.ts");
+	const FString OutFile = OutDir / IName + TEXT(".generated.ts");
 
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 	if (!PlatformFile.DirectoryExists(*OutDir))
-	{
 		PlatformFile.CreateDirectoryTree(*OutDir);
-	}
 
 	if (FFileHelper::SaveStringToFile(Output, *OutFile))
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated '%s'"), *OutFile);
 		return true;
 	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write '%s'"), *OutFile);
-		return false;
-	}
+
+	UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write '%s'"), *OutFile);
+	return false;
 }

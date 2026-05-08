@@ -72,10 +72,18 @@ void USwuiSubsystem::Deinitialize()
 
 // ---- Renderer ----
 
+void USwuiSubsystem::DisablePlugin()
+{
+	bDisabledAtRuntime = true;
+	ShutdownRenderer();
+}
+
 void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceName,
 	bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
 	UMaterialInterface* BaseMaterial, FName TextureParamName)
 {
+	if (bDisabledAtRuntime) return;
+
 	UWorld* World = GetGameInstance()->GetWorld();
 	if (!World) return;
 

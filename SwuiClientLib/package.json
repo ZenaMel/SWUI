@@ -6,13 +6,16 @@
   "module": "dist/swui.esm.js",
   "types": "dist/swui.d.ts",
   "scripts": {
-    "build":         "vite build",
-    "build:example": "vite build && node scripts/deploy-example.mjs",
+    "build":         "node node_modules/vite/bin/vite.js build",
+    "build:example": "node node_modules/vite/bin/vite.js build && node scripts/deploy-example.mjs",
     "dev":           "tsc --watch --noEmit"
   },
   "devDependencies": {
     "typescript":      "^5.4.0",
     "vite":            "^5.2.0",
     "vite-plugin-dts": "^3.9.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }

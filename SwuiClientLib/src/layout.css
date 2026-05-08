@@ -1,0 +1,139 @@
+/*
+ * swui-layout.css — SimpleWebUI HUD layout utilities
+ * Include once in your HTML, then apply classes to your HUD element wrappers.
+ *
+ * Gutter: all corner/edge classes default to 40px screen margin.
+ * Override per-element with: style="--swui-gap: 20px"
+ *
+ * pointer-events:none is applied globally so HUD elements don't eat clicks;
+ * add .interactive to anything that needs to be clickable.
+ */
+
+/* ── Custom property ──────────────────────────────────────────────────────── */
+:root {
+  --swui-gap: 40px;
+}
+
+/* ── Reset / root ──────────────────────────────────────────────────────────── */
+.swui-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* ── Center ─────────────────────────────────────────────────────────────────── */
+
+/* Centered on both axes */
+.center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Centered horizontally only (pin top yourself) */
+.center-h {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* Centered vertically only (pin left yourself) */
+.center-v {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* ── Edge slots (centered on axis, with gutter) ─────────────────────────── */
+
+.top {
+  position: absolute;
+  top: var(--swui-gap);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.bottom {
+  position: absolute;
+  bottom: var(--swui-gap);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.left {
+  position: absolute;
+  left: var(--swui-gap);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.right {
+  position: absolute;
+  right: var(--swui-gap);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* ── Corners (gutter on both axes) ─────────────────────────────────────────── */
+
+.corner-tl {
+  position: absolute;
+  top: var(--swui-gap);
+  left: var(--swui-gap);
+}
+
+.corner-tr {
+  position: absolute;
+  top: var(--swui-gap);
+  right: var(--swui-gap);
+}
+
+.corner-bl {
+  position: absolute;
+  bottom: var(--swui-gap);
+  left: var(--swui-gap);
+}
+
+.corner-br {
+  position: absolute;
+  bottom: var(--swui-gap);
+  right: var(--swui-gap);
+}
+
+/* ── Full edges (flush, span entire side) ──────────────────────────────────── */
+
+.edge-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.edge-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.edge-left {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+}
+
+.edge-right {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+/* ── Pointer events ──────────────────────────────────────────────────────── */
+
+.interactive { pointer-events: auto; }
+.no-interact { pointer-events: none; }
