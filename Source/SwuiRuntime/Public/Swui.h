@@ -167,6 +167,9 @@ private:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	// Deferred init: called on next tick (and retried) until viewport is ready.
+	void InitializeSwuiView();
+
 #if WITH_EDITOR
 	/** Push updated settings to the running view when a property is changed
 	 *  in the Details panel during PIE — no restart required. */

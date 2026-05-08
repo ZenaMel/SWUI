@@ -77,6 +77,31 @@ void USwui::BeginPlay()
 
 	Sub->SetBindingSources(BindingSources);
 
+	// Defer renderer init to next tick so the viewport is guaranteed to exist
+	// in standalone / dedicated-window launches where BeginPlay fires before
+	// the first render frame. InitializeSwuiView retries until ready.
+	World->GetTimerManager().SetTimerForNextTick(
+		FTimerDelegate::CreateUObject(this, &USwui::InitializeSwuiView));
+}
+
+void USwui::InitializeSwuiView()
+{
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	// Retry until the viewport exists (standalone can take several ticks).
+	if (!GEngine || !GEngine->GameViewport || !GEngine->GameViewport->Viewport)
+	{
+		World->GetTimerManager().SetTimerForNextTick(
+			FTimerDelegate::CreateUObject(this, &USwui::InitializeSwuiView));
+		return;
+	}
+
+	UGameInstance* GI = World->GetGameInstance();
+	if (!GI) return;
+	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
+	if (!Sub) return;
+
 	FSwuiInstanceSettings InstSettings;
 	InstSettings.OverrideFrameRate         = OverrideFrameRate;
 	InstSettings.OverrideBandOvercopyRatio = OverrideBandOvercopyRatio;
@@ -94,8 +119,6 @@ void USwui::BeginPlay()
 
 	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
-	// SetBindingSources already scanned the world and observed all matching actors.
-	// No manual ObserveSource calls needed for the common case.
 }
 
 void USwui::EndPlay(const EEndPlayReason::Type EndPlayReason)

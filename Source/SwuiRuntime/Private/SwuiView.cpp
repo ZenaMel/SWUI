@@ -98,6 +98,12 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 		nullptr,
 		nullptr);
 
+	if (!Browser)
+	{
+		UE_LOG(LogSwuiRuntime, Error, TEXT("USwuiView::Init: CefBrowserHost::CreateBrowserSync returned null — CEF may not be initialized or the subprocess is missing."));
+		return;
+	}
+
 	// Determine per-browser frame rate:
 	//  Priority: InstanceSettings.OverrideFrameRate > 0  → use it
 	//         else Settings.DefaultViewFrameRate > 0      → use project setting
