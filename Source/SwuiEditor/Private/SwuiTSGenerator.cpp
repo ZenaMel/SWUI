@@ -14,9 +14,18 @@ static FString SwuiComputeNamespace(UClass* SourceClass)
 	return Name.ToLower();
 }
 
-static FString NullableNum(const FString& S)
+// Object name for the generated TS export: strip A/U prefix and _C suffix, keep PascalCase.
+static FString SwuiComputeObjectName(UClass* SourceClass)
 {
-	return S.IsEmpty() ? TEXT("null") : S;
+	if (!SourceClass) return TEXT("Swui");
+	FString Name = SourceClass->GetName();
+	// Strip Blueprint-generated class suffix
+	if (Name.EndsWith(TEXT("_C")))
+		Name = Name.LeftChop(2);
+	// Strip leading A/U only if followed by an uppercase letter (avoid mangling e.g. "UE4")
+	if ((Name.StartsWith(TEXT("A")) || Name.StartsWith(TEXT("U"))) && Name.Len() > 1 && FChar::IsUpper(Name[1]))
+		Name = Name.RightChop(1);
+	return Name;
 }
 
 bool FSwuiTSGenerator::Generate(USwui* Bridge)
@@ -26,34 +35,50 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 	struct FPropInfo
 	{
+		FString ObjectName; // "BP_ThirdPersonCharacter"
 		FString Namespace;
 		FString FullKey;   // "namespace.PropName"
 		FString PropName;  // "Health"
 		FString TSType;    // "number"
-		FString Label;     // DisplayName meta or PropName
-		FString Category;  // Category meta
-		FString MinVal;    // empty or numeric string
-		FString MaxVal;    // empty or numeric string
+		FString Label;
+		FString Category;
+		FString MinVal;
+		FString MaxVal;
 	};
 
 	struct FEventInfo
 	{
+		FString ObjectName;   // "SwuiShootingComponent"
 		FString Namespace;
 		FString FullKey;      // "namespace.OnFired"
 		FString DelegateName; // "OnFired"
 	};
 
-	TArray<FPropInfo>  Props;
-	TArray<FEventInfo> Events;
-	TArray<FString>    Namespaces;
+	// One entry per source class — tracks object name + its props + its events.
+	struct FSourceEntry
+	{
+		FString ObjectName;
+		FString Namespace;
+		TArray<FPropInfo>  Props;
+		TArray<FEventInfo> Events;
+	};
+
+	TArray<FSourceEntry> Sources;
+	TArray<FString>      Namespaces;
 
 	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
 	{
 		UClass* SourceClass = Source.SourceClass;
-		if (!SourceClass || Source.Properties.IsEmpty()) continue;
+		if (!SourceClass) continue;
+		if (Source.Properties.IsEmpty() && Source.Delegates.IsEmpty()) continue;
 
-		const FString Namespace = SwuiComputeNamespace(SourceClass);
+		const FString Namespace  = SwuiComputeNamespace(SourceClass);
+		const FString ObjectName = SwuiComputeObjectName(SourceClass);
 		Namespaces.AddUnique(Namespace);
+
+		FSourceEntry Entry;
+		Entry.ObjectName = ObjectName;
+		Entry.Namespace  = Namespace;
 
 		for (const FName& PropFName : Source.Properties)
 		{
@@ -69,124 +94,94 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 			};
 
 			FPropInfo Info;
-			Info.Namespace = Namespace;
-			Info.PropName  = PropFName.ToString();
-			Info.FullKey   = Namespace + TEXT(".") + Info.PropName;
-			Info.TSType    = TSType;
-			Info.Label     = GetMeta(TEXT("DisplayName"));
+			Info.ObjectName = ObjectName;
+			Info.Namespace  = Namespace;
+			Info.PropName   = PropFName.ToString();
+			Info.FullKey    = Namespace + TEXT(".") + Info.PropName;
+			Info.TSType     = TSType;
+			Info.Label      = GetMeta(TEXT("DisplayName"));
 			if (Info.Label.IsEmpty()) Info.Label = Info.PropName;
-			Info.Category  = GetMeta(TEXT("Category"));
-			Info.MinVal    = GetMeta(TEXT("ClampMin"));
+			Info.Category   = GetMeta(TEXT("Category"));
+			Info.MinVal     = GetMeta(TEXT("ClampMin"));
 			if (Info.MinVal.IsEmpty()) Info.MinVal = GetMeta(TEXT("UIMin"));
-			Info.MaxVal    = GetMeta(TEXT("ClampMax"));
+			Info.MaxVal     = GetMeta(TEXT("ClampMax"));
 			if (Info.MaxVal.IsEmpty()) Info.MaxVal = GetMeta(TEXT("UIMax"));
 
-			Props.Add(MoveTemp(Info));
+			Entry.Props.Add(MoveTemp(Info));
 		}
 
 		for (const FName& DelegateFName : Source.Delegates)
 		{
 			FEventInfo EInfo;
+			EInfo.ObjectName    = ObjectName;
 			EInfo.Namespace     = Namespace;
 			EInfo.DelegateName  = DelegateFName.ToString();
 			EInfo.FullKey       = Namespace + TEXT(".") + EInfo.DelegateName;
-			Events.Add(MoveTemp(EInfo));
+			Entry.Events.Add(MoveTemp(EInfo));
 		}
+
+		Sources.Add(MoveTemp(Entry));
 	}
 
-	if (Props.IsEmpty() && Events.IsEmpty())
+	if (Sources.IsEmpty())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SWUI: No supported properties or events to generate for '%s'. Skipping."), *Bridge->InterfaceName);
 		return false;
 	}
 
-	const FString IName   = Bridge->InterfaceName;
-	const FString NsList  = FString::Join(Namespaces, TEXT(", "));
+	const FString IName  = Bridge->InterfaceName;
+	const FString NsList = FString::Join(Namespaces, TEXT(", "));
 
-	// ── KEYS ─────────────────────────────────────────────────────────────────
-	FString KeysBody;
-	for (const FPropInfo& P : Props)
-		KeysBody += FString::Printf(TEXT("\t%s: '%s',\n"), *P.PropName, *P.FullKey);
-
-	// ── State interface ───────────────────────────────────────────────────────
-	FString InterfaceBody;
-	for (const FPropInfo& P : Props)
-		InterfaceBody += FString::Printf(TEXT("\t'%s': %s;\n"), *P.FullKey, *P.TSType);
-
-	// ── META ──────────────────────────────────────────────────────────────────
-	FString MetaBody;
-	for (const FPropInfo& P : Props)
+	// ── One const object per source class ────────────────────────────────────
+	FString ObjectsBody;
+	for (const FSourceEntry& Src : Sources)
 	{
-		MetaBody += FString::Printf(
-			TEXT("\t'%s': { label: '%s', category: '%s', min: %s, max: %s },\n"),
-			*P.FullKey, *P.Label, *P.Category,
-			*NullableNum(P.MinVal), *NullableNum(P.MaxVal));
-	}
+		ObjectsBody += FString::Printf(TEXT("export const %s = {\n"), *Src.ObjectName);
 
-	// ── Typed helpers ─────────────────────────────────────────────────────────
-	FString HelpersBody;
-	for (const FPropInfo& P : Props)
-	{
-		HelpersBody += FString::Printf(
-			TEXT("export function on%s(fn: (v: %s) => void): () => void { return Swui.on(KEYS.%s, fn); }\n"),
-			*P.PropName, *P.TSType, *P.PropName);
-	}
+		// Key string entries
+		for (const FPropInfo& P : Src.Props)
+			ObjectsBody += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *P.PropName, *P.FullKey);
 
-	// ── Event helpers ─────────────────────────────────────────────────────────
-	FString EventHelpersBody;
-	for (const FEventInfo& E : Events)
-	{
-		// Emit a typed addEventListener wrapper that returns an unsubscribe fn.
-		EventHelpersBody += FString::Printf(
-			TEXT("export function on%s(fn: () => void): () => void {\n")
-			TEXT("  document.addEventListener('%s', fn);\n")
-			TEXT("  return () => document.removeEventListener('%s', fn);\n")
-			TEXT("}\n"),
-			*E.DelegateName, *E.FullKey, *E.FullKey);
+		if (!Src.Props.IsEmpty() && (!Src.Props.IsEmpty() || !Src.Events.IsEmpty()))
+			ObjectsBody += TEXT("\n");
+
+		// State subscription helpers: onHealth(fn)
+		for (const FPropInfo& P : Src.Props)
+		{
+			ObjectsBody += FString::Printf(
+				TEXT("\ton%s(fn: (v: %s) => void): () => void {\n")
+				TEXT("\t\treturn Swui.on(this.%s, fn);\n")
+				TEXT("\t},\n"),
+				*P.PropName, *P.TSType, *P.PropName);
+		}
+
+		// Event helpers: OnFired(fn) — UE name as-is, no extra prefix
+		for (const FEventInfo& E : Src.Events)
+		{
+			ObjectsBody += FString::Printf(
+				TEXT("\t%s(fn: () => void): () => void {\n")
+				TEXT("\t\tdocument.addEventListener('%s', fn);\n")
+				TEXT("\t\treturn () => document.removeEventListener('%s', fn);\n")
+				TEXT("\t},\n"),
+				*E.DelegateName, *E.FullKey, *E.FullKey);
+		}
+
+		ObjectsBody += TEXT("};\n\n");
 	}
 
 	FString Output = FString::Printf(TEXT(
 		"// %s.generated.ts\n"
 		"// AUTO-GENERATED by SimpleWebUI \u2014 do not edit manually.\n"
 		"// Re-generate via: Tools > SimpleWebUI > Refresh JS Bindings\n"
-		"// Namespaces: %s\n"
+		"// Sources: %s\n"
 		"\n"
-		"// \u2500\u2500 Key Constants \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-		"export const KEYS = {\n"
-		"%s"
-		"} as const;\n"
-		"\n"
-		"// \u2500\u2500 State Interface \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-		"export interface I%sState {\n"
-		"%s"
-		"}\n"
-		"\n"
-		"// \u2500\u2500 Metadata \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-		"export interface ISwuiMeta {\n"
-		"\tlabel:    string;\n"
-		"\tcategory: string;\n"
-		"\tmin:      number | null;\n"
-		"\tmax:      number | null;\n"
-		"}\n"
-		"\n"
-		"export const META: Record<string, ISwuiMeta> = {\n"
-		"%s"
-		"};\n"
-		"\n"
-		"// \u2500\u2500 Typed Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
 		"import Swui from '@simplewebui/client';\n"
-		"%s"
 		"\n"
-		"// \u2500\u2500 Event Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
 		"%s"
 	),
 		*IName,
 		*NsList,
-		*KeysBody,
-		*IName, *InterfaceBody,
-		*MetaBody,
-		*HelpersBody,
-		*EventHelpersBody
+		*ObjectsBody
 	);
 
 	const FString OutDir  = FPaths::ProjectContentDir() / TEXT("UI/generated");
