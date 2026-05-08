@@ -302,10 +302,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			ENQUEUE_RENDER_COMMAND(UpdateSwuiViewPerRect)(
 				[UploadData](FRHICommandList& CommandList)
 				{
-					FRHITexture2D* Tex = UploadData->Texture2DResource->TextureRHI->GetTexture2D();
 					for (FSwuiRectUpload& R : UploadData->Rects)
 					{
-						RHIUpdateTexture2D(Tex, 0, R.Region, R.SrcPitch, R.SrcData.GetData());
+						RHIUpdateTexture2D(UploadData->Texture2DResource->TextureRHI->GetTexture2D(), 0, R.Region, R.SrcPitch, R.SrcData.GetData());
 					}
 					delete UploadData;
 				});
@@ -361,12 +360,10 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			ENQUEUE_RENDER_COMMAND(UpdateSwuiViewBand)(
 				[RegionData](FRHICommandList& CommandList)
 				{
-					FRHITexture2D* Tex = RegionData->Texture2DResource->TextureRHI->GetTexture2D();
 					for (uint32 Idx = 0; Idx < RegionData->NumRegions; ++Idx)
 					{
 						if (RegionData->Regions[Idx].Width == 0 || RegionData->Regions[Idx].Height == 0) continue;
-						RHIUpdateTexture2D(Tex, 0, RegionData->Regions[Idx], RegionData->SrcPitch,
-							RegionData->SrcData.GetData());
+						RHIUpdateTexture2D(RegionData->Texture2DResource->TextureRHI->GetTexture2D(), 0, RegionData->Regions[Idx], RegionData->SrcPitch, RegionData->SrcData.GetData());
 					}
 					FMemory::Free(RegionData->Regions);
 					delete RegionData;
