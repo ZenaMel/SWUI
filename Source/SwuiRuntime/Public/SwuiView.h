@@ -32,7 +32,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SwuiRuntime")
 	FName TextureParameterName = "SwuiTexture";
 
-	void Init();
+	void Init(const FSwuiInstanceSettings& InInstanceSettings = FSwuiInstanceSettings{});
 
 	// Returns the CEF windowless frame rate this view was initialised with.
 	int32 GetWindowlessFrameRate() const { return WindowlessFrameRate; }
@@ -51,6 +51,10 @@ public:
 	virtual UTexture2D* GetOrCreateTexture(int32 InWidth, int32 InHeight) override;
 
 	virtual void BeginDestroy() override;
+
+	// Per-instance settings forwarded from USwui component at Init() time.
+	// Kept public so USwuiSubsystem can read isolation flags (e.g. bPauseBrowserUpdates).
+	FSwuiInstanceSettings InstanceSettings;
 
 private:
 	UPROPERTY()

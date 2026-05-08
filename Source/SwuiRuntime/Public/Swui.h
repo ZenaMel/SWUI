@@ -69,6 +69,78 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Bindings")
 	TArray<FSwuiBindingSource> BindingSources;
 
+	// ---- Performance | Frame Rate ------------------------------------------
+
+	/** Override the per-browser windowless frame rate for this component.
+	 *  0 = use the project-wide DefaultViewFrameRate setting (or engine MaxFPS / 300).
+	 *  Set to your monitor refresh rate: 144, 165, 240, etc. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance",
+		meta=(ClampMin="0", ClampMax="300"))
+	int32 OverrideFrameRate = 0;
+
+	// ---- Performance | Upload Strategy ------------------------------------
+
+	/** Override the band-merge overcopy ratio for this component.
+	 *  0 = use the project-wide MaxBandOvercopyRatio setting (default 1.25).
+	 *  When (bandArea / dirtyArea) > this value, per-rect tight uploads are used instead. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance",
+		meta=(ClampMin="0.0", ClampMax="10.0"))
+	float OverrideBandOvercopyRatio = 0.f;
+
+	/** Override the max per-rect upload count for this component.
+	 *  0 = use the project-wide MaxPerRectUploads setting (default 32). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance",
+		meta=(ClampMin="0", ClampMax="256"))
+	int32 OverrideMaxPerRectUploads = 0;
+
+	// ---- Debug -------------------------------------------------------------
+
+	/** Log upload strategy and timing details for every paint call on this component.
+	 *  WARNING: spammy at 144+ Hz. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bVerbosePaintLog = false;
+
+	/** Skip all RHIUpdateTexture2D calls on this component to isolate CPU memcpy cost. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bNoTextureUpload = false;
+
+	// ---- Debug | Stage Isolation (enable one at a time to bisect stutter) ---
+
+	/** Return at the very top of OnPaint after incrementing the paint counter.
+	 *  Isolates: everything downstream of CEF's paint callback. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bSkipOnPaintProcessing = false;
+
+	/** Skip dirty-rect validation, strategy selection, memcpy, and upload.
+	 *  Isolates: rect processing overhead (strategy logic itself). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bSkipDirtyRectStrategy = false;
+
+	/** Skip copying pixels into the upload buffer (memcpy stage).
+	 *  Isolates: memory bandwidth cost of packing dirty rect data. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bSkipPaintMemcpy = false;
+
+	/** Skip the RHIUpdateTexture2D enqueue (clears bNoTextureUpload confusion).
+	 *  Isolates: GPU upload / render-thread texture update cost. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bSkipTextureUpload = false;
+
+	/** Keep the last uploaded texture; skip all new texture writes.
+	 *  Isolates: whether stutter is caused by texture updates vs. other work. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bFreezeTexture = false;
+
+	/** Skip JS state-push and runtime tick dispatch for this component.
+	 *  Isolates: JavaScript execution overhead from Unreal→Web data sync. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bPauseBrowserUpdates = false;
+
+	/** Hide the UE-side widget/material draw surface for this component.
+	 *  Isolates: Slate/UMG render cost of compositing the web texture. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bHideDrawComponent = false;
+
 	// Stop syncing all observed properties/events for a source object.
 	// Call from PlayerController's OnUnPossess, passing the old pawn.
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))

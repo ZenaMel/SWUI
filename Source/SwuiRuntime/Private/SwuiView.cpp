@@ -49,8 +49,9 @@ USwuiView::USwuiView()
 	CefData = MakeShared<FSwuiViewCefData>();
 }
 
-void USwuiView::Init()
+void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 {
+	InstanceSettings = InInstanceSettings;
 	if (Width <= 0 || Height <= 0)
 	{
 		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Width or Height <= 0"));
@@ -75,12 +76,17 @@ void USwuiView::Init()
 		nullptr);
 
 	// Determine per-browser frame rate:
-	//  Priority: Settings.DefaultViewFrameRate > 0  → use it directly
-	//         else GEngine->GetMaxFPS() > 0         → follow engine cap
-	//         else                                  → 300 (effectively uncapped)
+	//  Priority: InstanceSettings.OverrideFrameRate > 0  → use it
+	//         else Settings.DefaultViewFrameRate > 0      → use project setting
+	//         else GEngine->GetMaxFPS() > 0               → follow engine cap
+	//         else                                        → 300
 	int32 TargetFPS = 300;
 	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
-	if (Settings && Settings->DefaultViewFrameRate > 0)
+	if (InstanceSettings.OverrideFrameRate > 0)
+	{
+		TargetFPS = InstanceSettings.OverrideFrameRate;
+	}
+	else if (Settings && Settings->DefaultViewFrameRate > 0)
 	{
 		TargetFPS = Settings->DefaultViewFrameRate;
 	}
@@ -89,15 +95,23 @@ void USwuiView::Init()
 		TargetFPS = FMath::RoundToInt(GEngine->GetMaxFPS());
 	}
 
-	// Apply runtime-accessible thresholds from Settings so CVars start at config values.
-	// Users can still override at runtime with console commands.
-	if (Settings)
-	{
+	// Apply upload strategy thresholds: instance overrides → project settings → CVar defaults.
+	if (InstanceSettings.OverrideBandOvercopyRatio > 0.f)
+		CVarSwuiMaxMergeOvercopyRatio->Set(InstanceSettings.OverrideBandOvercopyRatio, ECVF_SetByCode);
+	else if (Settings)
 		CVarSwuiMaxMergeOvercopyRatio->Set(Settings->MaxBandOvercopyRatio, ECVF_SetByCode);
+
+	if (InstanceSettings.OverrideMaxPerRectUploads > 0)
+		CVarSwuiMaxPerRectUploads->Set(InstanceSettings.OverrideMaxPerRectUploads, ECVF_SetByCode);
+	else if (Settings)
 		CVarSwuiMaxPerRectUploads->Set(Settings->MaxPerRectUploads, ECVF_SetByCode);
-		if (Settings->bVerbosePaintLog)  CVarSwuiVerbosePaint->Set(1, ECVF_SetByCode);
-		if (Settings->bNoTextureUpload)  CVarSwuiNoTextureUpload->Set(1, ECVF_SetByCode);
-	}
+
+	// Debug flags: instance wins over project setting. Always write the CVar so
+	// toggling a flag off at runtime actually takes effect (CVars are sticky otherwise).
+	const bool bWantVerbose  = InstanceSettings.bVerbosePaintLog || (Settings && Settings->bVerbosePaintLog);
+	const bool bWantNoUpload = InstanceSettings.bNoTextureUpload || (Settings && Settings->bNoTextureUpload);
+	CVarSwuiVerbosePaint->Set(bWantVerbose  ? 1 : 0, ECVF_SetByCode);
+	CVarSwuiNoTextureUpload->Set(bWantNoUpload ? 1 : 0, ECVF_SetByCode);
 
 	Browser->GetHost()->SetWindowlessFrameRate(TargetFPS);
 	WindowlessFrameRate = TargetFPS;
@@ -180,6 +194,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 	++Stat_Paints;
 	Stat_DirtyRects += RegionCount;
 
+	// Stage gate 1: skip everything downstream of the paint callback.
+	if (InstanceSettings.bSkipOnPaintProcessing) { FMemory::Free(Regions); return; }
+
 	int64 DirtyAreaThisPaint = 0;
 	for (int32 i = 0; i < RegionCount; ++i)
 	{
@@ -194,6 +211,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		if ((int32)RectArea > Stat_LargestDirtyRect) Stat_LargestDirtyRect = (int32)RectArea;
 	}
 	Stat_DirtyPixels += DirtyAreaThisPaint;
+
+	// Stage gate 2: skip rect strategy, memcpy, and upload.
+	if (InstanceSettings.bSkipDirtyRectStrategy) { FMemory::Free(Regions); return; }
 
 	// -----------------------------------------------------------------------
 	// Band extents (used for both strategy decision and band path)
@@ -241,6 +261,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		// This is the safe pattern for RHIUpdateTexture2D — no virtual-row rebasing,
 		// no dependency on full-width stride in the source buffer.
 		// Lifetime: FSwuiPerRectUploadData is heap-allocated and deleted on RHI thread.
+
+		// Stage gate 3 (per-rect path): skip pixel copy into upload buffers.
+		if (InstanceSettings.bSkipPaintMemcpy || InstanceSettings.bFreezeTexture) { FMemory::Free(Regions); return; }
 
 		FSwuiPerRectUploadData* UploadData = new FSwuiPerRectUploadData;
 		UploadData->Texture2DResource = (FTextureResource*)Texture->GetResource();
@@ -295,7 +318,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 
 		FMemory::Free(Regions); // no longer needed — Regions[] was only used to build UploadData
 
-		const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0;
+		const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
+			|| InstanceSettings.bSkipTextureUpload
+			|| InstanceSettings.bNoTextureUpload;
 		if (bSkipUpload) { delete UploadData; }
 		else
 		{
@@ -316,6 +341,13 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		// One full-width memcpy of [MinRow..MaxRow], then one RHIUpdateTexture2D per rect.
 		// All rects share the same SrcData buffer; SrcY is rebased to MinRow.
 		// SrcPitch stays FullPitch — each rect row is read from the correct column via SrcX.
+
+		// Stage gate 3 (band path): skip pixel copy into upload buffers.
+		if (InstanceSettings.bSkipPaintMemcpy || InstanceSettings.bFreezeTexture)
+		{
+			FMemory::Free(Regions);
+			return;
+		}
 
 		FUpdateTextureRegionsData* RegionData = new FUpdateTextureRegionsData;
 		RegionData->Texture2DResource = (FTextureResource*)Texture->GetResource();
@@ -349,7 +381,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 				McpyUs / 1000.f);
 		}
 
-		const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0;
+		const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
+			|| InstanceSettings.bSkipTextureUpload
+			|| InstanceSettings.bNoTextureUpload;
 		if (bSkipUpload)
 		{
 			FMemory::Free(RegionData->Regions);

@@ -1,5 +1,6 @@
 ﻿#include "Swui.h"
 #include "SwuiSubsystem.h"
+#include "SwuiTypes.h"
 #include "Engine/GameInstance.h"
 
 void USwui::EnsureOwnerBindingSource()
@@ -75,8 +76,23 @@ void USwui::BeginPlay()
 	if (!Sub) return;
 
 	Sub->SetBindingSources(BindingSources);
+
+	FSwuiInstanceSettings InstSettings;
+	InstSettings.OverrideFrameRate         = OverrideFrameRate;
+	InstSettings.OverrideBandOvercopyRatio = OverrideBandOvercopyRatio;
+	InstSettings.OverrideMaxPerRectUploads = OverrideMaxPerRectUploads;
+	InstSettings.bVerbosePaintLog          = bVerbosePaintLog;
+	InstSettings.bNoTextureUpload          = bNoTextureUpload;
+	InstSettings.bSkipOnPaintProcessing    = bSkipOnPaintProcessing;
+	InstSettings.bSkipDirtyRectStrategy    = bSkipDirtyRectStrategy;
+	InstSettings.bSkipPaintMemcpy          = bSkipPaintMemcpy;
+	InstSettings.bSkipTextureUpload        = bSkipTextureUpload;
+	InstSettings.bFreezeTexture            = bFreezeTexture;
+	InstSettings.bPauseBrowserUpdates      = bPauseBrowserUpdates;
+	InstSettings.bHideDrawComponent        = bHideDrawComponent;
+
 	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
-		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName);
+		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
 	// SetBindingSources already scanned the world and observed all matching actors.
 	// No manual ObserveSource calls needed for the common case.
 }

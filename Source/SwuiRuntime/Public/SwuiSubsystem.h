@@ -5,6 +5,7 @@
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "SwuiBindingSource.h"
+#include "SwuiTypes.h"
 #include "SwuiSubsystem.generated.h"
 
 class USwuiView;
@@ -51,7 +52,8 @@ public:
 	// Called by USwui component on BeginPlay.
 	void InitRenderer(const FString& URI, const FString& InterfaceName,
 		bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
-		UMaterialInterface* BaseMaterial, FName TextureParamName);
+		UMaterialInterface* BaseMaterial, FName TextureParamName,
+		const FSwuiInstanceSettings& InstanceSettings = FSwuiInstanceSettings{});
 
 	void ShutdownRenderer();
 

@@ -79,7 +79,8 @@ void USwuiSubsystem::DisablePlugin()
 
 void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceName,
 	bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
-	UMaterialInterface* BaseMaterial, FName TextureParamName)
+	UMaterialInterface* BaseMaterial, FName TextureParamName,
+	const FSwuiInstanceSettings& InstanceSettings)
 {
 	if (bDisabledAtRuntime) return;
 
@@ -124,7 +125,7 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	View->bIsTransparent = true;
 	View->BaseMaterial  = BaseMaterial;
 	View->TextureParameterName = TextureParamName;
-	View->Init();
+	View->Init(InstanceSettings);
 
 	Widget = CreateWidget<UUserWidget>(World, USwuiWidget::StaticClass());
 	if (!Widget) return;
@@ -160,6 +161,8 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	Widget->WidgetTree->RootWidget = RootPanel;
 	Widget->SetIsFocusable(false);
 	Widget->AddToViewport(ZOrder);
+	if (InstanceSettings.bHideDrawComponent)
+		Widget->SetVisibility(ESlateVisibility::Collapsed);
 	// State is now pushed every engine frame via FTickableGameObject::Tick
 }
 
@@ -370,6 +373,9 @@ void USwuiSubsystem::Unobserve(UObject* Source)
 void USwuiSubsystem::Tick(float DeltaTime)
 {
 	if (!View || ObservedProperties.Num() == 0) return;
+
+	// Skip all JS state push and runtime dispatch if paused for isolation.
+	if (View->InstanceSettings.bPauseBrowserUpdates) return;
 
 	// Exponential moving average FPS (alpha=0.1, smoothed over ~10 frames)
 	if (DeltaTime > 0.f)
