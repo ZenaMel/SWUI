@@ -393,7 +393,12 @@ void USwuiSubsystem::Unobserve(UObject* Source)
 
 void USwuiSubsystem::Tick(float DeltaTime)
 {
-	if (!View || ObservedProperties.Num() == 0) return;
+	if (!View) return;
+
+	// Always flush pending CEF paints — tile diff + upload — regardless of JS state.
+	View->TickDeferredUpload();
+
+	if (ObservedProperties.Num() == 0) return;
 
 	// Skip all JS state push and runtime dispatch if paused for isolation.
 	if (View->InstanceSettings.bPauseBrowserUpdates) return;
