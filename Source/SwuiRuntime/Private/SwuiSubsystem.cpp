@@ -371,12 +371,29 @@ void USwuiSubsystem::Tick(float DeltaTime)
 {
 	if (!View || ObservedProperties.Num() == 0) return;
 
+	// Exponential moving average FPS (alpha=0.1, smoothed over ~10 frames)
+	if (DeltaTime > 0.f)
+		AvgFPS = AvgFPS * 0.9f + (1.f / DeltaTime) * 0.1f;
+	LastDeltaTime = DeltaTime;
+
 	// Throttle JS pushes to the CEF windowless frame rate (avoid hammering the browser).
 	const int32 CefFPS  = View->GetWindowlessFrameRate();
 	const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
 	TickAccumulator += DeltaTime;
 	if (TickAccumulator < MinInterval) return;
 	TickAccumulator = 0.f;
+
+	// ---- Runtime info push (fps, dt, dimensions) --------------------------------
+	const FString RuntimeScript = FString::Printf(
+		TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});") \
+		TEXT("s._runtime={fps:%.1f,dt:%.4f,cefFps:%d,width:%d,height:%d};") \
+		TEXT("document.dispatchEvent(new CustomEvent('swui:tick',{detail:s._runtime}));") \
+		TEXT("})()"),
+		AvgFPS, LastDeltaTime,
+		View->GetWindowlessFrameRate(), View->Width, View->Height);
+	View->ExecuteJavaScript(RuntimeScript);
+
+	// ---- State properties push --------------------------------------------------
 FString Script = TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});");
 	bool bAny = false;
 

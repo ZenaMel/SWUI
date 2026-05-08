@@ -107,6 +107,8 @@ public:
 private:
 	bool  bDisabledAtRuntime = false;
 	float TickAccumulator    = 0.f; // throttles JS pushes to CEF frame rate
+	float AvgFPS             = 60.f; // exponential moving average engine FPS
+	float LastDeltaTime      = 0.f;  // last engine frame delta (seconds)
 
 	UPROPERTY()
 	USwuiView* View = nullptr;
