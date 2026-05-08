@@ -1,6 +1,7 @@
 #include "ISwuiRuntime.h"
 #include "Interfaces/IPluginManager.h"
 #include "SwuiManager.h"
+#include "SwuiSettings.h"
 
 class FSwuiRuntime : public ISwuiRuntime
 {
@@ -8,6 +9,12 @@ class FSwuiRuntime : public ISwuiRuntime
 	/** IModuleInterface implementation */
 	virtual void StartupModule() override
 	{
+		if (GetDefault<USwuiSettings>()->bDisablePlugin)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT(" STATUS: Disabled via Project Settings > Plugins > SimpleWebUI > Debug"));
+			return;
+		}
+
 		CefString GameDirCef = *FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() + "SwuiCache");
 		FString ExecutablePath = FPaths::ConvertRelativePathToFull(IPluginManager::Get().FindPlugin("SimpleWebUI")->GetBaseDir() + "/ThirdParty/cef/");
 

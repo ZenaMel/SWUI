@@ -1,4 +1,5 @@
 #include "SwuiSubsystem.h"
+#include "SwuiSettings.h"
 #include "Swui.h"
 #include "SwuiView.h"
 #include "ISwuiRuntime.h"
@@ -49,6 +50,12 @@ static FString Swui_SerializeProperty(FProperty* Prop, void* Container)
 }
 
 // ---- Lifecycle ----
+
+bool USwuiSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
+	return Settings && !Settings->bDisablePlugin;
+}
 
 void USwuiSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
