@@ -11,6 +11,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Engine/Engine.h"
+#include "HAL/IConsoleManager.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "UObject/PropertyIterator.h"
@@ -47,6 +48,25 @@ static FString Swui_SerializeProperty(FProperty* Prop, void* Container)
 	if (const FNameProperty* P = CastField<FNameProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
 	if (const FTextProperty* P = CastField<FTextProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
 	return FString();
+}
+
+static bool SwuiCVarBool(int32 Override, bool DefaultValue)
+{
+	return Override < 0 ? DefaultValue : Override != 0;
+}
+
+static int32 SwuiCVarInt(int32 Override, int32 DefaultValue)
+{
+	return Override < 0 ? DefaultValue : Override;
+}
+
+static int32 SwuiGetIntCVar(const TCHAR* Name, int32 DefaultValue = -1)
+{
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(Name))
+	{
+		return CVar->GetInt();
+	}
+	return DefaultValue;
 }
 
 // ---- Lifecycle ----
@@ -402,6 +422,12 @@ void USwuiSubsystem::Tick(float DeltaTime)
 
 	View->NotifySubsystemTick();
 
+	const bool bUseHudLockstepMode =
+		View->InstanceSettings.bIsHUD &&
+		SwuiCVarBool(
+			SwuiGetIntCVar(TEXT("swui.hud.Lockstep"), -1),
+			View->InstanceSettings.bUseUEFrameLockedBrowser);
+
 	// If CEF produced fresh paint since the previous UE frame, upload it
 	// immediately before requesting another browser frame. This keeps the
 	// newest available HUD pixels as close as possible to the current UE render.
@@ -425,8 +451,7 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	SwuiManager::DoSwuiMessageLoop();
 
 	const bool bUseCombinedHudFramePath =
-		View->InstanceSettings.bIsHUD &&
-		View->InstanceSettings.bUseUEFrameLockedBrowser &&
+		bUseHudLockstepMode &&
 		View->IsExternalBeginFrameActive();
 
 	bool bSentExternalBeginFrame = bLastFlushSentExternalBeginFrame;
@@ -446,19 +471,36 @@ void USwuiSubsystem::Tick(float DeltaTime)
 		View->TickDeferredUpload();
 	}
 
-	// Diagnostic pump after upload while testing lock-step behavior.
-	// If one/two pumps are enough later, this can be removed.
-	SwuiManager::DoSwuiMessageLoop();
+	if (bUseHudLockstepMode)
+	{
+		// Final HUD-only pump for responsiveness. This keeps browser/compositor
+		// work moving aggressively for lower perceived HUD latency.
+		SwuiManager::DoSwuiMessageLoop();
+
+	}
 }
+
 
 bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 {
 	if (!View) return false;
 
-	const bool bHudLockStep = View->InstanceSettings.bIsHUD && View->InstanceSettings.bUseUEFrameLockedBrowser;
-	const bool bFlushBeforeFrame = !bHudLockStep || View->InstanceSettings.bFlushHudStateBeforeBrowserFrame;
+	const bool bHudLockStep =
+		View->InstanceSettings.bIsHUD &&
+		SwuiCVarBool(
+			SwuiGetIntCVar(TEXT("swui.hud.Lockstep"), -1),
+			View->InstanceSettings.bUseUEFrameLockedBrowser);
+	const bool bFlushBeforeFrame =
+		!bHudLockStep ||
+		SwuiCVarBool(
+			SwuiGetIntCVar(TEXT("swui.hud.FlushBeforeFrame"), -1),
+			View->InstanceSettings.bFlushHudStateBeforeBrowserFrame);
 	if (!bFlushBeforeFrame) return false;
 	const bool bUseCombinedHudFramePath = bHudLockStep && View->IsExternalBeginFrameActive();
+	const int32 BrowserFpsSetting = SwuiCVarInt(
+		SwuiGetIntCVar(TEXT("swui.hud.MaxBrowserFPS"), -1),
+		View->InstanceSettings.MaxBrowserFramesPerSecond);
+	const int32 CefFPS = BrowserFpsSetting > 0 ? BrowserFpsSetting : View->GetWindowlessFrameRate();
 
 	// Exponential moving average FPS (alpha=0.1, smoothed over ~10 frames)
 	if (DeltaTime > 0.f)
@@ -467,7 +509,6 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 
 	if (!bHudLockStep)
 	{
-		const int32 CefFPS = View->GetWindowlessFrameRate();
 		const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
 		TickAccumulator += DeltaTime;
 		if (TickAccumulator < MinInterval) return false;
@@ -483,7 +524,7 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 		TEXT("document.dispatchEvent(new CustomEvent('swui:tick',{detail:s._runtime}));")
 		TEXT("})()"),
 		AvgFPS, LastDeltaTime,
-		View->GetWindowlessFrameRate(), View->Width, View->Height);
+		CefFPS, View->Width, View->Height);
 	BatchedScript += RuntimeScript;
 	bFlushed = true;
 

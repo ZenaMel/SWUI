@@ -5,8 +5,146 @@
 #include "Misc/Crc.h"
 
 // ---------------------------------------------------------------------------
-// Console variables — paint tuning & debug isolation
+// Console variables — runtime tuning & debug isolation
 // ---------------------------------------------------------------------------
+
+static bool SwuiCVarBool(int32 Override, bool DefaultValue)
+{
+	return Override < 0 ? DefaultValue : Override != 0;
+}
+
+static int32 SwuiCVarInt(int32 Override, int32 DefaultValue)
+{
+	return Override < 0 ? DefaultValue : Override;
+}
+
+static float SwuiCVarFloat(float Override, float DefaultValue)
+{
+	return Override < 0.f ? DefaultValue : Override;
+}
+
+// HUD / frame driving
+static TAutoConsoleVariable<int32> CVarSwuiHudLockstep(
+	TEXT("swui.hud.Lockstep"),
+	-1,
+	TEXT("Override HUD lockstep mode. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiHudExternalBeginFrames(
+	TEXT("swui.hud.ExternalBeginFrames"),
+	-1,
+	TEXT("Override external begin frames. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiHudSendExternalBeginFrameFromTick(
+	TEXT("swui.hud.SendExternalBeginFrameFromTick"),
+	-1,
+	TEXT("Override sending external begin frames from SWUI tick. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiHudFlushBeforeFrame(
+	TEXT("swui.hud.FlushBeforeFrame"),
+	-1,
+	TEXT("Override HUD flush-before-frame behavior. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiHudMaxBrowserFPS(
+	TEXT("swui.hud.MaxBrowserFPS"),
+	-1,
+	TEXT("Override HUD browser FPS cap. -1 = use instance setting."),
+	ECVF_Default);
+
+// Paint / upload
+static TAutoConsoleVariable<int32> CVarSwuiPaintHybridDirtyUpload(
+	TEXT("swui.paint.HybridDirtyUpload"),
+	-1,
+	TEXT("Override hybrid dirty upload. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintTileDiffLargeRects(
+	TEXT("swui.paint.TileDiffLargeRects"),
+	-1,
+	TEXT("Override tile diff for large rects. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintUploadBudget(
+	TEXT("swui.paint.UploadBudget"),
+	-1,
+	TEXT("Override upload budget enable. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintMaxNormalUploadBytes(
+	TEXT("swui.paint.MaxNormalUploadBytes"),
+	-1,
+	TEXT("Override normal upload budget in bytes per frame. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintTileWidth(
+	TEXT("swui.paint.TileWidth"),
+	-1,
+	TEXT("Override tile width. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintTileHeight(
+	TEXT("swui.paint.TileHeight"),
+	-1,
+	TEXT("Override tile height. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintMinDirtyRectWidth(
+	TEXT("swui.paint.MinDirtyRectWidth"),
+	-1,
+	TEXT("Override min dirty rect width. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintMinDirtyRectHeight(
+	TEXT("swui.paint.MinDirtyRectHeight"),
+	-1,
+	TEXT("Override min dirty rect height. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintCenterCritical(
+	TEXT("swui.paint.CenterCritical"),
+	-1,
+	TEXT("Override center-critical rect processing. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintCenterCriticalWidth(
+	TEXT("swui.paint.CenterCriticalWidth"),
+	-1,
+	TEXT("Override center-critical rect width. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintCenterCriticalHeight(
+	TEXT("swui.paint.CenterCriticalHeight"),
+	-1,
+	TEXT("Override center-critical rect height. -1 = use instance setting."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintRotatingCursor(
+	TEXT("swui.paint.RotatingCursor"),
+	-1,
+	TEXT("Override rotating deferred cursor. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiPaintFullBaseline(
+	TEXT("swui.paint.FullBaseline"),
+	-1,
+	TEXT("Override force full baseline upload on first paint. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+// Debug
+static TAutoConsoleVariable<int32> CVarSwuiDebugLogPaintStats(
+	TEXT("swui.debug.LogPaintStats"),
+	-1,
+	TEXT("Override paint stats logging. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarSwuiDebugShowDirtyRects(
+	TEXT("swui.debug.ShowDirtyRects"),
+	-1,
+	TEXT("Override dirty rect debug overlay. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
 
 // 1 = skip the actual texture upload (measure memcpy isolation).
 static TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload(
@@ -198,10 +336,16 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 
 	CefWindowInfo Info;
 	Info.SetAsWindowless(0);
+	const int32 HudLockstepOverride = CVarSwuiHudLockstep.GetValueOnGameThread();
+	const int32 HudExternalBeginFrameOverride = CVarSwuiHudExternalBeginFrames.GetValueOnGameThread();
+	const int32 HudMaxBrowserFpsOverride = CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread();
+	const bool bHudLockstepEnabled = SwuiCVarBool(HudLockstepOverride, InstanceSettings.bUseUEFrameLockedBrowser);
+	const bool bExternalBeginFramesEnabled = SwuiCVarBool(HudExternalBeginFrameOverride, InstanceSettings.bUseExternalBeginFrames);
+	const int32 InitHudMaxBrowserFps = SwuiCVarInt(HudMaxBrowserFpsOverride, InstanceSettings.MaxBrowserFramesPerSecond);
 	const bool bWantsExternalBeginFrames =
 		InstanceSettings.bIsHUD &&
-		InstanceSettings.bUseUEFrameLockedBrowser &&
-		InstanceSettings.bUseExternalBeginFrames;
+		bHudLockstepEnabled &&
+		bExternalBeginFramesEnabled;
 	Info.external_begin_frame_enabled = bWantsExternalBeginFrames ? 1 : 0;
 
 	CefBrowserSettings BrowserSettings;
@@ -231,9 +375,9 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 	//         else                                        → 300
 	int32 TargetFPS = 300;
 	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
-	if (InstanceSettings.bIsHUD && InstanceSettings.bUseUEFrameLockedBrowser)
+	if (InstanceSettings.bIsHUD && bHudLockstepEnabled)
 	{
-		TargetFPS = InstanceSettings.MaxBrowserFramesPerSecond > 0 ? InstanceSettings.MaxBrowserFramesPerSecond : 60;
+		TargetFPS = InitHudMaxBrowserFps > 0 ? InitHudMaxBrowserFps : 60;
 	}
 	else if (InstanceSettings.OverrideFrameRate > 0)
 	{
@@ -257,6 +401,12 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 
 	Browser->GetHost()->SetWindowlessFrameRate(TargetFPS);
 	WindowlessFrameRate = TargetFPS;
+	AppliedHudLockstepCVar = HudLockstepOverride;
+	AppliedHudExternalBeginFramesCVar = HudExternalBeginFrameOverride;
+	AppliedHudMaxBrowserFPSCVar = HudMaxBrowserFpsOverride;
+	LastObservedHudLockstepCVar = HudLockstepOverride;
+	LastObservedHudExternalBeginFramesCVar = HudExternalBeginFrameOverride;
+	LastObservedHudMaxBrowserFPSCVar = HudMaxBrowserFpsOverride;
 	const bool bHostIsWindowless = Browser->GetHost()->IsWindowRenderingDisabled();
 	bExternalBeginFrameActive = bWantsExternalBeginFrames && bHostIsWindowless;
 	ExternalBeginFrameAccumulatedTime = 0.0;
@@ -269,7 +419,7 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 			bHostIsWindowless ? TEXT("true") : TEXT("false"),
 			bExternalBeginFrameActive ? TEXT("true") : TEXT("false"));
 	}
-	else if (InstanceSettings.bIsHUD && InstanceSettings.bUseUEFrameLockedBrowser && InstanceSettings.bUseExternalBeginFrames)
+	else if (InstanceSettings.bIsHUD && bHudLockstepEnabled && bExternalBeginFramesEnabled)
 	{
 		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: External begin frame mode unavailable; using capped windowless frame pacing fallback."));
 	}
@@ -357,10 +507,41 @@ bool USwuiView::HasFreshOnPaintDataPending() const
 
 bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame)
 {
+	const int32 CurrentHudLockstepCVar = CVarSwuiHudLockstep.GetValueOnGameThread();
+	const int32 CurrentHudExternalBeginFramesCVar = CVarSwuiHudExternalBeginFrames.GetValueOnGameThread();
+	const int32 CurrentHudMaxBrowserFPSCVar = CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread();
+	if (CurrentHudLockstepCVar != LastObservedHudLockstepCVar)
+	{
+		LastObservedHudLockstepCVar = CurrentHudLockstepCVar;
+		if (CurrentHudLockstepCVar != AppliedHudLockstepCVar)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: swui.hud.Lockstep changed at runtime; browser creation behavior updates on next view recreate."));
+		}
+	}
+	if (CurrentHudExternalBeginFramesCVar != LastObservedHudExternalBeginFramesCVar)
+	{
+		LastObservedHudExternalBeginFramesCVar = CurrentHudExternalBeginFramesCVar;
+		if (CurrentHudExternalBeginFramesCVar != AppliedHudExternalBeginFramesCVar)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: swui.hud.ExternalBeginFrames changed at runtime; browser creation behavior updates on next view recreate."));
+		}
+	}
+	if (CurrentHudMaxBrowserFPSCVar != LastObservedHudMaxBrowserFPSCVar)
+	{
+		LastObservedHudMaxBrowserFPSCVar = CurrentHudMaxBrowserFPSCVar;
+		if (CurrentHudMaxBrowserFPSCVar != AppliedHudMaxBrowserFPSCVar)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: swui.hud.MaxBrowserFPS changed at runtime; windowless host cap updates on next view recreate (live begin-frame pacing uses the new value immediately)."));
+		}
+	}
+
+	const bool bSendExternalBeginFrameFromTick = SwuiCVarBool(
+		CVarSwuiHudSendExternalBeginFrameFromTick.GetValueOnGameThread(),
+		InstanceSettings.bSendExternalBeginFrameFromTick);
 	const bool bHasScript = !CombinedScript.IsEmpty();
 	if (!CefData || !CefData->Browser)
 	{
-		if (bExternalBeginFrameActive && InstanceSettings.bSendExternalBeginFrameFromTick)
+		if (bExternalBeginFrameActive && bSendExternalBeginFrameFromTick)
 		{
 			++Stat_ExternalBeginFrameSkipNoBrowser;
 		}
@@ -375,7 +556,7 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScrip
 		}
 		return false;
 	}
-	if (!InstanceSettings.bSendExternalBeginFrameFromTick)
+	if (!bSendExternalBeginFrameFromTick)
 	{
 		++Stat_ExternalBeginFrameSkipDisabled;
 		if (bHasScript)
@@ -385,8 +566,11 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScrip
 		return false;
 	}
 
+	const int32 BrowserFpsSetting = SwuiCVarInt(
+		CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread(),
+		InstanceSettings.MaxBrowserFramesPerSecond);
 	const int32 TargetHz = FMath::Clamp(
-		InstanceSettings.MaxBrowserFramesPerSecond > 0 ? InstanceSettings.MaxBrowserFramesPerSecond : WindowlessFrameRate,
+		BrowserFpsSetting > 0 ? BrowserFpsSetting : WindowlessFrameRate,
 		1,
 		300);
 	const double MinInterval = 1.0 / (double)TargetHz;
@@ -469,6 +653,12 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 	const int32 FullPitch = InWidth * 4;
 	const int32 BufBytes  = FullPitch * InHeight;
 	const double PaintNow = FPlatformTime::Seconds();
+	const bool bForceFullBaselineUploadOnFirstPaint = SwuiCVarBool(
+		CVarSwuiPaintFullBaseline.GetValueOnAnyThread(),
+		InstanceSettings.bForceFullBaselineUploadOnFirstPaint);
+	const bool bShowDirtyRects = SwuiCVarBool(
+		CVarSwuiDebugShowDirtyRects.GetValueOnAnyThread(),
+		InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects);
 
 	FScopeLock Lock(&PaintMutex);
 	LastPaintArrivalTime = PaintNow;
@@ -503,7 +693,7 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 	if (!bSeenFirstPaint)
 	{
 		bSeenFirstPaint = true;
-		if (InstanceSettings.bForceFullBaselineUploadOnFirstPaint)
+		if (bForceFullBaselineUploadOnFirstPaint)
 			bNeedsFullBaselineUpload = true;
 	}
 
@@ -533,7 +723,7 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		if ((int32)Area > PendingLargestIncoming) PendingLargestIncoming = (int32)Area;
 		PendingDirtyRects.Add(FIntRect((int32)Rg.SrcX, (int32)Rg.SrcY,
 			(int32)Rg.SrcX + (int32)Rg.Width, (int32)Rg.SrcY + (int32)Rg.Height));
-		if (InstanceSettings.bShowDirtyRectOverlay)
+		if (bShowDirtyRects)
 			PendingOverlayRects.Add(Rg);
 	}
 
@@ -633,19 +823,21 @@ void USwuiView::TickDeferredUpload()
 		const int32 SnapH     = LastSnapH = Texture->GetSizeY();
 		const int32 FullPitch = SnapW * 4;
 
-		const bool  bHybridEnabled   = InstanceSettings.bEnableHybridDirtyUpload;
-		const bool  bTileDiffEnabled = InstanceSettings.bEnableTileDiffForLargeRects;
-		const bool  bBudgetEnabled   = InstanceSettings.bEnableUploadBudget;
-		const bool  bCenterEnabled   = InstanceSettings.bAlwaysProcessCenterCriticalRect;
-		const bool  bRotatingCursor  = InstanceSettings.bUseRotatingDeferredTileCursor;
-		const int32 TileW            = FMath::Max(8, InstanceSettings.TileWidth);
-		const int32 TileH            = FMath::Max(8, InstanceSettings.TileHeight);
-		const int32 MinDirtyW        = FMath::Max(1, InstanceSettings.MinDirtyRectWidth);
-		const int32 MinDirtyH        = FMath::Max(1, InstanceSettings.MinDirtyRectHeight);
-		const int32 CenterW          = FMath::Max(1, InstanceSettings.CenterCriticalWidth);
-		const int32 CenterH          = FMath::Max(1, InstanceSettings.CenterCriticalHeight);
-		const int32 NormalBudget     = bBudgetEnabled ? FMath::Max(0, InstanceSettings.MaxNormalUploadBytesPerFrame) : INT_MAX;
-		const float MergeRatio       = InstanceSettings.MaxMergeWasteRatio > 0.f ? InstanceSettings.MaxMergeWasteRatio : (float)SwuiDefaultMaxMergeWasteRatio;
+		const bool  bHybridEnabled   = SwuiCVarBool(CVarSwuiPaintHybridDirtyUpload.GetValueOnGameThread(), InstanceSettings.bEnableHybridDirtyUpload);
+		const bool  bTileDiffEnabled = SwuiCVarBool(CVarSwuiPaintTileDiffLargeRects.GetValueOnGameThread(), InstanceSettings.bEnableTileDiffForLargeRects);
+		const bool  bBudgetEnabled   = SwuiCVarBool(CVarSwuiPaintUploadBudget.GetValueOnGameThread(), InstanceSettings.bEnableUploadBudget);
+		const bool  bCenterEnabled   = SwuiCVarBool(CVarSwuiPaintCenterCritical.GetValueOnGameThread(), InstanceSettings.bAlwaysProcessCenterCriticalRect);
+		const bool  bRotatingCursor  = SwuiCVarBool(CVarSwuiPaintRotatingCursor.GetValueOnGameThread(), InstanceSettings.bUseRotatingDeferredTileCursor);
+		const int32 TileW            = FMath::Max(8, SwuiCVarInt(CVarSwuiPaintTileWidth.GetValueOnGameThread(), InstanceSettings.TileWidth));
+		const int32 TileH            = FMath::Max(8, SwuiCVarInt(CVarSwuiPaintTileHeight.GetValueOnGameThread(), InstanceSettings.TileHeight));
+		const int32 MinDirtyW        = FMath::Max(1, SwuiCVarInt(CVarSwuiPaintMinDirtyRectWidth.GetValueOnGameThread(), InstanceSettings.MinDirtyRectWidth));
+		const int32 MinDirtyH        = FMath::Max(1, SwuiCVarInt(CVarSwuiPaintMinDirtyRectHeight.GetValueOnGameThread(), InstanceSettings.MinDirtyRectHeight));
+		const int32 CenterW          = FMath::Max(1, SwuiCVarInt(CVarSwuiPaintCenterCriticalWidth.GetValueOnGameThread(), InstanceSettings.CenterCriticalWidth));
+		const int32 CenterH          = FMath::Max(1, SwuiCVarInt(CVarSwuiPaintCenterCriticalHeight.GetValueOnGameThread(), InstanceSettings.CenterCriticalHeight));
+		const int32 MaxNormalUploadBytes = FMath::Max(0, SwuiCVarInt(CVarSwuiPaintMaxNormalUploadBytes.GetValueOnGameThread(), InstanceSettings.MaxNormalUploadBytesPerFrame));
+		const int32 NormalBudget     = bBudgetEnabled ? MaxNormalUploadBytes : INT_MAX;
+		const float MergeRatioDefault = InstanceSettings.MaxMergeWasteRatio > 0.f ? InstanceSettings.MaxMergeWasteRatio : (float)SwuiDefaultMaxMergeWasteRatio;
+		const float MergeRatio       = SwuiCVarFloat(-1.f, MergeRatioDefault);
 		const int32 MaxMergeW        = InstanceSettings.MaxMergedRectWidth  > 0 ? InstanceSettings.MaxMergedRectWidth  : SwuiDefaultMaxMergedRectWidth;
 		const int32 MaxMergeH        = InstanceSettings.MaxMergedRectHeight > 0 ? InstanceSettings.MaxMergedRectHeight : SwuiDefaultMaxMergedRectHeight;
 		const int32 MaxMergeArea     = InstanceSettings.MaxMergedRectArea   > 0 ? InstanceSettings.MaxMergedRectArea   : SwuiDefaultMaxMergedRectArea;
@@ -1004,7 +1196,7 @@ void USwuiView::TickDeferredUpload()
 	// -----------------------------------------------------------------------
 	// One-second aggregate stats log (runs every frame, fires once per second)
 	// -----------------------------------------------------------------------
-	if (InstanceSettings.bLogSwuiPaintStats && (Now - Stat_LastLogTime >= 1.0))
+	if (SwuiCVarBool(CVarSwuiDebugLogPaintStats.GetValueOnGameThread(), InstanceSettings.bLogSwuiPaintStats) && (Now - Stat_LastLogTime >= 1.0))
 	{
 		const float McAvgMs = Stat_UeUploads > 0 ? float(Stat_MemcpyUs) / Stat_UeUploads / 1000.f : 0.f;
 		const float McMaxMs = float(Stat_MemcpyMaxUs) / 1000.f;
@@ -1064,7 +1256,7 @@ void USwuiView::TickDeferredUpload()
 	// NOTE: The overlay is rendered inside the same CEF surface so it generates
 	// its own dirty rects. Disable overlay for final perf measurements.
 	// -----------------------------------------------------------------------
-	if ((InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects)
+	if (SwuiCVarBool(CVarSwuiDebugShowDirtyRects.GetValueOnGameThread(), InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects)
 		&& (Now - Stat_OverlayLastPushTime >= 0.1)
 		&& (LocalOverlayRects.Num() > 0 || OptimizedOverlayRects.Num() > 0))
 	{

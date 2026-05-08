@@ -80,6 +80,12 @@ private:
 
 	int32 WindowlessFrameRate = 300;
 	bool bExternalBeginFrameActive = false;
+	int32 AppliedHudLockstepCVar = -1;
+	int32 AppliedHudExternalBeginFramesCVar = -1;
+	int32 AppliedHudMaxBrowserFPSCVar = -1;
+	int32 LastObservedHudLockstepCVar = MIN_int32;
+	int32 LastObservedHudExternalBeginFramesCVar = MIN_int32;
+	int32 LastObservedHudMaxBrowserFPSCVar = MIN_int32;
 	double LastExternalBeginFrameSentTime = 0.0;
 	double ExternalBeginFrameAccumulatedTime = 0.0;
 	double PendingBeginFrameSentTime = -1.0;
