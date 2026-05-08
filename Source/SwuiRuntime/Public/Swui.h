@@ -5,6 +5,69 @@
 #include "SwuiBindingSource.h"
 #include "Swui.generated.h"
 
+USTRUCT(BlueprintType)
+struct FSwuiDirtyUploadSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bEnableTileDiffForLargeRects = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bEnableUploadBudget = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="8", ClampMax="1024"))
+	int32 TileWidth = 128;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="8", ClampMax="1024"))
+	int32 TileHeight = 64;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="1024"))
+	int32 MinDirtyRectWidth = 32;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="1024"))
+	int32 MinDirtyRectHeight = 32;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="1024"))
+	int32 CenterCriticalWidth = 64;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="1024"))
+	int32 CenterCriticalHeight = 64;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bAlwaysProcessCenterCriticalRect = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="0", ClampMax="16777216"))
+	int32 MaxNormalUploadBytesPerFrame = 2 * 1024 * 1024;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1.0", ClampMax="10.0"))
+	float MaxMergeWasteRatio = 1.15f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="4096"))
+	int32 MaxMergedRectWidth = 512;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="4096"))
+	int32 MaxMergedRectHeight = 256;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload", meta=(ClampMin="1", ClampMax="8388608"))
+	int32 MaxMergedRectArea = 256 * 1024;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bForceFullBaselineUploadOnFirstPaint = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bUseRotatingDeferredTileCursor = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bLogSwuiPaintStats = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Dirty Upload")
+	bool bShowSwuiDirtyRects = false;
+};
+
 /**
  * Minimal concrete UUserWidget subclass used to host the CEF render surface.
  * UUserWidget::StaticClass() is abstract-flagged in some UE builds; this
@@ -146,6 +209,10 @@ public:
 	 *  NOTE: the overlay itself adds its own paint cost. Use logs for final measurements. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
 	bool bShowDirtyRectOverlay = false;
+
+	/** Focused SWUI dirty upload tuning (hybrid rect+tile path with center-critical lane). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance")
+	FSwuiDirtyUploadSettings DirtyUploadSettings;
 
 	// Stop syncing all observed properties/events for a source object.
 	// Call from PlayerController's OnUnPossess, passing the old pawn.

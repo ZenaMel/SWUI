@@ -54,8 +54,10 @@ private:
 // ---------------------------------------------------------------------------
 // Rect optimization helpers — file-scope, called only from CEF renderer thread.
 // ---------------------------------------------------------------------------
-static constexpr int32  SwuiMinDirtyRectSize   = 32;   // expand tiny rects to at least this px size
-static constexpr double SwuiMaxMergeWasteRatio = 1.15; // merge two rects only if union ≤ sum * this
+static constexpr double SwuiDefaultMaxMergeWasteRatio = 1.15;
+static constexpr int32  SwuiDefaultMaxMergedRectWidth  = 512;
+static constexpr int32  SwuiDefaultMaxMergedRectHeight = 256;
+static constexpr int32  SwuiDefaultMaxMergedRectArea   = 256 * 1024;
 
 static FIntRect SwuiClampRect(const FIntRect& R, int32 TexW, int32 TexH)
 {
@@ -64,31 +66,40 @@ static FIntRect SwuiClampRect(const FIntRect& R, int32 TexW, int32 TexH)
 		FMath::Clamp(R.Max.X, 0, TexW), FMath::Clamp(R.Max.Y, 0, TexH));
 }
 
-static FIntRect SwuiExpandToMinSize(const FIntRect& R, int32 TexW, int32 TexH)
+static FIntRect SwuiExpandToMinSizeCustom(const FIntRect& R, int32 TexW, int32 TexH, int32 MinW, int32 MinH)
 {
-	const int32 ExtraW = FMath::Max(0, SwuiMinDirtyRectSize - R.Width());
-	const int32 ExtraH = FMath::Max(0, SwuiMinDirtyRectSize - R.Height());
+	const int32 ExtraW = FMath::Max(0, MinW - R.Width());
+	const int32 ExtraH = FMath::Max(0, MinH - R.Height());
 	const FIntRect Expanded(
 		R.Min.X - ExtraW / 2,             R.Min.Y - ExtraH / 2,
 		R.Max.X + (ExtraW - ExtraW / 2),  R.Max.Y + (ExtraH - ExtraH / 2));
 	return SwuiClampRect(Expanded, TexW, TexH);
 }
 
-static bool SwuiShouldMerge(const FIntRect& A, const FIntRect& B)
+static bool SwuiShouldMergeCapped(
+	const FIntRect& A,
+	const FIntRect& B,
+	float MaxWasteRatio,
+	int32 MaxW,
+	int32 MaxH,
+	int32 MaxArea)
 {
-	const int64 SumArea = (int64)A.Width() * A.Height() + (int64)B.Width() * B.Height();
-	if (SumArea <= 0) return false;
 	const FIntRect U(
 		FIntPoint(FMath::Min(A.Min.X, B.Min.X), FMath::Min(A.Min.Y, B.Min.Y)),
 		FIntPoint(FMath::Max(A.Max.X, B.Max.X), FMath::Max(A.Max.Y, B.Max.Y)));
-	return (double)((int64)U.Width() * U.Height()) <= (double)SumArea * SwuiMaxMergeWasteRatio;
+
+	if (U.Width() > MaxW || U.Height() > MaxH) return false;
+	const int64 UnionArea = (int64)U.Width() * U.Height();
+	if (UnionArea > MaxArea) return false;
+
+	const int64 SumArea = (int64)A.Width() * A.Height() + (int64)B.Width() * B.Height();
+	if (SumArea <= 0) return false;
+	return (double)UnionArea <= (double)SumArea * (double)MaxWasteRatio;
 }
 
 // -----------------------------------------------------------------------
 // Tile diff helpers
 // -----------------------------------------------------------------------
-static constexpr int32 SwuiTileW             = 128;
-static constexpr int32 SwuiTileH             = 64;
 static constexpr int64 SwuiLargeDirtyRectArea = int64(512) * 512; // 262 144 px
 
 // CRC32 over one tile — row-stride is FullPitch (full texture width * 4).
@@ -101,6 +112,32 @@ static uint32 SwuiHashTile(const uint8* Buf, const FIntRect& R, int32 FullPitch)
 	for (int32 y = 0; y < R.Height(); ++y, Row += FullPitch)
 		Hash = FCrc::MemCrc32(Row, RowBytes, Hash);
 	return Hash;
+}
+
+static void SwuiMarkTilesForRectCustom(
+	const FIntRect& Rect,
+	int32 TileW,
+	int32 TileH,
+	int32 TilesX,
+	int32 TilesY,
+	TBitArray<>& Mask)
+{
+	const int32 MinTX = FMath::Clamp(Rect.Min.X / TileW, 0, FMath::Max(TilesX - 1, 0));
+	const int32 MaxTX = FMath::Clamp((Rect.Max.X - 1) / TileW, 0, FMath::Max(TilesX - 1, 0));
+	const int32 MinTY = FMath::Clamp(Rect.Min.Y / TileH, 0, FMath::Max(TilesY - 1, 0));
+	const int32 MaxTY = FMath::Clamp((Rect.Max.Y - 1) / TileH, 0, FMath::Max(TilesY - 1, 0));
+	for (int32 Ty = MinTY; Ty <= MaxTY; ++Ty)
+		for (int32 Tx = MinTX; Tx <= MaxTX; ++Tx)
+			Mask[Ty * TilesX + Tx] = true;
+}
+
+static FIntRect SwuiTileRectFromIndexCustom(int32 TileIndex, int32 TilesX, int32 TileW, int32 TileH, int32 TexW, int32 TexH)
+{
+	const int32 Tx = TileIndex % TilesX;
+	const int32 Ty = TileIndex / TilesX;
+	return FIntRect(
+		FIntPoint(Tx * TileW, Ty * TileH),
+		FIntPoint(FMath::Min((Tx + 1) * TileW, TexW), FMath::Min((Ty + 1) * TileH, TexH)));
 }
 
 USwuiView::USwuiView()
@@ -191,6 +228,11 @@ void USwuiView::LoadURL(const FString& URI)
 		return;
 	}
 
+	{
+		FScopeLock Lock(&PaintMutex);
+		bNeedsFullBaselineUpload = true;
+	}
+
 	// http/https/localhost/file → pass through directly
 	if (URI.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase)
 		|| URI.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase)
@@ -249,7 +291,17 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 
 	// Resize backing buffer when texture dimensions change.
 	if (BackingBuffer.Num() != BufBytes)
+	{
 		BackingBuffer.SetNumUninitialized(BufBytes);
+		bNeedsFullBaselineUpload = true;
+	}
+
+	if (!bSeenFirstPaint)
+	{
+		bSeenFirstPaint = true;
+		if (InstanceSettings.bForceFullBaselineUploadOnFirstPaint)
+			bNeedsFullBaselineUpload = true;
+	}
 
 	for (int32 i = 0; i < RegionCount; ++i)
 	{
@@ -295,17 +347,39 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 void USwuiView::TickDeferredUpload()
 {
 	const double Now = FPlatformTime::Seconds();
+	++Stat_UeFrames;
 
-	// ---- Phase 1: take snapshot from CEF thread state (under lock) ---
+	auto RecordTimingSampleMs = [](double SampleMs, double& SumMs, double& MaxMs, int32& SampleCount)
+	{
+		SumMs += SampleMs;
+		if (SampleMs > MaxMs) MaxMs = SampleMs;
+		++SampleCount;
+	};
+
+	// ---- Phase 1: move pending metadata out under lock ----
 	TArray<FIntRect>               LocalRects;
 	TArray<FUpdateTextureRegion2D> LocalOverlayRects;
-	TArray<uint8>                  FrameBuffer;
+	TArray<FUpdateTextureRegion2D> OptimizedOverlayRects;
 	int32 LocalCefPaints = 0, LocalInRects = 0, LocalLargestIn = 0;
 	int64 LocalInPx = 0;
 
+	auto HasActiveDirtyTiles = [this]() -> bool
+	{
+		for (int32 i = 0; i < ActiveDirtyTileMask.Num(); ++i)
+		{
+			if (ActiveDirtyTileMask[i])
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
 	if (bHasPendingUpload && Texture && Texture->GetResource())
 	{
+		const double LockWaitStart = FPlatformTime::Seconds();
 		FScopeLock Lock(&PaintMutex);
+		Stat_LockWaitMs += (FPlatformTime::Seconds() - LockWaitStart) * 1000.0;
 		if (bHasPendingUpload)
 		{
 			bHasPendingUpload      = false;
@@ -315,169 +389,342 @@ void USwuiView::TickDeferredUpload()
 			LocalInRects           = PendingIncomingRects;     PendingIncomingRects    = 0;
 			LocalInPx              = PendingIncomingPx;        PendingIncomingPx       = 0;
 			LocalLargestIn         = PendingLargestIncoming;   PendingLargestIncoming  = 0;
-			FrameBuffer            = BackingBuffer;             // full copy, ~14 MB @ 2560×1440
 		}
 	}
 
-	// Accumulate per-second stats (these are game-thread-only, no mutex needed).
+	// Stats accumulation (game thread only)
 	Stat_CefPaints     += LocalCefPaints;
 	Stat_IncomingRects += LocalInRects;
 	Stat_IncomingPx    += LocalInPx;
 	if (LocalLargestIn > Stat_LargestIncoming) Stat_LargestIncoming = LocalLargestIn;
 
-	// ---- Phase 2: optimization pipeline (game thread, no lock held) ----
-	if (LocalRects.Num() > 0 && Texture && Texture->GetResource()
-		&& !InstanceSettings.bSkipDirtyRectStrategy)
+	if (Texture && Texture->GetResource() && (LocalRects.Num() > 0 || bNeedsFullBaselineUpload || HasActiveDirtyTiles()))
 	{
+		const double DeferredStart = FPlatformTime::Seconds();
 		const int32 SnapW     = LastSnapW = Texture->GetSizeX();
 		const int32 SnapH     = LastSnapH = Texture->GetSizeY();
 		const int32 FullPitch = SnapW * 4;
 
-		// ---- Tile grid: init or resize when dimensions change ----
-		const int32 NTX = FMath::DivideAndRoundUp(SnapW, SwuiTileW);
-		const int32 NTY = FMath::DivideAndRoundUp(SnapH, SwuiTileH);
+		const bool  bHybridEnabled   = InstanceSettings.bEnableHybridDirtyUpload;
+		const bool  bTileDiffEnabled = InstanceSettings.bEnableTileDiffForLargeRects;
+		const bool  bBudgetEnabled   = InstanceSettings.bEnableUploadBudget;
+		const bool  bCenterEnabled   = InstanceSettings.bAlwaysProcessCenterCriticalRect;
+		const bool  bRotatingCursor  = InstanceSettings.bUseRotatingDeferredTileCursor;
+		const int32 TileW            = FMath::Max(8, InstanceSettings.TileWidth);
+		const int32 TileH            = FMath::Max(8, InstanceSettings.TileHeight);
+		const int32 MinDirtyW        = FMath::Max(1, InstanceSettings.MinDirtyRectWidth);
+		const int32 MinDirtyH        = FMath::Max(1, InstanceSettings.MinDirtyRectHeight);
+		const int32 CenterW          = FMath::Max(1, InstanceSettings.CenterCriticalWidth);
+		const int32 CenterH          = FMath::Max(1, InstanceSettings.CenterCriticalHeight);
+		const int32 NormalBudget     = bBudgetEnabled ? FMath::Max(0, InstanceSettings.MaxNormalUploadBytesPerFrame) : INT_MAX;
+		const float MergeRatio       = InstanceSettings.MaxMergeWasteRatio > 0.f ? InstanceSettings.MaxMergeWasteRatio : (float)SwuiDefaultMaxMergeWasteRatio;
+		const int32 MaxMergeW        = InstanceSettings.MaxMergedRectWidth  > 0 ? InstanceSettings.MaxMergedRectWidth  : SwuiDefaultMaxMergedRectWidth;
+		const int32 MaxMergeH        = InstanceSettings.MaxMergedRectHeight > 0 ? InstanceSettings.MaxMergedRectHeight : SwuiDefaultMaxMergedRectHeight;
+		const int32 MaxMergeArea     = InstanceSettings.MaxMergedRectArea   > 0 ? InstanceSettings.MaxMergedRectArea   : SwuiDefaultMaxMergedRectArea;
+
+		const int32 NTX = FMath::DivideAndRoundUp(SnapW, TileW);
+		const int32 NTY = FMath::DivideAndRoundUp(SnapH, TileH);
 		if (TilesX != NTX || TilesY != NTY)
 		{
 			TilesX = NTX; TilesY = NTY;
-			LastTileHashes.Init(~0u, TilesX * TilesY); // ~0u → all tiles dirty on first pass
+			ActiveDirtyTileMask.Init(false, TilesX * TilesY);
+			UploadedTileMask.Init(false, TilesX * TilesY);
+			LastTileHashes.Init(~0u, TilesX * TilesY);
+			DirtyTileScanCursor = 0;
+			bNeedsFullBaselineUpload = true;
 		}
 
-		// ---- Build candidate rects: small → expand, large → tile diff ----
-		TArray<FIntRect, TInlineAllocator<64>> Candidates;
-		for (const FIntRect& Raw : LocalRects)
+		// Baseline upload: ensure whole texture is valid once before incremental mode.
+		if (bNeedsFullBaselineUpload && !InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
 		{
-			const FIntRect R = SwuiClampRect(Raw, SnapW, SnapH);
-			if (R.Width() <= 0 || R.Height() <= 0) continue;
-
-			const int64 Area   = (int64)R.Width() * R.Height();
-			const bool bLarge  = Area >= SwuiLargeDirtyRectArea
-				|| R.Width() >= SnapW || R.Height() >= SnapH;
-
-			if (bLarge)
+			bool bDidBaselineThisTick = false;
+			const double LockWaitStart = FPlatformTime::Seconds();
+			FScopeLock Lock(&PaintMutex);
+			Stat_LockWaitMs += (FPlatformTime::Seconds() - LockWaitStart) * 1000.0;
+			if (BackingBuffer.Num() == FullPitch * SnapH)
 			{
-				// Tile diff: only add tiles whose pixel content changed since last upload.
-				const int32 MinTX = R.Min.X / SwuiTileW;
-				const int32 MaxTX = (R.Max.X - 1) / SwuiTileW;
-				const int32 MinTY = R.Min.Y / SwuiTileH;
-				const int32 MaxTY = (R.Max.Y - 1) / SwuiTileH;
+				FSwuiPaintUploadData* UploadData = new FSwuiPaintUploadData;
+				UploadData->Texture2DResource = (FTextureResource*)Texture->GetResource();
+				UploadData->PackedPixels = BackingBuffer;
+				UploadData->Rects.SetNum(1);
+				FSwuiPackedRectDesc& D = UploadData->Rects[0];
+				D.Region = FUpdateTextureRegion2D(0, 0, 0, 0, SnapW, SnapH);
+				D.SrcPitch = (uint32)FullPitch;
+				D.SrcOffsetBytes = 0;
 
-				for (int32 Ty = MinTY; Ty <= MaxTY; ++Ty)
+				const double HashStart = FPlatformTime::Seconds();
+				for (int32 i = 0; i < LastTileHashes.Num(); ++i)
 				{
-					for (int32 Tx = MinTX; Tx <= MaxTX; ++Tx)
-					{
-						// Tile rect clamped to (texture ∩ dirty rect).
-						const FIntRect TileRect(
-							FMath::Max(Tx * SwuiTileW,       R.Min.X),
-							FMath::Max(Ty * SwuiTileH,       R.Min.Y),
-							FMath::Min((Tx + 1) * SwuiTileW, FMath::Min(R.Max.X, SnapW)),
-							FMath::Min((Ty + 1) * SwuiTileH, FMath::Min(R.Max.Y, SnapH)));
-						if (TileRect.Width() <= 0 || TileRect.Height() <= 0) continue;
+					const FIntRect TileRect = SwuiTileRectFromIndexCustom(i, TilesX, TileW, TileH, SnapW, SnapH);
+					LastTileHashes[i] = SwuiHashTile(BackingBuffer.GetData(), TileRect, FullPitch);
+					UploadedTileMask[i] = true;
+					ActiveDirtyTileMask[i] = false;
+				}
+				RecordTimingSampleMs(
+					(FPlatformTime::Seconds() - HashStart) * 1000.0,
+					Stat_HashMsSum,
+					Stat_HashMsMax,
+					Stat_HashSamples);
+				bNeedsFullBaselineUpload = false;
+				ActiveDirtyTileMask.Init(false, ActiveDirtyTileMask.Num());
+				DirtyTileScanCursor = 0;
+				bDidBaselineThisTick = true;
 
-						const int32  TIdx    = Ty * TilesX + Tx;
-						const uint32 NewHash = SwuiHashTile(FrameBuffer.GetData(), TileRect, FullPitch);
-						if (NewHash == LastTileHashes[TIdx])
+				const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
+					|| InstanceSettings.bSkipTextureUpload || InstanceSettings.bNoTextureUpload;
+				if (bSkipUpload) { delete UploadData; }
+				else
+				{
+					ENQUEUE_RENDER_COMMAND(UpdateSwuiViewBaseline)(
+						[UploadData](FRHICommandList& CommandList)
 						{
-							++Stat_SkippedTiles;
-							continue;
-						}
-						LastTileHashes[TIdx] = NewHash;
-						++Stat_ChangedTiles;
-						Candidates.Add(TileRect);
-					}
+							FRHITexture* Tex = UploadData->Texture2DResource->TextureRHI.GetReference();
+							const FSwuiPackedRectDesc& Rd = UploadData->Rects[0];
+							RHIUpdateTexture2D(Tex, 0, Rd.Region, Rd.SrcPitch, UploadData->PackedPixels.GetData());
+							delete UploadData;
+						});
+					++Stat_UeUploads;
+					++Stat_UploadedRects;
+					Stat_UploadedPixels += (int64)SnapW * SnapH;
+					Stat_LargestUploaded = FMath::Max(Stat_LargestUploaded, SnapW * SnapH);
 				}
 			}
-			else
+
+			if (bDidBaselineThisTick)
 			{
-				Candidates.Add(SwuiExpandToMinSize(R, SnapW, SnapH));
+				// Baseline is complete and authoritative. Enter optimised mode next tick.
+				RecordTimingSampleMs(
+					(FPlatformTime::Seconds() - DeferredStart) * 1000.0,
+					Stat_DeferredUploadMsSum,
+					Stat_DeferredUploadMsMax,
+					Stat_DeferredUploadSamples);
+				return;
 			}
 		}
 
-		for (const FIntRect& C : Candidates)
+		if ((LocalRects.Num() > 0 || HasActiveDirtyTiles()) && !InstanceSettings.bSkipDirtyRectStrategy && !InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
 		{
-			++Stat_CandidateRects;
-			Stat_CandidatePx += (int64)C.Width() * C.Height();
-		}
+			TArray<FIntRect, TInlineAllocator<128>> SmallRects;
+			TBitArray<> FreshLargeTileMask(false, ActiveDirtyTileMask.Num());
 
-		if (Candidates.Num() > 0)
-		{
-			// ---- Greedy merge (proximity, cheap union only) ----
-			TArray<FIntRect, TInlineAllocator<32>> OptRects;
-			for (const FIntRect& C : Candidates)
+			for (const FIntRect& Raw : LocalRects)
 			{
-				bool bMerged = false;
-				for (FIntRect& E : OptRects)
+				const FIntRect R = SwuiClampRect(Raw, SnapW, SnapH);
+				if (R.Width() <= 0 || R.Height() <= 0) continue;
+
+				const int64 RectArea = (int64)R.Width() * R.Height();
+				const int64 ScreenArea = (int64)SnapW * SnapH;
+				const bool bFullscreenLike =
+					R.Width() >= SnapW ||
+					R.Height() >= SnapH ||
+					RectArea >= ScreenArea / 4;
+				const bool bLarge = RectArea >= SwuiLargeDirtyRectArea || R.Width() >= SnapW || R.Height() >= SnapH;
+				if (bHybridEnabled && bTileDiffEnabled && bLarge)
 				{
-					if (SwuiShouldMerge(E, C))
+					SwuiMarkTilesForRectCustom(R, TileW, TileH, TilesX, TilesY, ActiveDirtyTileMask);
+					if (!bFullscreenLike)
 					{
-						E = FIntRect(
-							FIntPoint(FMath::Min(E.Min.X, C.Min.X), FMath::Min(E.Min.Y, C.Min.Y)),
-							FIntPoint(FMath::Max(E.Max.X, C.Max.X), FMath::Max(E.Max.Y, C.Max.Y)));
-						bMerged = true;
+						SwuiMarkTilesForRectCustom(R, TileW, TileH, TilesX, TilesY, FreshLargeTileMask);
+					}
+				}
+				else
+				{
+					SmallRects.Add(SwuiExpandToMinSizeCustom(R, SnapW, SnapH, MinDirtyW, MinDirtyH));
+				}
+			}
+
+			TArray<int32, TInlineAllocator<256>> SelectedTileIndices;
+			TBitArray<> SelectedMask(false, ActiveDirtyTileMask.Num());
+			int32 UsedNormalBytes = 0;
+			FIntRect CenterRect;
+			bool bHasCenterRect = false;
+
+			if (bCenterEnabled)
+			{
+				CenterRect = SwuiClampRect(
+					FIntRect(
+						FIntPoint((SnapW - CenterW) / 2, (SnapH - CenterH) / 2),
+						FIntPoint((SnapW + CenterW) / 2, (SnapH + CenterH) / 2)),
+					SnapW,
+					SnapH);
+
+				bHasCenterRect = CenterRect.Width() > 0 && CenterRect.Height() > 0;
+			}
+
+			// Fresh local large tiles from the latest batch are next priority.
+			for (int32 i = 0; i < ActiveDirtyTileMask.Num(); ++i)
+			{
+				if (!ActiveDirtyTileMask[i] || !FreshLargeTileMask[i] || SelectedMask[i]) continue;
+				const FIntRect TileRect = SwuiTileRectFromIndexCustom(i, TilesX, TileW, TileH, SnapW, SnapH);
+				if (bHasCenterRect && TileRect.Intersect(CenterRect))
+				{
+					continue;
+				}
+				const int32 TileBytes = TileRect.Width() * TileRect.Height() * 4;
+				if (UsedNormalBytes + TileBytes > NormalBudget) continue;
+				UsedNormalBytes += TileBytes;
+				SelectedMask[i] = true;
+				SelectedTileIndices.Add(i);
+			}
+
+			// Old backlog tiles are fallback recovery, scanned last with rotating cursor.
+			if (ActiveDirtyTileMask.Num() > 0)
+			{
+				const int32 Start = bRotatingCursor ? (DirtyTileScanCursor % ActiveDirtyTileMask.Num()) : 0;
+				int32 NextCursor = Start;
+				for (int32 Step = 0; Step < ActiveDirtyTileMask.Num(); ++Step)
+				{
+					const int32 Idx = (Start + Step) % ActiveDirtyTileMask.Num();
+					if (!ActiveDirtyTileMask[Idx] || SelectedMask[Idx] || FreshLargeTileMask[Idx]) continue;
+					const FIntRect TileRect = SwuiTileRectFromIndexCustom(Idx, TilesX, TileW, TileH, SnapW, SnapH);
+					if (bHasCenterRect && TileRect.Intersect(CenterRect))
+					{
+						continue;
+					}
+					const int32 TileBytes = TileRect.Width() * TileRect.Height() * 4;
+					if (UsedNormalBytes + TileBytes > NormalBudget)
+					{
 						break;
 					}
+					UsedNormalBytes += TileBytes;
+					SelectedMask[Idx] = true;
+					SelectedTileIndices.Add(Idx);
+					NextCursor = (Idx + 1) % ActiveDirtyTileMask.Num();
 				}
-				if (!bMerged) OptRects.Add(C);
+				if (bRotatingCursor)
+				{
+					DirtyTileScanCursor = NextCursor;
+				}
 			}
 
-			// ---- Gate 3: skip memcpy / upload ----
-			if (!InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
+			TArray<FIntRect, TInlineAllocator<256>> Candidates;
+
+			if (bHasCenterRect)
 			{
-				// ---- Tight-pack memcpy from FrameBuffer into upload payload ----
+				Candidates.Add(CenterRect);
+			}
+
+			Candidates.Append(SmallRects);
+
+			const double LockWaitStart2 = FPlatformTime::Seconds();
+			FScopeLock Lock(&PaintMutex);
+			Stat_LockWaitMs += (FPlatformTime::Seconds() - LockWaitStart2) * 1000.0;
+
+			const double HashStart = FPlatformTime::Seconds();
+			TArray<int32, TInlineAllocator<256>> UploadedTilesThisFrame;
+			for (int32 TileIdx : SelectedTileIndices)
+			{
+				const FIntRect TileRect = SwuiTileRectFromIndexCustom(TileIdx, TilesX, TileW, TileH, SnapW, SnapH);
+				const uint32 NewHash = SwuiHashTile(BackingBuffer.GetData(), TileRect, FullPitch);
+				if (NewHash == LastTileHashes[TileIdx] && UploadedTileMask[TileIdx])
+				{
+					++Stat_SkippedTiles;
+					ActiveDirtyTileMask[TileIdx] = false;
+					continue;
+				}
+				LastTileHashes[TileIdx] = NewHash;
+				++Stat_ChangedTiles;
+				ActiveDirtyTileMask[TileIdx] = false;
+				UploadedTilesThisFrame.Add(TileIdx);
+				Candidates.Add(TileRect);
+			}
+			RecordTimingSampleMs(
+				(FPlatformTime::Seconds() - HashStart) * 1000.0,
+				Stat_HashMsSum,
+				Stat_HashMsMax,
+				Stat_HashSamples);
+
+			for (const FIntRect& C : Candidates)
+			{
+				++Stat_CandidateRects;
+				Stat_CandidatePx += (int64)C.Width() * C.Height();
+			}
+
+			if (Candidates.Num() > 0)
+			{
+				TArray<FIntRect, TInlineAllocator<64>> OptRects;
+				for (const FIntRect& C : Candidates)
+				{
+					bool bMerged = false;
+					for (FIntRect& E : OptRects)
+					{
+						if (SwuiShouldMergeCapped(E, C, MergeRatio, MaxMergeW, MaxMergeH, MaxMergeArea))
+						{
+							E = FIntRect(
+								FIntPoint(FMath::Min(E.Min.X, C.Min.X), FMath::Min(E.Min.Y, C.Min.Y)),
+								FIntPoint(FMath::Max(E.Max.X, C.Max.X), FMath::Max(E.Max.Y, C.Max.Y)));
+							bMerged = true;
+							break;
+						}
+					}
+					if (!bMerged) OptRects.Add(C);
+				}
+
 				int32 TotalBytes = 0;
 				for (const FIntRect& R2 : OptRects)
+				{
 					TotalBytes += R2.Width() * 4 * R2.Height();
+					OptimizedOverlayRects.Add(FUpdateTextureRegion2D(
+						(uint32)R2.Min.X,
+						(uint32)R2.Min.Y,
+						0,
+						0,
+						(uint32)R2.Width(),
+						(uint32)R2.Height()));
+				}
 
 				FSwuiPaintUploadData* UploadData = new FSwuiPaintUploadData;
 				UploadData->Texture2DResource = (FTextureResource*)Texture->GetResource();
 				UploadData->PackedPixels.SetNumUninitialized(TotalBytes);
 				UploadData->Rects.Reserve(OptRects.Num());
 
-				const double McpyT0    = FPlatformTime::Seconds();
-				uint8*       WriteCursor = UploadData->PackedPixels.GetData();
-				int64        UploadedPx  = 0;
+				const double PackStart = FPlatformTime::Seconds();
+				const double McpyT0 = PackStart;
+				uint8* WriteCursor = UploadData->PackedPixels.GetData();
+				int64 UploadedPx = 0;
 
 				for (const FIntRect& R2 : OptRects)
 				{
-					const int32 RectW      = R2.Width();
-					const int32 RectH      = R2.Height();
+					const int32 RectW = R2.Width();
+					const int32 RectH = R2.Height();
 					const int32 TightPitch = RectW * 4;
 
-					FSwuiPackedRectDesc& Desc  = UploadData->Rects.AddDefaulted_GetRef();
-					Desc.Region.DestX          = (uint32)R2.Min.X;
-					Desc.Region.DestY          = (uint32)R2.Min.Y;
-					Desc.Region.SrcX           = 0;
-					Desc.Region.SrcY           = 0;
-					Desc.Region.Width          = (uint32)RectW;
-					Desc.Region.Height         = (uint32)RectH;
-					Desc.SrcPitch              = (uint32)TightPitch;
-					Desc.SrcOffsetBytes        = (int32)(WriteCursor - UploadData->PackedPixels.GetData());
+					FSwuiPackedRectDesc& Desc = UploadData->Rects.AddDefaulted_GetRef();
+					Desc.Region.DestX = (uint32)R2.Min.X;
+					Desc.Region.DestY = (uint32)R2.Min.Y;
+					Desc.Region.SrcX = 0;
+					Desc.Region.SrcY = 0;
+					Desc.Region.Width = (uint32)RectW;
+					Desc.Region.Height = (uint32)RectH;
+					Desc.SrcPitch = (uint32)TightPitch;
+					Desc.SrcOffsetBytes = (int32)(WriteCursor - UploadData->PackedPixels.GetData());
 
-					const uint8* Src = FrameBuffer.GetData() + (int64)R2.Min.Y * FullPitch + (int64)R2.Min.X * 4;
-					uint8*       Dst = WriteCursor;
+					const uint8* Src = BackingBuffer.GetData() + (int64)R2.Min.Y * FullPitch + (int64)R2.Min.X * 4;
+					uint8* Dst = WriteCursor;
 					for (int32 Row = 0; Row < RectH; ++Row, Src += FullPitch, Dst += TightPitch)
 						FPlatformMemory::Memcpy(Dst, Src, TightPitch);
 
-					WriteCursor  += (int64)TightPitch * RectH;
-					UploadedPx   += (int64)RectW * RectH;
+					WriteCursor += (int64)TightPitch * RectH;
+					UploadedPx += (int64)RectW * RectH;
 					++Stat_UploadedRects;
 					const int32 RectArea = RectW * RectH;
 					if (RectArea > Stat_LargestUploaded) Stat_LargestUploaded = RectArea;
 				}
 
+				for (int32 TileIdx : UploadedTilesThisFrame) UploadedTileMask[TileIdx] = true;
+				for (const FIntRect& R2 : OptRects)
+					SwuiMarkTilesForRectCustom(R2, TileW, TileH, TilesX, TilesY, UploadedTileMask);
+
+				RecordTimingSampleMs(
+					(FPlatformTime::Seconds() - PackStart) * 1000.0,
+					Stat_PackMemcpyMsSum,
+					Stat_PackMemcpyMsMax,
+					Stat_PackMemcpySamples);
 				const int64 McpyUs = int64((FPlatformTime::Seconds() - McpyT0) * 1e6);
-				Stat_MemcpyUs       += McpyUs;
-				Stat_MemcpyMaxUs     = FMath::Max(Stat_MemcpyMaxUs, McpyUs);
+				Stat_MemcpyUs += McpyUs;
+				Stat_MemcpyMaxUs = FMath::Max(Stat_MemcpyMaxUs, McpyUs);
 				Stat_UploadedPixels += UploadedPx;
 				++Stat_UeUploads;
-
-				if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0)
-				{
-					UE_LOG(LogSwuiRuntime, Verbose,
-						TEXT("[SwuiPaint][tick] cefPaints=%d inRects=%d inPx=%lld cand=%d opt=%d uploadPx=%lld skippedTiles=%d changedTiles=%d memcpy=%.3fms"),
-						LocalCefPaints, LocalRects.Num(), LocalInPx,
-						Candidates.Num(), OptRects.Num(), UploadedPx,
-						Stat_SkippedTiles, Stat_ChangedTiles, McpyUs / 1000.f);
-				}
 
 				const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
 					|| InstanceSettings.bSkipTextureUpload || InstanceSettings.bNoTextureUpload;
@@ -487,7 +734,7 @@ void USwuiView::TickDeferredUpload()
 					ENQUEUE_RENDER_COMMAND(UpdateSwuiViewOptimized)(
 						[UploadData](FRHICommandList& CommandList)
 						{
-							FRHITexture* Tex  = UploadData->Texture2DResource->TextureRHI.GetReference();
+							FRHITexture* Tex = UploadData->Texture2DResource->TextureRHI.GetReference();
 							const uint8* Base = UploadData->PackedPixels.GetData();
 							for (const FSwuiPackedRectDesc& Rd : UploadData->Rects)
 								RHIUpdateTexture2D(Tex, 0, Rd.Region, Rd.SrcPitch, Base + Rd.SrcOffsetBytes);
@@ -496,30 +743,54 @@ void USwuiView::TickDeferredUpload()
 				}
 			}
 		}
+
+		int32 DeferredTiles = 0;
+		for (int32 i = 0; i < ActiveDirtyTileMask.Num(); ++i)
+			if (ActiveDirtyTileMask[i]) ++DeferredTiles;
+		Stat_DeferredTiles += DeferredTiles;
+		RecordTimingSampleMs(
+			(FPlatformTime::Seconds() - DeferredStart) * 1000.0,
+			Stat_DeferredUploadMsSum,
+			Stat_DeferredUploadMsMax,
+			Stat_DeferredUploadSamples);
 	}
 
 	// -----------------------------------------------------------------------
 	// One-second aggregate stats log (runs every frame, fires once per second)
 	// -----------------------------------------------------------------------
-	if (Now - Stat_LastLogTime >= 1.0)
+	if (InstanceSettings.bLogSwuiPaintStats && (Now - Stat_LastLogTime >= 1.0))
 	{
 		const float McAvgMs = Stat_UeUploads > 0 ? float(Stat_MemcpyUs) / Stat_UeUploads / 1000.f : 0.f;
 		const float McMaxMs = float(Stat_MemcpyMaxUs) / 1000.f;
+		const float DeferredUploadAvgMs = Stat_DeferredUploadSamples > 0 ? float(Stat_DeferredUploadMsSum / Stat_DeferredUploadSamples) : 0.f;
+		const float HashAvgMs = Stat_HashSamples > 0 ? float(Stat_HashMsSum / Stat_HashSamples) : 0.f;
+		const float PackMemcpyAvgMs = Stat_PackMemcpySamples > 0 ? float(Stat_PackMemcpyMsSum / Stat_PackMemcpySamples) : 0.f;
 		UE_LOG(LogSwuiRuntime, Log,
-			TEXT("[SwuiPaint] cefPaints/s=%d  ueUploads/s=%d  inRects/s=%d  inPx/s=%lld  largestIncoming=%d")
+			TEXT("[SwuiPaint] ueFrames/s=%d  cefPaints/s=%d  ueUploads/s=%d  inRects/s=%d  inPx/s=%lld  largestIncoming=%d")
 			TEXT("  candRects/s=%d  uploadedRects/s=%d  uploadedPx/s=%lld  largestUploaded=%d")
-			TEXT("  skippedTiles/s=%d  changedTiles/s=%d  memcpyAvgMs=%.3f  memcpyMaxMs=%.3f  tex=%dx%d"),
-			Stat_CefPaints, Stat_UeUploads,
+			TEXT("  skippedTiles/s=%d  changedTiles/s=%d  deferredTiles/s=%d")
+			TEXT("  deferredUploadAvgMs=%.3f  deferredUploadMaxMs=%.3f")
+			TEXT("  hashAvgMs=%.3f  hashMaxMs=%.3f")
+			TEXT("  packMemcpyAvgMs=%.3f  packMemcpyMaxMs=%.3f  lockWaitMs=%.3f")
+			TEXT("  memcpyAvgMs=%.3f  memcpyMaxMs=%.3f  browserFpsCap=%d  tex=%dx%d"),
+			Stat_UeFrames, Stat_CefPaints, Stat_UeUploads,
 			Stat_IncomingRects, Stat_IncomingPx, Stat_LargestIncoming,
 			Stat_CandidateRects, Stat_UploadedRects, Stat_UploadedPixels, Stat_LargestUploaded,
-			Stat_SkippedTiles, Stat_ChangedTiles,
-			McAvgMs, McMaxMs, LastSnapW, LastSnapH);
+			Stat_SkippedTiles, Stat_ChangedTiles, Stat_DeferredTiles,
+			DeferredUploadAvgMs, Stat_DeferredUploadMsMax,
+			HashAvgMs, Stat_HashMsMax,
+			PackMemcpyAvgMs, Stat_PackMemcpyMsMax, Stat_LockWaitMs,
+			McAvgMs, McMaxMs, WindowlessFrameRate, LastSnapW, LastSnapH);
 
-		Stat_CefPaints       = 0; Stat_UeUploads      = 0;
+		Stat_UeFrames       = 0; Stat_CefPaints      = 0; Stat_UeUploads      = 0;
 		Stat_IncomingRects   = 0; Stat_IncomingPx     = 0; Stat_LargestIncoming = 0;
 		Stat_CandidateRects  = 0; Stat_CandidatePx    = 0;
 		Stat_UploadedRects   = 0; Stat_UploadedPixels = 0; Stat_LargestUploaded = 0;
-		Stat_SkippedTiles    = 0; Stat_ChangedTiles   = 0;
+		Stat_SkippedTiles    = 0; Stat_ChangedTiles   = 0; Stat_DeferredTiles = 0;
+		Stat_DeferredUploadMsSum = 0.0; Stat_DeferredUploadMsMax = 0.0; Stat_DeferredUploadSamples = 0;
+		Stat_HashMsSum = 0.0; Stat_HashMsMax = 0.0; Stat_HashSamples = 0;
+		Stat_PackMemcpyMsSum = 0.0; Stat_PackMemcpyMsMax = 0.0; Stat_PackMemcpySamples = 0;
+		Stat_LockWaitMs = 0.0;
 		Stat_MemcpyUs        = 0; Stat_MemcpyMaxUs    = 0;
 		Stat_LastLogTime     = Now;
 	}
@@ -529,10 +800,12 @@ void USwuiView::TickDeferredUpload()
 	// NOTE: The overlay is rendered inside the same CEF surface so it generates
 	// its own dirty rects. Disable overlay for final perf measurements.
 	// -----------------------------------------------------------------------
-	if (InstanceSettings.bShowDirtyRectOverlay && (Now - Stat_OverlayLastPushTime >= 0.1)
-		&& LocalOverlayRects.Num() > 0)
+	if ((InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects)
+		&& (Now - Stat_OverlayLastPushTime >= 0.1)
+		&& (LocalOverlayRects.Num() > 0 || OptimizedOverlayRects.Num() > 0))
 	{
 		Stat_OverlayLastPushTime = Now;
+		const bool bShowOptimizedRects = true;
 
 		const float Elapsed      = FMath::Clamp(float(Now - Stat_LastLogTime) + 1.f, 0.001f, 2.f);
 		const int64 DirtyPxRate  = (int64)(Stat_IncomingPx    / Elapsed);
@@ -540,29 +813,63 @@ void USwuiView::TickDeferredUpload()
 		const float MemcpyAvgMs  = Stat_UeUploads > 0 ? float(Stat_MemcpyUs) / Stat_UeUploads / 1000.f : 0.f;
 		const float MemcpyMaxMs  = float(Stat_MemcpyMaxUs) / 1000.f;
 		const float BandRatio    = Stat_IncomingPx > 0 ? float(Stat_UploadedPixels) / float(Stat_IncomingPx) : 0.f;
+		const int32 CefPaintsRate = FMath::RoundToInt(float(Stat_CefPaints) / Elapsed);
+		const int32 UeUploadsRate = FMath::RoundToInt(float(Stat_UeUploads) / Elapsed);
+		const int32 UeFramesRate  = FMath::RoundToInt(float(Stat_UeFrames) / Elapsed);
 
-		FString RectsJson;
-		RectsJson.Reserve(LocalOverlayRects.Num() * 52 + 2);
-		RectsJson.AppendChar('[');
+		FString IncomingRectsJson;
+		IncomingRectsJson.Reserve(LocalOverlayRects.Num() * 52 + 2);
+		IncomingRectsJson.AppendChar('[');
 		for (int32 i = 0; i < LocalOverlayRects.Num(); ++i)
 		{
 			const FUpdateTextureRegion2D& R = LocalOverlayRects[i];
-			if (i > 0) RectsJson.AppendChar(',');
-			RectsJson += FString::Printf(
+			if (i > 0) IncomingRectsJson.AppendChar(',');
+			IncomingRectsJson += FString::Printf(
 				TEXT("{\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u,\"area\":%lld}"),
 				R.DestX, R.DestY, R.Width, R.Height, (int64)R.Width * R.Height);
 		}
-		RectsJson.AppendChar(']');
+		IncomingRectsJson.AppendChar(']');
+
+		FString OptimizedRectsJson;
+		OptimizedRectsJson.Reserve(OptimizedOverlayRects.Num() * 52 + 2);
+		OptimizedRectsJson.AppendChar('[');
+		for (int32 i = 0; i < OptimizedOverlayRects.Num(); ++i)
+		{
+			const FUpdateTextureRegion2D& R = OptimizedOverlayRects[i];
+			if (i > 0) OptimizedRectsJson.AppendChar(',');
+			OptimizedRectsJson += FString::Printf(
+				TEXT("{\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u,\"area\":%lld}"),
+				R.DestX, R.DestY, R.Width, R.Height, (int64)R.Width * R.Height);
+		}
+		OptimizedRectsJson.AppendChar(']');
+
+		const FString& ActiveRectsJson = (bShowOptimizedRects && OptimizedOverlayRects.Num() > 0)
+			? OptimizedRectsJson
+			: IncomingRectsJson;
 
 		const FString Script = FString::Printf(
+			TEXT("if(!window.__SWUI_RAF_MONITOR__){")
+			TEXT("window.__SWUI_JS_RAF_S=0;")
+			TEXT("window.__SWUI_RAF_MONITOR__={count:0,last:performance.now(),hz:0};")
+			TEXT("window.__SWUI_RAF_MONITOR_TICK__=function(t){")
+			TEXT("var s=window.__SWUI_RAF_MONITOR__;s.count++;")
+			TEXT("if(t-s.last>=1000){s.hz=Math.round((s.count*1000)/(t-s.last));s.count=0;s.last=t;window.__SWUI_JS_RAF_S=s.hz;}")
+			TEXT("requestAnimationFrame(window.__SWUI_RAF_MONITOR_TICK__);};")
+			TEXT("requestAnimationFrame(window.__SWUI_RAF_MONITOR_TICK__);}")
 			TEXT("if(window.__SWUI_DEBUG_RECTS__)window.__SWUI_DEBUG_RECTS__(")
 			TEXT("{\"texW\":%d,\"texH\":%d,\"rects\":%s,")
+			TEXT("\"incomingRects\":%s,\"optimizedRects\":%s,")
 			TEXT("\"stats\":{\"largestRect\":%d,\"largestUploaded\":%d,")
+			TEXT("\"jsRafS\":(window.__SWUI_JS_RAF_S||0),")
+			TEXT("\"browserFpsCap\":%d,")
+			TEXT("\"cefPaintsS\":%d,\"ueUploadsS\":%d,\"ueFramesS\":%d,")
 			TEXT("\"dirtyPxS\":%lld,\"uploadedPxS\":%lld,")
 			TEXT("\"skippedTiles\":%d,\"changedTiles\":%d,")
 			TEXT("\"memcpyAvgMs\":%.3f,\"memcpyMaxMs\":%.3f,\"bandRatio\":%.2f}});"),
-			LastSnapW, LastSnapH, *RectsJson,
+			LastSnapW, LastSnapH, *ActiveRectsJson, *IncomingRectsJson, *OptimizedRectsJson,
 			Stat_LargestIncoming, Stat_LargestUploaded,
+			WindowlessFrameRate,
+			CefPaintsRate, UeUploadsRate, UeFramesRate,
 			DirtyPxRate, UploadPxRate,
 			Stat_SkippedTiles, Stat_ChangedTiles,
 			MemcpyAvgMs, MemcpyMaxMs, BandRatio);
@@ -584,6 +891,11 @@ UTexture2D* USwuiView::GetOrCreateTexture(int32 InWidth, int32 InHeight)
 		Texture = UTexture2D::CreateTransient(InWidth, InHeight, PF_B8G8R8A8);
 		Texture->AddToRoot();
 		Texture->UpdateResource();
+		bNeedsFullBaselineUpload = true;
+		DirtyTileScanCursor = 0;
+		LastTileHashes.Reset();
+		UploadedTileMask.Reset();
+		ActiveDirtyTileMask.Reset();
 
 		ResetMatInstance();
 	}
@@ -598,6 +910,11 @@ void USwuiView::ResetTexture()
 	Texture = UTexture2D::CreateTransient(Width, Height, PF_B8G8R8A8);
 	Texture->AddToRoot();
 	Texture->UpdateResource();
+	bNeedsFullBaselineUpload = true;
+	DirtyTileScanCursor = 0;
+	LastTileHashes.Reset();
+	UploadedTileMask.Reset();
+	ActiveDirtyTileMask.Reset();
 
 	ResetMatInstance();
 }

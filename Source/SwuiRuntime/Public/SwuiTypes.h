@@ -21,6 +21,27 @@ struct FSwuiInstanceSettings
 	bool  bPauseBrowserUpdates      = false; // skip JS state push and runtime tick dispatch
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
 	bool  bShowDirtyRectOverlay     = false; // push dirty rects + stats to __SWUI_DEBUG_RECTS__ at ~10 Hz
+
+	// Focused hybrid upload-path tuning
+	bool  bEnableHybridDirtyUpload             = true;
+	bool  bEnableTileDiffForLargeRects         = true;
+	bool  bEnableUploadBudget                  = true;
+	int32 TileWidth                            = 128;
+	int32 TileHeight                           = 64;
+	int32 MinDirtyRectWidth                    = 32;
+	int32 MinDirtyRectHeight                   = 32;
+	int32 CenterCriticalWidth                  = 64;
+	int32 CenterCriticalHeight                 = 64;
+	bool  bAlwaysProcessCenterCriticalRect     = true;
+	int32 MaxNormalUploadBytesPerFrame         = 2 * 1024 * 1024;
+	float MaxMergeWasteRatio                   = 1.15f;
+	int32 MaxMergedRectWidth                   = 512;
+	int32 MaxMergedRectHeight                  = 256;
+	int32 MaxMergedRectArea                    = 256 * 1024;
+	bool  bForceFullBaselineUploadOnFirstPaint = true;
+	bool  bUseRotatingDeferredTileCursor       = true;
+	bool  bLogSwuiPaintStats                   = true;
+	bool  bShowSwuiDirtyRects                  = false;
 };
 
 // Descriptor for one dirty rect within a shared packed pixel buffer.

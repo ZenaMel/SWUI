@@ -116,6 +116,25 @@ void USwui::InitializeSwuiView()
 	InstSettings.bPauseBrowserUpdates      = bPauseBrowserUpdates;
 	InstSettings.bHideDrawComponent        = bHideDrawComponent;
 	InstSettings.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
+	InstSettings.bEnableHybridDirtyUpload             = DirtyUploadSettings.bEnabled;
+	InstSettings.bEnableTileDiffForLargeRects         = DirtyUploadSettings.bEnableTileDiffForLargeRects;
+	InstSettings.bEnableUploadBudget                  = DirtyUploadSettings.bEnableUploadBudget;
+	InstSettings.TileWidth                            = DirtyUploadSettings.TileWidth;
+	InstSettings.TileHeight                           = DirtyUploadSettings.TileHeight;
+	InstSettings.MinDirtyRectWidth                    = DirtyUploadSettings.MinDirtyRectWidth;
+	InstSettings.MinDirtyRectHeight                   = DirtyUploadSettings.MinDirtyRectHeight;
+	InstSettings.CenterCriticalWidth                  = DirtyUploadSettings.CenterCriticalWidth;
+	InstSettings.CenterCriticalHeight                 = DirtyUploadSettings.CenterCriticalHeight;
+	InstSettings.bAlwaysProcessCenterCriticalRect     = DirtyUploadSettings.bAlwaysProcessCenterCriticalRect;
+	InstSettings.MaxNormalUploadBytesPerFrame         = DirtyUploadSettings.MaxNormalUploadBytesPerFrame;
+	InstSettings.MaxMergeWasteRatio                   = DirtyUploadSettings.MaxMergeWasteRatio;
+	InstSettings.MaxMergedRectWidth                   = DirtyUploadSettings.MaxMergedRectWidth;
+	InstSettings.MaxMergedRectHeight                  = DirtyUploadSettings.MaxMergedRectHeight;
+	InstSettings.MaxMergedRectArea                    = DirtyUploadSettings.MaxMergedRectArea;
+	InstSettings.bForceFullBaselineUploadOnFirstPaint = DirtyUploadSettings.bForceFullBaselineUploadOnFirstPaint;
+	InstSettings.bUseRotatingDeferredTileCursor       = DirtyUploadSettings.bUseRotatingDeferredTileCursor;
+	InstSettings.bLogSwuiPaintStats                   = DirtyUploadSettings.bLogSwuiPaintStats;
+	InstSettings.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
 
 	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
@@ -180,6 +199,25 @@ void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 	Rebuilt.bPauseBrowserUpdates      = bPauseBrowserUpdates;
 	Rebuilt.bHideDrawComponent        = bHideDrawComponent;
 	Rebuilt.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
+	Rebuilt.bEnableHybridDirtyUpload             = DirtyUploadSettings.bEnabled;
+	Rebuilt.bEnableTileDiffForLargeRects         = DirtyUploadSettings.bEnableTileDiffForLargeRects;
+	Rebuilt.bEnableUploadBudget                  = DirtyUploadSettings.bEnableUploadBudget;
+	Rebuilt.TileWidth                            = DirtyUploadSettings.TileWidth;
+	Rebuilt.TileHeight                           = DirtyUploadSettings.TileHeight;
+	Rebuilt.MinDirtyRectWidth                    = DirtyUploadSettings.MinDirtyRectWidth;
+	Rebuilt.MinDirtyRectHeight                   = DirtyUploadSettings.MinDirtyRectHeight;
+	Rebuilt.CenterCriticalWidth                  = DirtyUploadSettings.CenterCriticalWidth;
+	Rebuilt.CenterCriticalHeight                 = DirtyUploadSettings.CenterCriticalHeight;
+	Rebuilt.bAlwaysProcessCenterCriticalRect     = DirtyUploadSettings.bAlwaysProcessCenterCriticalRect;
+	Rebuilt.MaxNormalUploadBytesPerFrame         = DirtyUploadSettings.MaxNormalUploadBytesPerFrame;
+	Rebuilt.MaxMergeWasteRatio                   = DirtyUploadSettings.MaxMergeWasteRatio;
+	Rebuilt.MaxMergedRectWidth                   = DirtyUploadSettings.MaxMergedRectWidth;
+	Rebuilt.MaxMergedRectHeight                  = DirtyUploadSettings.MaxMergedRectHeight;
+	Rebuilt.MaxMergedRectArea                    = DirtyUploadSettings.MaxMergedRectArea;
+	Rebuilt.bForceFullBaselineUploadOnFirstPaint = DirtyUploadSettings.bForceFullBaselineUploadOnFirstPaint;
+	Rebuilt.bUseRotatingDeferredTileCursor       = DirtyUploadSettings.bUseRotatingDeferredTileCursor;
+	Rebuilt.bLogSwuiPaintStats                   = DirtyUploadSettings.bLogSwuiPaintStats;
+	Rebuilt.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
 	Sub->UpdateInstanceSettings(Rebuilt);
 }
 #endif

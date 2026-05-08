@@ -4,6 +4,7 @@
 #include "SwuiTypes.h"
 #include "HAL/CriticalSection.h"
 #include "Misc/ScopeLock.h"
+#include "Containers/BitArray.h"
 #include "SwuiView.generated.h"
 
 struct FSwuiViewCefData;
@@ -92,14 +93,20 @@ private:
 	// -----------------------------------------------------------------------
 	int32          TilesX         = 0;
 	int32          TilesY         = 0;
+	TBitArray<>    ActiveDirtyTileMask; // persistent pending large/fullscreen tile work
+	TBitArray<>    UploadedTileMask;     // tiles already known to have valid texture content
 	TArray<uint32> LastTileHashes; // TilesX*TilesY entries; ~0u = not yet hashed
+	int32          DirtyTileScanCursor = 0;
 	int32          LastSnapW      = 0;
 	int32          LastSnapH      = 0;
+	bool           bSeenFirstPaint = false;
+	bool           bNeedsFullBaselineUpload = true;
 
 	// -----------------------------------------------------------------------
 	// Aggregate stats — game thread only, reset every second in TickDeferredUpload.
 	// -----------------------------------------------------------------------
 	int32  Stat_CefPaints       = 0;   // # CEF OnPaint calls
+	int32  Stat_UeFrames        = 0;   // # TickDeferredUpload calls (UE frames)
 	int32  Stat_UeUploads       = 0;   // # TickDeferredUpload enqueue calls
 	int32  Stat_IncomingRects   = 0;   // total dirty rects from CEF
 	int64  Stat_IncomingPx      = 0;   // total dirty pixels from CEF
@@ -111,6 +118,17 @@ private:
 	int32  Stat_LargestUploaded = 0;
 	int32  Stat_SkippedTiles    = 0;
 	int32  Stat_ChangedTiles    = 0;
+	int32  Stat_DeferredTiles   = 0;
+	double Stat_DeferredUploadMsSum = 0.0;
+	double Stat_DeferredUploadMsMax = 0.0;
+	int32  Stat_DeferredUploadSamples = 0;
+	double Stat_HashMsSum           = 0.0;
+	double Stat_HashMsMax           = 0.0;
+	int32  Stat_HashSamples         = 0;
+	double Stat_PackMemcpyMsSum     = 0.0;
+	double Stat_PackMemcpyMsMax     = 0.0;
+	int32  Stat_PackMemcpySamples   = 0;
+	double Stat_LockWaitMs       = 0.0;
 	int64  Stat_MemcpyUs        = 0;
 	int64  Stat_MemcpyMaxUs     = 0;
 	double Stat_LastLogTime     = 0.0;
