@@ -41,17 +41,6 @@ struct FSwuiPaintUploadData
 	TArray<FSwuiPackedRectDesc> Rects;
 };
 
-// Legacy band-path upload payload.
-struct FUpdateTextureRegionsData
-{
-	FTextureResource*         Texture2DResource;
-	uint32                    NumRegions;
-	FUpdateTextureRegion2D*   Regions;
-	uint32                    SrcPitch;
-	uint32                    SrcBpp;
-	TArray<uint8>             SrcData;
-};
-
 class ISwuiRenderTarget
 {
 public:
