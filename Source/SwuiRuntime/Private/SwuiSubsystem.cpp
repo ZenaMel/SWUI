@@ -401,6 +401,15 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	if (!View) return;
 
 	View->NotifySubsystemTick();
+
+	// If CEF produced fresh paint since the previous UE frame, upload it
+	// immediately before requesting another browser frame. This keeps the
+	// newest available HUD pixels as close as possible to the current UE render.
+	if (View->HasFreshOnPaintDataPending())
+	{
+		View->TickDeferredUpload();
+	}
+
 	bForceBrowserFrameThisTick = false;
 	bLastFlushSentExternalBeginFrame = false;
 
@@ -427,26 +436,15 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	}
 
 	// Pump again after an explicit begin-frame request. This gives CEF a chance
-	// to process Invalidate/BeginFrame and produce OnPaint before we decide
-	// whether there is fresh paint to upload.
+	// to process Invalidate/BeginFrame and produce OnPaint in this UE tick.
 	SwuiManager::DoSwuiMessageLoop();
 
-	if (bSentExternalBeginFrame && !View->HasFreshOnPaintDataPending())
+	// If the browser produced fresh paint from the frame request above, upload it.
+	// If no fresh paint is ready yet, the next tick's early upload path will pick it up.
+	if (View->HasFreshOnPaintDataPending())
 	{
-		// Avoid uploading stale/backlog-only data immediately after requesting a new browser frame.
-		// Wait until fresh OnPaint data is available.
-		//
-		// Diagnostic pump: one final chance for CEF to deliver OnPaint in this tick.
-		SwuiManager::DoSwuiMessageLoop();
-
-		if (!View->HasFreshOnPaintDataPending())
-		{
-			return;
-		}
+		View->TickDeferredUpload();
 	}
-
-	// Keep upload coalescing after browser frame request in HUD lock-step mode.
-	View->TickDeferredUpload();
 
 	// Diagnostic pump after upload while testing lock-step behavior.
 	// If one/two pumps are enough later, this can be removed.

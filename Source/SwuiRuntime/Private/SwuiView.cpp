@@ -349,7 +349,10 @@ void USwuiView::NotifySubsystemTick()
 bool USwuiView::HasFreshOnPaintDataPending() const
 {
 	FScopeLock Lock(const_cast<FCriticalSection*>(&PaintMutex));
-	return bHasPendingUpload && PendingIncomingRects > 0;
+	return
+		bHasPendingUpload &&
+		PendingIncomingRects > 0 &&
+		PendingFreshPaintGeneration > DrainedFreshPaintGeneration;
 }
 
 bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame)
@@ -469,6 +472,12 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 
 	FScopeLock Lock(&PaintMutex);
 	LastPaintArrivalTime = PaintNow;
+
+	// Mark this CEF paint as fresh pending data for the subsystem/upload phase.
+	// This generation is consumed when TickDeferredUpload drains pending rects.
+	++PendingFreshPaintGeneration;
+	PendingFreshPaintArrivalTime = PaintNow;
+
 	if (PendingBeginFrameSentTime > 0.0)
 	{
 		const double PaintAfterBeginMs = (PaintNow - PendingBeginFrameSentTime) * 1000.0;
@@ -557,6 +566,9 @@ void USwuiView::TickDeferredUpload()
 	TArray<FUpdateTextureRegion2D> OptimizedOverlayRects;
 	int32 LocalCefPaints = 0, LocalInRects = 0, LocalLargestIn = 0;
 	int64 LocalInPx = 0;
+	uint64 LocalFreshPaintGeneration = 0;
+	double LocalFreshPaintArrivalTime = 0.0;
+	bool bDrainedFreshPaintThisTick = false;
 
 	auto HasActiveDirtyTiles = [this]() -> bool
 	{
@@ -580,10 +592,30 @@ void USwuiView::TickDeferredUpload()
 			bHasPendingUpload      = false;
 			LocalRects             = MoveTemp(PendingDirtyRects);
 			LocalOverlayRects      = MoveTemp(PendingOverlayRects);
-			LocalCefPaints         = PendingCefPaints;         PendingCefPaints        = 0;
-			LocalInRects           = PendingIncomingRects;     PendingIncomingRects    = 0;
-			LocalInPx              = PendingIncomingPx;        PendingIncomingPx       = 0;
-			LocalLargestIn         = PendingLargestIncoming;   PendingLargestIncoming  = 0;
+
+			LocalCefPaints         = PendingCefPaints;
+			LocalInRects           = PendingIncomingRects;
+			LocalInPx              = PendingIncomingPx;
+			LocalLargestIn         = PendingLargestIncoming;
+
+			LocalFreshPaintGeneration = PendingFreshPaintGeneration;
+			LocalFreshPaintArrivalTime = PendingFreshPaintArrivalTime;
+
+			bDrainedFreshPaintThisTick =
+				LocalInRects > 0 &&
+				LocalFreshPaintGeneration > DrainedFreshPaintGeneration;
+
+			// Consuming means TickDeferredUpload has taken ownership of the pending paint data.
+			// It does not require the RHI upload to have completed yet.
+			if (bDrainedFreshPaintThisTick)
+			{
+				DrainedFreshPaintGeneration = LocalFreshPaintGeneration;
+			}
+
+			PendingCefPaints        = 0;
+			PendingIncomingRects    = 0;
+			PendingIncomingPx       = 0;
+			PendingLargestIncoming  = 0;
 		}
 	}
 
@@ -591,7 +623,7 @@ void USwuiView::TickDeferredUpload()
 	Stat_CefPaints     += LocalCefPaints;
 	Stat_IncomingRects += LocalInRects;
 	Stat_IncomingPx    += LocalInPx;
-	const bool bHasFreshPaintThisTick = LocalInRects > 0;
+	const bool bHasFreshPaintThisTick = bDrainedFreshPaintThisTick;
 	if (LocalLargestIn > Stat_LargestIncoming) Stat_LargestIncoming = LocalLargestIn;
 
 	if (Texture && Texture->GetResource() && (LocalRects.Num() > 0 || bNeedsFullBaselineUpload || HasActiveDirtyTiles()))
@@ -671,10 +703,10 @@ void USwuiView::TickDeferredUpload()
 				if (bSkipUpload) { delete UploadData; }
 				else
 				{
-					if (bHasFreshPaintThisTick && LastPaintArrivalTime > 0.0)
+					if (bHasFreshPaintThisTick && LocalFreshPaintArrivalTime > 0.0)
 					{
 						RecordTimingSampleMs(
-							(FPlatformTime::Seconds() - LastPaintArrivalTime) * 1000.0,
+							(FPlatformTime::Seconds() - LocalFreshPaintArrivalTime) * 1000.0,
 							Stat_UploadAfterPaintMsSum,
 							Stat_UploadAfterPaintMsMax,
 							Stat_UploadAfterPaintSamples);
@@ -935,10 +967,10 @@ void USwuiView::TickDeferredUpload()
 				if (bSkipUpload) { delete UploadData; }
 				else
 				{
-					if (bHasFreshPaintThisTick && LastPaintArrivalTime > 0.0)
+					if (bHasFreshPaintThisTick && LocalFreshPaintArrivalTime > 0.0)
 					{
 						RecordTimingSampleMs(
-							(FPlatformTime::Seconds() - LastPaintArrivalTime) * 1000.0,
+							(FPlatformTime::Seconds() - LocalFreshPaintArrivalTime) * 1000.0,
 							Stat_UploadAfterPaintMsSum,
 							Stat_UploadAfterPaintMsMax,
 							Stat_UploadAfterPaintSamples);

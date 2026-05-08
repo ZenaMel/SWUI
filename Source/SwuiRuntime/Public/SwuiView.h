@@ -102,6 +102,13 @@ private:
 	int32                          PendingLargestIncoming = 0;
 	bool                           bHasPendingUpload      = false;
 
+	// Monotonic fresh-paint tracking.
+	// Used by the subsystem to know whether CEF has produced new paint data
+	// that has not yet been drained by TickDeferredUpload.
+	uint64                         PendingFreshPaintGeneration = 0;
+	uint64                         DrainedFreshPaintGeneration = 0;
+	double                         PendingFreshPaintArrivalTime = 0.0;
+
 	// -----------------------------------------------------------------------
 	// Tile diff state — game thread only, no mutex needed.
 	// -----------------------------------------------------------------------
