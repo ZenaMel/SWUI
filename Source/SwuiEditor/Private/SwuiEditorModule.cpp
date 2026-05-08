@@ -6,6 +6,9 @@
 #include "EngineUtils.h"
 #include "EdGraphUtilities.h"
 #include "SGraphNode.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/Paths.h"
+#include "Misc/ConfigCacheIni.h"
 
 #include "Swui.h"
 #include "SwuiDetails.h"
@@ -43,6 +46,8 @@ public:
 
 		NodeFactory = MakeShareable(new FSwuiNodeFactory);
 		FEdGraphUtilities::RegisterVisualNodeFactory(NodeFactory);
+
+		MaybeLaunchDevServer();
 	}
 
 	virtual void ShutdownModule() override
@@ -65,6 +70,39 @@ public:
 
 private:
 	TSharedPtr<FSwuiNodeFactory> NodeFactory;
+
+	void MaybeLaunchDevServer()
+	{
+		// Opt-out: add  [SimpleWebUI]  AutoLaunchDevServer=False  to DefaultEditor.ini
+		bool bAutoLaunch = true;
+		GConfig->GetBool(TEXT("SimpleWebUI"), TEXT("AutoLaunchDevServer"), bAutoLaunch, GEditorIni);
+		if (!bAutoLaunch) return;
+
+		// Expect Content/UI to contain a package.json with a "dev" script.
+		const FString ContentUI = FPaths::ConvertRelativePathToFull(
+			FPaths::ProjectDir() / TEXT("Content/UI"));
+
+		if (!FPaths::DirectoryExists(ContentUI / TEXT("../.."))) return; // sanity
+
+		// Spawn: start "SWUI Dev" /D "<ContentUI>" cmd.exe /k pnpm dev
+		const FString Cmd = FString::Printf(
+			TEXT("start \"SWUI Dev\" /D \"%s\" cmd.exe /k pnpm dev"),
+			*ContentUI);
+
+		FPlatformProcess::CreateProc(
+			TEXT("cmd.exe"),
+			*FString::Printf(TEXT("/c %s"), *Cmd),
+			/*bLaunchDetached=*/true,
+			/*bLaunchHidden=*/false,
+			/*bLaunchReallyHidden=*/false,
+			/*OutProcessID=*/nullptr,
+			/*PriorityModifier=*/0,
+			/*OptionalWorkingDirectory=*/nullptr,
+			/*PipeWriteChild=*/nullptr
+		);
+
+		UE_LOG(LogTemp, Log, TEXT("SWUI: Launched dev server in %s"), *ContentUI);
+	}
 
 	void RegisterMenus()
 	{

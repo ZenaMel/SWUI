@@ -5,10 +5,13 @@
   "main": "dist/swui.js",
   "module": "dist/swui.esm.js",
   "types": "dist/swui.d.ts",
+  "exports": {
+    ".":              { "import": "./dist/swui.esm.js", "require": "./dist/swui.js", "types": "./dist/swui.d.ts" },
+    "./src/*":        "./src/*"
+  },
   "scripts": {
-    "build":         "node node_modules/vite/bin/vite.js build",
-    "build:example": "node node_modules/vite/bin/vite.js build && node scripts/deploy-example.mjs",
-    "dev":           "tsc --watch --noEmit"
+    "build": "node node_modules/vite/bin/vite.js build",
+    "dev":   "tsc --watch --noEmit"
   },
   "devDependencies": {
     "typescript":      "^5.4.0",

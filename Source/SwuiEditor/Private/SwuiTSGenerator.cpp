@@ -111,7 +111,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 	for (const FPropInfo& P : Props)
 	{
 		HelpersBody += FString::Printf(
-			TEXT("export function on%s(fn: (v: %s) => void) { return (window as any).Swui.on(KEYS.%s, fn); }\n"),
+			TEXT("export function on%s(fn: (v: %s) => void): () => void { return Swui.on(KEYS.%s, fn); }\n"),
 			*P.PropName, *P.TSType, *P.PropName);
 	}
 
@@ -144,7 +144,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"};\n"
 		"\n"
 		"// \u2500\u2500 Typed Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-		"// Requires Swui global (SwuiClientLib/dist/swui.js loaded before this module).\n"
+		"import Swui from '@simplewebui/client';\n"
 		"%s"
 	),
 		*IName,
@@ -162,7 +162,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 	if (!PlatformFile.DirectoryExists(*OutDir))
 		PlatformFile.CreateDirectoryTree(*OutDir);
 
-	if (FFileHelper::SaveStringToFile(Output, *OutFile))
+	if (FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated '%s'"), *OutFile);
 		return true;
