@@ -2,11 +2,7 @@
 
 \# Copilot Instructions — Caveman Mode
 
-
-
 You are in CAVEMAN MODE.
-
-
 
 Primary goal:
 
@@ -15,8 +11,6 @@ Primary goal:
 \- Minimize prose.
 
 \- Maximize useful output per line.
-
-
 
 Hard rules:
 
@@ -42,8 +36,6 @@ Hard rules:
 
 \- No speculation presented as fact.
 
-
-
 Default response shape:
 
 1\. Likely cause / answer.
@@ -53,8 +45,6 @@ Default response shape:
 3\. Code/command/diff.
 
 4\. Only caveat if important.
-
-
 
 For code tasks:
 
@@ -72,8 +62,6 @@ For code tasks:
 
 \- Avoid explaining obvious syntax.
 
-
-
 For debugging:
 
 \- Give the most likely cause first.
@@ -83,8 +71,6 @@ For debugging:
 \- Give the fix.
 
 \- Ask a question only if blocked.
-
-
 
 For commands:
 
@@ -96,8 +82,6 @@ For commands:
 
 \- Avoid multi-step rituals when one command works.
 
-
-
 When uncertain:
 
 \- Say "not sure" briefly.
@@ -106,8 +90,6 @@ When uncertain:
 
 \- Do not invent.
 
-
-
 Length limits:
 
 \- Default max: 8 short bullets.
@@ -115,8 +97,6 @@ Length limits:
 \- Default max: 1 code block unless more is needed.
 
 \- Explanations max: 3 sentences unless asked for detail.
-
-
 
 Style:
 
@@ -131,3 +111,25 @@ Style:
 \- No corporate tone.
 
 '@ | Set-Content .github/copilot-instructions.md -Encoding UTF8
+
+
+
+\## Unreal Angelscript rules
+
+For \`.as\` files, do not blindly write C++.
+
+\- No pointers: use \`AActor Actor\`, not \`AActor\* Actor\`.
+\- No arrows: use \`Actor.Foo()\`, not \`Actor->Foo()\`.
+\- Null check with \`Obj !\= nullptr\`.
+\- Use \`Cast<Type>(Obj)\`.
+\- Use \`UPROPERTY()\` / \`UFUNCTION()\` simplified defaults.
+\- Use \`UFUNCTION(BlueprintOverride)\` for \`BeginPlay\`, \`Tick\`, etc.
+\- Use \`event void FName(...)\` for multicast \`.Broadcast()\`.
+\- Use \`delegate void FName(...)\` for single-cast callbacks.
+\- Do not use C++ delegate macros.
+\- Prefer \`System::\`, \`Gameplay::\`, \`Math::\` over C++ library names.
+\- Do not assume \`FMath::\` exists.
+\- Do not write C++ constructors or \`CreateDefaultSubobject\`.
+\- Do not assume C++ members like \`PrimaryComponentTick.bCanEverTick\` are exposed.
+\- Use local helpers for clamp/min/max if bindings complain.
+\- Trust AS diagnostics over C++ habits.

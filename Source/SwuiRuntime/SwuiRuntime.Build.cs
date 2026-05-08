@@ -35,8 +35,7 @@ public class SwuiRuntime : ModuleRules
 				"UMG",
 				"Json",
 				"RenderCore",
-				"DeveloperSettings",
-				"ApplicationCore"
+				"DeveloperSettings"
 			});
 
 		PrivateIncludePaths.AddRange(

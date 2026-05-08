@@ -201,6 +201,56 @@ for (TFieldIterator<FProperty> It(SourceClass); It; ++It)
 		})
 	];
 }
+
+// Nested collapsible group for delegate/event checkboxes.
+const FName EventGroupId = FName(*FString::Printf(TEXT("SwuiEvents%d"), i));
+IDetailGroup& EventGroup = SourceGroup.AddGroup(EventGroupId, LOCTEXT("EventsGroup", "Events"), false);
+
+for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
+{
+	FMulticastDelegateProperty* Prop = *It;
+	if (!Prop->HasAnyPropertyFlags(CPF_BlueprintVisible | CPF_BlueprintAssignable)) continue;
+
+	const FName DelegateName = Prop->GetFName();
+
+	EventGroup.AddWidgetRow()
+	.NameContent()
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(STextBlock)
+			.Text(FText::FromName(DelegateName))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("EventType", "(event)"))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+		]
+	]
+	.ValueContent()
+	[
+		SNew(SCheckBox)
+		.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, DelegateName]()
+		{
+			if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
+			return Swui->BindingSources[i].Delegates.Contains(DelegateName)
+				? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+		}))
+		.OnCheckStateChanged_Lambda([Swui, i, DelegateName](ECheckBoxState NewState)
+		{
+			if (!Swui->BindingSources.IsValidIndex(i)) return;
+			Swui->Modify();
+			if (NewState == ECheckBoxState::Checked)
+				Swui->BindingSources[i].Delegates.AddUnique(DelegateName);
+			else
+				Swui->BindingSources[i].Delegates.Remove(DelegateName);
+		})
+	];
+}
 }
 
 // ---- Add Source button (native UE look) ----

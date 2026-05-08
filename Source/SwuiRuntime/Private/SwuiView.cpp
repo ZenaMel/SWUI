@@ -122,14 +122,35 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		return;
 	}
 
+	// Compute the row-range union of all dirty rects so we only copy the rows
+	// that actually changed. Avoids a full-frame Memcpy for small updates
+	// (e.g. a spinning compass needle should copy ~200 rows, not 1440).
+	int32 MinRow = InHeight, MaxRow = 0;
+	for (int32 i = 0; i < RegionCount; ++i)
+	{
+		MinRow = FMath::Min(MinRow, (int32)Regions[i].SrcY);
+		MaxRow = FMath::Max(MaxRow, (int32)Regions[i].SrcY + (int32)Regions[i].Height);
+	}
+	MinRow = FMath::Clamp(MinRow, 0, InHeight);
+	MaxRow = FMath::Clamp(MaxRow, 0, InHeight);
+
+	const int32 FullPitch  = InWidth * 4;
+	const int32 RowsToCopy = FMath::Max(1, MaxRow - MinRow);
+
+	// Rebase each region's SrcY to be relative to MinRow
+	for (int32 i = 0; i < RegionCount; ++i)
+		Regions[i].SrcY = FMath::Max(0, (int32)Regions[i].SrcY - MinRow);
+
 	FUpdateTextureRegionsData* RegionData = new FUpdateTextureRegionsData;
 	RegionData->Texture2DResource = (FTextureResource*)Texture->GetResource();
 	RegionData->NumRegions = RegionCount;
 	RegionData->SrcBpp = 4;
-	RegionData->SrcPitch = InWidth * 4;
+	RegionData->SrcPitch = FullPitch;
 	RegionData->Regions = Regions;
-	RegionData->SrcData.SetNumUninitialized(RegionData->SrcPitch * InHeight);
-	FPlatformMemory::Memcpy(RegionData->SrcData.GetData(), Buffer, RegionData->SrcData.Num());
+	RegionData->SrcData.SetNumUninitialized(FullPitch * RowsToCopy);
+	FPlatformMemory::Memcpy(RegionData->SrcData.GetData(),
+		(const uint8*)Buffer + (int64)MinRow * FullPitch,
+		FullPitch * RowsToCopy);
 
 	ENQUEUE_RENDER_COMMAND(UpdateSwuiViewCommand)(
 		[RegionData](FRHICommandList& CommandList)

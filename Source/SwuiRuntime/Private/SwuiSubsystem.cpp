@@ -3,7 +3,7 @@
 #include "Swui.h"
 #include "SwuiView.h"
 #include "ISwuiRuntime.h"
-#include "GenericPlatform/GenericApplication.h"
+#include "GameFramework/GameUserSettings.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Image.h"
@@ -99,15 +99,20 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 				FinalHeight = RenderSize.Y;
 			}
 		}
-		// 2. Viewport not ready yet (BeginPlay before first render) — ask the OS
+		// 2. Viewport not ready yet (BeginPlay before first render) — use the
+		// player-configured game resolution, NOT the physical monitor resolution.
+		// FDisplayMetrics returns the desktop native res which can be 4K+ even
+		// when the game runs at a lower resolution — that causes massive OnPaint copies.
 		if (FinalWidth <= 0 || FinalHeight <= 0 || (FinalWidth == 1280 && FinalHeight == 720))
 		{
-			FDisplayMetrics Metrics;
-			FDisplayMetrics::RebuildDisplayMetrics(Metrics);
-			if (Metrics.PrimaryDisplayWidth > 0 && Metrics.PrimaryDisplayHeight > 0)
+			if (UGameUserSettings* GUS = UGameUserSettings::GetGameUserSettings())
 			{
-				FinalWidth  = Metrics.PrimaryDisplayWidth;
-				FinalHeight = Metrics.PrimaryDisplayHeight;
+				const FIntPoint GameRes = GUS->GetScreenResolution();
+				if (GameRes.X > 0 && GameRes.Y > 0)
+				{
+					FinalWidth  = GameRes.X;
+					FinalHeight = GameRes.Y;
+				}
 			}
 		}
 	}
@@ -294,12 +299,17 @@ void USwuiSubsystem::SetBindingSources(const TArray<FSwuiBindingSource>& Sources
 	// This handles Actors, ActorComponents, and any other UObject subclass uniformly.
 	for (const FSwuiBindingSource& Src : Sources)
 	{
-		if (!Src.SourceClass || Src.Properties.IsEmpty()) continue;
+		if (!Src.SourceClass) continue;
+		if (Src.Properties.IsEmpty() && Src.Delegates.IsEmpty()) continue;
 		for (TObjectIterator<UObject> It; It; ++It)
 		{
 			if (It->GetWorld() != World) continue;
 			if (!It->IsA(Src.SourceClass)) continue;
 			ObserveSource(*It, /*bWarnOnMiss=*/false);
+
+			// Auto-bind any checked delegate events on this instance.
+			for (const FName& DelegateName : Src.Delegates)
+				ObserveDelegate(*It, TEXT(""), DelegateName);
 		}
 	}
 }

@@ -22,4 +22,9 @@ struct SWUIRUNTIME_API FSwuiBindingSource
 	// Emitted into the generated TypeScript state interface as namespaced keys.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TArray<FName> Properties;
+
+	// Multicast delegates checked in the Details panel for this class.
+	// Emitted as document.addEventListener helpers in the generated TypeScript.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	TArray<FName> Delegates;
 };
