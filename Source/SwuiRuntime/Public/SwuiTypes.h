@@ -6,6 +6,13 @@
 // A value of 0 / 0.f means "use the project-wide USwuiSettings default".
 struct FSwuiInstanceSettings
 {
+	bool  bIsHUD                          = false;
+	bool  bUseUEFrameLockedBrowser        = true;
+	bool  bUseExternalBeginFrames         = true;
+	bool  bSendExternalBeginFrameFromTick = true;
+	bool  bFlushHudStateBeforeBrowserFrame = true;
+	int32 MaxBrowserFramesPerSecond       = 60;
+
 	int32 OverrideFrameRate        = 0;    // 0 = use project setting / engine MaxFPS
 	float OverrideBandOvercopyRatio = 0.f; // 0 = use project setting (1.25)
 	int32 OverrideMaxPerRectUploads = 0;   // 0 = use project setting (32)

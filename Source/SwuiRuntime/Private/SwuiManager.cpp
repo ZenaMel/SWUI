@@ -19,6 +19,19 @@ void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	/////////////////
 
 	CommandLine->AppendSwitch("off-screen-rendering-enabled");
+
+	// Required for OSR / external begin-frame scheduling.
+	// Keep this outside CPURenderSettings so HUD/external begin-frame mode can work
+	// while still using GPU/WebGL-capable rendering.
+	CommandLine->AppendSwitch("enable-begin-frame-scheduling");
+
+	// Prevent Chromium from throttling the offscreen/windowless browser as if it
+	// were a hidden/background page. This is important for responsive HUD usage.
+	CommandLine->AppendSwitch("disable-background-timer-throttling");
+	CommandLine->AppendSwitch("disable-renderer-backgrounding");
+	CommandLine->AppendSwitch("disable-backgrounding-occluded-windows");
+	CommandLine->AppendSwitchWithValue("disable-features", "CalculateNativeWinOcclusion");
+
 	// Process-wide scheduler ceiling from Project Settings.
 	// Per-browser SetWindowlessFrameRate() still takes precedence per view.
 	const USwuiSettings* SwuiCfg = GetDefault<USwuiSettings>();
@@ -32,7 +45,6 @@ void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	{
 		CommandLine->AppendSwitch("disable-gpu");
 		CommandLine->AppendSwitch("disable-gpu-compositing");
-		CommandLine->AppendSwitch("enable-begin-frame-scheduling");
 	}
 	else
 	{

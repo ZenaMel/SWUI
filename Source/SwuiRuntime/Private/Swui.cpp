@@ -103,6 +103,12 @@ void USwui::InitializeSwuiView()
 	if (!Sub) return;
 
 	FSwuiInstanceSettings InstSettings;
+	InstSettings.bIsHUD                           = bIsHUD;
+	InstSettings.bUseUEFrameLockedBrowser         = bUseUEFrameLockedBrowser;
+	InstSettings.bUseExternalBeginFrames          = bUseExternalBeginFrames;
+	InstSettings.bSendExternalBeginFrameFromTick  = bSendExternalBeginFrameFromTick;
+	InstSettings.bFlushHudStateBeforeBrowserFrame = bFlushHudStateBeforeBrowserFrame;
+	InstSettings.MaxBrowserFramesPerSecond        = (bIsHUD && MaxBrowserFramesPerSecond <= 0) ? 60 : MaxBrowserFramesPerSecond;
 	InstSettings.OverrideFrameRate         = OverrideFrameRate;
 	InstSettings.OverrideBandOvercopyRatio = OverrideBandOvercopyRatio;
 	InstSettings.OverrideMaxPerRectUploads = OverrideMaxPerRectUploads;
@@ -186,6 +192,12 @@ void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 	if (!Sub) return;
 
 	FSwuiInstanceSettings Rebuilt;
+	Rebuilt.bIsHUD                           = bIsHUD;
+	Rebuilt.bUseUEFrameLockedBrowser         = bUseUEFrameLockedBrowser;
+	Rebuilt.bUseExternalBeginFrames          = bUseExternalBeginFrames;
+	Rebuilt.bSendExternalBeginFrameFromTick  = bSendExternalBeginFrameFromTick;
+	Rebuilt.bFlushHudStateBeforeBrowserFrame = bFlushHudStateBeforeBrowserFrame;
+	Rebuilt.MaxBrowserFramesPerSecond        = (bIsHUD && MaxBrowserFramesPerSecond <= 0) ? 60 : MaxBrowserFramesPerSecond;
 	Rebuilt.OverrideFrameRate         = OverrideFrameRate;
 	Rebuilt.OverrideBandOvercopyRatio = OverrideBandOvercopyRatio;
 	Rebuilt.OverrideMaxPerRectUploads = OverrideMaxPerRectUploads;

@@ -1,4 +1,5 @@
 #include "SwuiSubsystem.h"
+#include "SwuiManager.h"
 #include "SwuiSettings.h"
 #include "Swui.h"
 #include "SwuiView.h"
@@ -393,68 +394,250 @@ void USwuiSubsystem::Unobserve(UObject* Source)
 
 void USwuiSubsystem::Tick(float DeltaTime)
 {
+	// Pump CEF at the start of the SWUI tick so queued CEF UI tasks,
+	// browser timers, rAF, JS work, and pending paint work can progress.
+	SwuiManager::DoSwuiMessageLoop();
+
 	if (!View) return;
 
-	// Always flush pending CEF paints — tile diff + upload — regardless of JS state.
+	View->NotifySubsystemTick();
+	bForceBrowserFrameThisTick = false;
+	bLastFlushSentExternalBeginFrame = false;
+
+	const bool bCanFlushJs = !View->InstanceSettings.bPauseBrowserUpdates;
+	if (bCanFlushJs && FlushHudStateToJs(DeltaTime))
+	{
+		View->NotifyHudStateFlushed();
+	}
+
+	// FlushHudStateToJs may post the combined JS + Invalidate + BeginFrame task
+	// to the CEF UI thread. Pump immediately so that task can execute during
+	// this UE tick instead of waiting for a later/irregular CEF pump.
+	SwuiManager::DoSwuiMessageLoop();
+
+	const bool bUseCombinedHudFramePath =
+		View->InstanceSettings.bIsHUD &&
+		View->InstanceSettings.bUseUEFrameLockedBrowser &&
+		View->IsExternalBeginFrameActive();
+
+	bool bSentExternalBeginFrame = bLastFlushSentExternalBeginFrame;
+	if (!bSentExternalBeginFrame && !bUseCombinedHudFramePath)
+	{
+		bSentExternalBeginFrame = SendExternalBeginFrameIfDue(DeltaTime);
+	}
+
+	// Pump again after an explicit begin-frame request. This gives CEF a chance
+	// to process Invalidate/BeginFrame and produce OnPaint before we decide
+	// whether there is fresh paint to upload.
+	SwuiManager::DoSwuiMessageLoop();
+
+	if (bSentExternalBeginFrame && !View->HasFreshOnPaintDataPending())
+	{
+		// Avoid uploading stale/backlog-only data immediately after requesting a new browser frame.
+		// Wait until fresh OnPaint data is available.
+		//
+		// Diagnostic pump: one final chance for CEF to deliver OnPaint in this tick.
+		SwuiManager::DoSwuiMessageLoop();
+
+		if (!View->HasFreshOnPaintDataPending())
+		{
+			return;
+		}
+	}
+
+	// Keep upload coalescing after browser frame request in HUD lock-step mode.
 	View->TickDeferredUpload();
 
-	if (ObservedProperties.Num() == 0) return;
+	// Diagnostic pump after upload while testing lock-step behavior.
+	// If one/two pumps are enough later, this can be removed.
+	SwuiManager::DoSwuiMessageLoop();
+}
 
-	// Skip all JS state push and runtime dispatch if paused for isolation.
-	if (View->InstanceSettings.bPauseBrowserUpdates) return;
+bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
+{
+	if (!View) return false;
+
+	const bool bHudLockStep = View->InstanceSettings.bIsHUD && View->InstanceSettings.bUseUEFrameLockedBrowser;
+	const bool bFlushBeforeFrame = !bHudLockStep || View->InstanceSettings.bFlushHudStateBeforeBrowserFrame;
+	if (!bFlushBeforeFrame) return false;
+	const bool bUseCombinedHudFramePath = bHudLockStep && View->IsExternalBeginFrameActive();
 
 	// Exponential moving average FPS (alpha=0.1, smoothed over ~10 frames)
 	if (DeltaTime > 0.f)
 		AvgFPS = AvgFPS * 0.9f + (1.f / DeltaTime) * 0.1f;
 	LastDeltaTime = DeltaTime;
 
-	// Throttle JS pushes to the CEF windowless frame rate (avoid hammering the browser).
-	const int32 CefFPS  = View->GetWindowlessFrameRate();
-	const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
-	TickAccumulator += DeltaTime;
-	if (TickAccumulator < MinInterval) return;
-	TickAccumulator = 0.f;
+	if (!bHudLockStep)
+	{
+		const int32 CefFPS = View->GetWindowlessFrameRate();
+		const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
+		TickAccumulator += DeltaTime;
+		if (TickAccumulator < MinInterval) return false;
+		TickAccumulator = 0.f;
+	}
 
-	// ---- Runtime info push (fps, dt, dimensions) --------------------------------
+	bool bFlushed = false;
+	FString BatchedScript;
+
 	const FString RuntimeScript = FString::Printf(
-		TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});") \
-		TEXT("s._runtime={fps:%.1f,dt:%.4f,cefFps:%d,width:%d,height:%d};") \
-		TEXT("document.dispatchEvent(new CustomEvent('swui:tick',{detail:s._runtime}));") \
+		TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});")
+		TEXT("s._runtime={fps:%.1f,dt:%.4f,cefFps:%d,width:%d,height:%d};")
+		TEXT("document.dispatchEvent(new CustomEvent('swui:tick',{detail:s._runtime}));")
 		TEXT("})()"),
 		AvgFPS, LastDeltaTime,
 		View->GetWindowlessFrameRate(), View->Width, View->Height);
-	View->ExecuteJavaScript(RuntimeScript);
+	BatchedScript += RuntimeScript;
+	bFlushed = true;
 
-	// ---- State properties push --------------------------------------------------
-FString Script = TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});");
-	bool bAny = false;
-
-	for (int32 i = ObservedProperties.Num() - 1; i >= 0; --i)
+	if (ObservedProperties.Num() > 0)
 	{
-		FSwuiObservedProperty& Entry = ObservedProperties[i];
+		FString Script = TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});");
+		bool bAny = false;
+		FString LatestCurrentAmmoJs;
+		FString LatestReserveAmmoJs;
+		bool bCurrentAmmoChanged = false;
+		bool bReserveAmmoChanged = false;
 
-		// Auto-drop dead objects
-		if (!Entry.Source.IsValid())
+		for (int32 i = ObservedProperties.Num() - 1; i >= 0; --i)
 		{
-			ObservedProperties.RemoveAtSwap(i);
-			continue;
+			FSwuiObservedProperty& Entry = ObservedProperties[i];
+			if (!Entry.Source.IsValid())
+			{
+				ObservedProperties.RemoveAtSwap(i);
+				continue;
+			}
+
+			UObject* Obj = Entry.Source.Get();
+			if (!Entry.CachedProp) continue;
+
+			const FString JSValue = Swui_SerializeProperty(Entry.CachedProp, Obj);
+			if (JSValue.IsEmpty()) continue;
+			const FString* PrevValue = LastObservedValues.Find(Entry.NamespacedKey);
+			const bool bChanged = !PrevValue || *PrevValue != JSValue;
+			if (bChanged)
+			{
+				LastObservedValues.Add(Entry.NamespacedKey, JSValue);
+				if (Entry.NamespacedKey.Contains(TEXT("compass"), ESearchCase::IgnoreCase))
+				{
+					bForceBrowserFrameThisTick = true;
+				}
+				if (Entry.NamespacedKey.Contains(TEXT("ammo"), ESearchCase::IgnoreCase)
+					|| Entry.NamespacedKey.Contains(TEXT("reload"), ESearchCase::IgnoreCase)
+					|| Entry.NamespacedKey.Contains(TEXT("crosshair"), ESearchCase::IgnoreCase)
+					|| Entry.NamespacedKey.Contains(TEXT("ability"), ESearchCase::IgnoreCase))
+				{
+					bForceBrowserFrameThisTick = true;
+					MarkHudAnimationActive(0.20);
+				}
+			}
+
+			Script += FString::Printf(
+				TEXT("s.state['%s']=%s;if(s._notify)s._notify('%s',%s);"),
+				*Entry.NamespacedKey, *JSValue,
+				*Entry.NamespacedKey, *JSValue);
+
+			if (Entry.NamespacedKey.Contains(TEXT("compass"), ESearchCase::IgnoreCase)
+				&& Entry.NamespacedKey.Contains(TEXT("angle"), ESearchCase::IgnoreCase)
+				&& bChanged)
+			{
+				Script += FString::Printf(
+					TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.setCompass)window.__SWUI_HUD__.setCompass(%s);"),
+					*JSValue);
+			}
+
+			if (Entry.NamespacedKey.Contains(TEXT("currentammo"), ESearchCase::IgnoreCase))
+			{
+				LatestCurrentAmmoJs = JSValue;
+				if (bChanged) bCurrentAmmoChanged = true;
+			}
+			if (Entry.NamespacedKey.Contains(TEXT("reserveammo"), ESearchCase::IgnoreCase))
+			{
+				LatestReserveAmmoJs = JSValue;
+				if (bChanged) bReserveAmmoChanged = true;
+			}
+			if (Entry.NamespacedKey.Contains(TEXT("reloading"), ESearchCase::IgnoreCase) && bChanged)
+			{
+				Script += FString::Printf(
+					TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.setReloading)window.__SWUI_HUD__.setReloading(%s);"),
+					*JSValue);
+			}
+			bAny = true;
 		}
 
-		UObject* Obj = Entry.Source.Get();
-		if (!Entry.CachedProp) continue;
+		if ((bCurrentAmmoChanged || bReserveAmmoChanged) && !LatestCurrentAmmoJs.IsEmpty() && !LatestReserveAmmoJs.IsEmpty())
+		{
+			Script += FString::Printf(
+				TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.setAmmo)window.__SWUI_HUD__.setAmmo(%s,%s);"),
+				*LatestCurrentAmmoJs,
+				*LatestReserveAmmoJs);
+		}
 
-		const FString JSValue = Swui_SerializeProperty(Entry.CachedProp, Obj);
-		if (JSValue.IsEmpty()) continue;
-
-		Script += FString::Printf(
-			TEXT("s.state['%s']=%s;if(s._notify)s._notify('%s',%s);"),
-			*Entry.NamespacedKey, *JSValue,
-			*Entry.NamespacedKey, *JSValue);
-		bAny = true;
+		Script += TEXT("})();");
+		if (bAny)
+		{
+			if (!BatchedScript.IsEmpty()) BatchedScript += TEXT(";");
+			BatchedScript += Script;
+			bFlushed = true;
+		}
 	}
 
-	Script += TEXT("})();");
-	if (bAny) View->ExecuteJavaScript(Script);
+	if (QueuedHudEventScripts.Num() > 0)
+	{
+		FString BatchedEvents;
+		for (const FString& EventScript : QueuedHudEventScripts)
+		{
+			if (!BatchedEvents.IsEmpty()) BatchedEvents += TEXT(";");
+			BatchedEvents += EventScript;
+		}
+		QueuedHudEventScripts.Reset();
+		if (!BatchedEvents.IsEmpty())
+		{
+			if (!BatchedScript.IsEmpty()) BatchedScript += TEXT(";");
+			BatchedScript += BatchedEvents;
+			bFlushed = true;
+		}
+	}
+
+	if (!bFlushed)
+	{
+		return false;
+	}
+
+	if (bUseCombinedHudFramePath)
+	{
+		const bool bAnimationWindowActive = FPlatformTime::Seconds() < HudAnimationActiveUntil;
+		const bool bForceFrame = bForceBrowserFrameThisTick || bAnimationWindowActive;
+		bLastFlushSentExternalBeginFrame = View->FlushHudStateAndRequestBrowserFrame(BatchedScript, DeltaTime, bForceFrame);
+	}
+	else
+	{
+		View->ExecuteJavaScript(BatchedScript);
+	}
+
+	return bFlushed;
+}
+
+void USwuiSubsystem::QueueHudEventScript(const FString& Script)
+{
+	if (!Script.IsEmpty())
+	{
+		QueuedHudEventScripts.Add(Script);
+	}
+}
+
+void USwuiSubsystem::MarkHudAnimationActive(double DurationSeconds)
+{
+	const double Now = FPlatformTime::Seconds();
+	HudAnimationActiveUntil = FMath::Max(HudAnimationActiveUntil, Now + DurationSeconds);
+}
+
+bool USwuiSubsystem::SendExternalBeginFrameIfDue(float DeltaTime)
+{
+	if (View)
+	{
+		return View->SendExternalBeginFrameIfDue(DeltaTime);
+	}
+	return false;
 }
 
 // ---- Delegate fire trampoline ----
@@ -474,7 +657,16 @@ void USwuiSubsystem::OnObservedDelegateFired()
 			TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});")
 			TEXT("var ev=new CustomEvent('%s',{detail:{}});document.dispatchEvent(ev);})();"),
 			*Entry.NamespacedKey);
+		QueueHudEventScript(Script);
 
-		if (View) View->ExecuteJavaScript(Script);
+		if (Entry.NamespacedKey.Contains(TEXT("fired"), ESearchCase::IgnoreCase)
+			|| Entry.NamespacedKey.Contains(TEXT("hit"), ESearchCase::IgnoreCase)
+			|| Entry.NamespacedKey.Contains(TEXT("reload"), ESearchCase::IgnoreCase)
+			|| Entry.NamespacedKey.Contains(TEXT("ability"), ESearchCase::IgnoreCase))
+		{
+			QueueHudEventScript(TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.weaponFired)window.__SWUI_HUD__.weaponFired({});"));
+			bForceBrowserFrameThisTick = true;
+			MarkHudAnimationActive(0.20);
+		}
 	}
 }

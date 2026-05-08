@@ -141,6 +141,26 @@ public:
 		meta=(ClampMin="0", ClampMax="300"))
 	int32 OverrideFrameRate = 0;
 
+	/** For HUD views, lock browser updates to UE-driven scheduling. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD"))
+	bool bUseUEFrameLockedBrowser = true;
+
+	/** Enable CEF external begin frames for HUD lock-step where available. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD && bUseUEFrameLockedBrowser"))
+	bool bUseExternalBeginFrames = true;
+
+	/** Send external begin frames from subsystem Tick when external mode is active. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD && bUseUEFrameLockedBrowser && bUseExternalBeginFrames"))
+	bool bSendExternalBeginFrameFromTick = true;
+
+	/** Flush queued HUD state/events before browser frame requests in lock-step mode. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD && bUseUEFrameLockedBrowser"))
+	bool bFlushHudStateBeforeBrowserFrame = true;
+
+	/** Browser frame cap for HUD mode. If UE runs above this, frames are paced to this cap. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD", ClampMin="1", ClampMax="300"))
+	int32 MaxBrowserFramesPerSecond = 60;
+
 	// ---- Performance | Upload Strategy ------------------------------------
 
 	/** Override the band-merge overcopy ratio for this component.

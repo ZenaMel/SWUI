@@ -51,6 +51,47 @@ private:
 	IMPLEMENT_REFCOUNTING(FSwuiOverlayPushTask);
 };
 
+class FSwuiFlushAndBeginFrameTask : public CefTask
+{
+public:
+	FSwuiFlushAndBeginFrameTask(CefRefPtr<CefBrowser> InBrowser, std::string InScript, bool bInInvalidateView, bool bInSendBeginFrame)
+		: Browser(InBrowser), Script(MoveTemp(InScript)), bInvalidateView(bInInvalidateView), bSendBeginFrame(bInSendBeginFrame) {}
+
+	void Execute() override
+	{
+		if (!Browser) return;
+
+		if (!Script.empty())
+		{
+			CefRefPtr<CefFrame> Frame = Browser->GetMainFrame();
+			if (Frame)
+			{
+				Frame->ExecuteJavaScript(CefString(Script), Frame->GetURL(), 0);
+			}
+		}
+
+		if (bSendBeginFrame)
+		{
+			CefRefPtr<CefBrowserHost> Host = Browser->GetHost();
+			if (Host)
+			{
+				if (bInvalidateView)
+				{
+					Host->Invalidate(PET_VIEW);
+				}
+				Host->SendExternalBeginFrame();
+			}
+		}
+	}
+
+private:
+	CefRefPtr<CefBrowser> Browser;
+	std::string Script;
+	bool bInvalidateView = false;
+	bool bSendBeginFrame = false;
+	IMPLEMENT_REFCOUNTING(FSwuiFlushAndBeginFrameTask);
+};
+
 // ---------------------------------------------------------------------------
 // Rect optimization helpers — file-scope, called only from CEF renderer thread.
 // ---------------------------------------------------------------------------
@@ -157,6 +198,11 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 
 	CefWindowInfo Info;
 	Info.SetAsWindowless(0);
+	const bool bWantsExternalBeginFrames =
+		InstanceSettings.bIsHUD &&
+		InstanceSettings.bUseUEFrameLockedBrowser &&
+		InstanceSettings.bUseExternalBeginFrames;
+	Info.external_begin_frame_enabled = bWantsExternalBeginFrames ? 1 : 0;
 
 	CefBrowserSettings BrowserSettings;
 	BrowserSettings.webgl = STATE_ENABLED;
@@ -185,7 +231,11 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 	//         else                                        → 300
 	int32 TargetFPS = 300;
 	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
-	if (InstanceSettings.OverrideFrameRate > 0)
+	if (InstanceSettings.bIsHUD && InstanceSettings.bUseUEFrameLockedBrowser)
+	{
+		TargetFPS = InstanceSettings.MaxBrowserFramesPerSecond > 0 ? InstanceSettings.MaxBrowserFramesPerSecond : 60;
+	}
+	else if (InstanceSettings.OverrideFrameRate > 0)
 	{
 		TargetFPS = InstanceSettings.OverrideFrameRate;
 	}
@@ -207,6 +257,22 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 
 	Browser->GetHost()->SetWindowlessFrameRate(TargetFPS);
 	WindowlessFrameRate = TargetFPS;
+	const bool bHostIsWindowless = Browser->GetHost()->IsWindowRenderingDisabled();
+	bExternalBeginFrameActive = bWantsExternalBeginFrames && bHostIsWindowless;
+	ExternalBeginFrameAccumulatedTime = 0.0;
+	bPaintArrivedAfterExternalBeginFrame = false;
+	bPendingInvalidateForPaint = false;
+	if (bWantsExternalBeginFrames)
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: External begin frame requested=%s, osrWindowless=%s, active=%s"),
+			bWantsExternalBeginFrames ? TEXT("true") : TEXT("false"),
+			bHostIsWindowless ? TEXT("true") : TEXT("false"),
+			bExternalBeginFrameActive ? TEXT("true") : TEXT("false"));
+	}
+	else if (InstanceSettings.bIsHUD && InstanceSettings.bUseUEFrameLockedBrowser && InstanceSettings.bUseExternalBeginFrames)
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: External begin frame mode unavailable; using capped windowless frame pacing fallback."));
+	}
 
 	CefData->Client = Client;
 	CefData->Browser = Browser;
@@ -270,6 +336,119 @@ void USwuiView::ExecuteJavaScript(const FString& Script)
 	}
 }
 
+void USwuiView::NotifyHudStateFlushed()
+{
+	++Stat_HudStateFlushes;
+}
+
+void USwuiView::NotifySubsystemTick()
+{
+	++Stat_SubsystemTicks;
+}
+
+bool USwuiView::HasFreshOnPaintDataPending() const
+{
+	FScopeLock Lock(const_cast<FCriticalSection*>(&PaintMutex));
+	return bHasPendingUpload && PendingIncomingRects > 0;
+}
+
+bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame)
+{
+	const bool bHasScript = !CombinedScript.IsEmpty();
+	if (!CefData || !CefData->Browser)
+	{
+		if (bExternalBeginFrameActive && InstanceSettings.bSendExternalBeginFrameFromTick)
+		{
+			++Stat_ExternalBeginFrameSkipNoBrowser;
+		}
+		return false;
+	}
+
+	if (!bExternalBeginFrameActive)
+	{
+		if (bHasScript)
+		{
+			ExecuteJavaScript(CombinedScript);
+		}
+		return false;
+	}
+	if (!InstanceSettings.bSendExternalBeginFrameFromTick)
+	{
+		++Stat_ExternalBeginFrameSkipDisabled;
+		if (bHasScript)
+		{
+			ExecuteJavaScript(CombinedScript);
+		}
+		return false;
+	}
+
+	const int32 TargetHz = FMath::Clamp(
+		InstanceSettings.MaxBrowserFramesPerSecond > 0 ? InstanceSettings.MaxBrowserFramesPerSecond : WindowlessFrameRate,
+		1,
+		300);
+	const double MinInterval = 1.0 / (double)TargetHz;
+	ExternalBeginFrameAccumulatedTime += FMath::Max(0.0f, DeltaTime);
+	if (LastExternalBeginFrameSentTime <= 0.0)
+	{
+		ExternalBeginFrameAccumulatedTime = MinInterval;
+	}
+
+	bool bWillSendBeginFrame = bForceFrame;
+	if (!bWillSendBeginFrame)
+	{
+		if (ExternalBeginFrameAccumulatedTime < MinInterval)
+		{
+			++Stat_ExternalBeginFrameSkipRateLimited;
+		}
+		else
+		{
+			bWillSendBeginFrame = true;
+		}
+	}
+
+	if (bWillSendBeginFrame)
+	{
+		ExternalBeginFrameAccumulatedTime = FMath::Max(0.0, ExternalBeginFrameAccumulatedTime - MinInterval);
+		const double Now = FPlatformTime::Seconds();
+		if (PendingBeginFrameSentTime > 0.0)
+		{
+			++Stat_BeginFramesWithoutPaint;
+		}
+		LastExternalBeginFrameSentTime = Now;
+		const bool bInvalidateViewForThisFrame = bForceFrame || bHasScript;
+		if (bInvalidateViewForThisFrame)
+		{
+			++Stat_InvalidateView;
+		}
+		{
+			FScopeLock Lock(&PaintMutex);
+			PendingBeginFrameSentTime = Now;
+			bPaintArrivedAfterExternalBeginFrame = false;
+			bPendingInvalidateForPaint = bInvalidateViewForThisFrame;
+		}
+		++Stat_ExternalBeginFrames;
+	}
+
+	if (bHasScript || bWillSendBeginFrame)
+	{
+		const std::string StdScript = bHasScript ? std::string(TCHAR_TO_UTF8(*CombinedScript)) : std::string();
+		const bool bInvalidateViewForThisFrame = bWillSendBeginFrame && (bForceFrame || bHasScript);
+		CefPostTask(TID_UI, new FSwuiFlushAndBeginFrameTask(CefData->Browser, StdScript, bInvalidateViewForThisFrame, bWillSendBeginFrame));
+	}
+
+	return bWillSendBeginFrame;
+}
+
+bool USwuiView::SendExternalBeginFrameIfDue(float DeltaTime)
+{
+	if (!bExternalBeginFrameActive)
+	{
+		++Stat_ExternalBeginFrameSkipInactive;
+		return false;
+	}
+	return FlushHudStateAndRequestBrowserFrame(FString(), DeltaTime, false);
+}
+
 UTexture2D* USwuiView::GetTexture() const
 {
 	return Texture;
@@ -286,8 +465,24 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 
 	const int32 FullPitch = InWidth * 4;
 	const int32 BufBytes  = FullPitch * InHeight;
+	const double PaintNow = FPlatformTime::Seconds();
 
 	FScopeLock Lock(&PaintMutex);
+	LastPaintArrivalTime = PaintNow;
+	if (PendingBeginFrameSentTime > 0.0)
+	{
+		const double PaintAfterBeginMs = (PaintNow - PendingBeginFrameSentTime) * 1000.0;
+		Stat_PaintAfterBeginFrameMsSum += PaintAfterBeginMs;
+		if (PaintAfterBeginMs > Stat_PaintAfterBeginFrameMsMax) Stat_PaintAfterBeginFrameMsMax = PaintAfterBeginMs;
+		++Stat_PaintAfterBeginFrameSamples;
+		bPaintArrivedAfterExternalBeginFrame = true;
+		if (bPendingInvalidateForPaint)
+		{
+			++Stat_PaintsAfterInvalidate;
+			bPendingInvalidateForPaint = false;
+		}
+		PendingBeginFrameSentTime = -1.0;
+	}
 
 	// Resize backing buffer when texture dimensions change.
 	if (BackingBuffer.Num() != BufBytes)
@@ -347,7 +542,7 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 void USwuiView::TickDeferredUpload()
 {
 	const double Now = FPlatformTime::Seconds();
-	++Stat_UeFrames;
+	++Stat_ViewUploadTicks;
 
 	auto RecordTimingSampleMs = [](double SampleMs, double& SumMs, double& MaxMs, int32& SampleCount)
 	{
@@ -396,6 +591,7 @@ void USwuiView::TickDeferredUpload()
 	Stat_CefPaints     += LocalCefPaints;
 	Stat_IncomingRects += LocalInRects;
 	Stat_IncomingPx    += LocalInPx;
+	const bool bHasFreshPaintThisTick = LocalInRects > 0;
 	if (LocalLargestIn > Stat_LargestIncoming) Stat_LargestIncoming = LocalLargestIn;
 
 	if (Texture && Texture->GetResource() && (LocalRects.Num() > 0 || bNeedsFullBaselineUpload || HasActiveDirtyTiles()))
@@ -475,6 +671,14 @@ void USwuiView::TickDeferredUpload()
 				if (bSkipUpload) { delete UploadData; }
 				else
 				{
+					if (bHasFreshPaintThisTick && LastPaintArrivalTime > 0.0)
+					{
+						RecordTimingSampleMs(
+							(FPlatformTime::Seconds() - LastPaintArrivalTime) * 1000.0,
+							Stat_UploadAfterPaintMsSum,
+							Stat_UploadAfterPaintMsMax,
+							Stat_UploadAfterPaintSamples);
+					}
 					ENQUEUE_RENDER_COMMAND(UpdateSwuiViewBaseline)(
 						[UploadData](FRHICommandList& CommandList)
 						{
@@ -484,6 +688,7 @@ void USwuiView::TickDeferredUpload()
 							delete UploadData;
 						});
 					++Stat_UeUploads;
+					if (bHasFreshPaintThisTick) ++Stat_UeUploadsFresh; else ++Stat_UeUploadsBacklog;
 					++Stat_UploadedRects;
 					Stat_UploadedPixels += (int64)SnapW * SnapH;
 					Stat_LargestUploaded = FMath::Max(Stat_LargestUploaded, SnapW * SnapH);
@@ -724,13 +929,20 @@ void USwuiView::TickDeferredUpload()
 				Stat_MemcpyUs += McpyUs;
 				Stat_MemcpyMaxUs = FMath::Max(Stat_MemcpyMaxUs, McpyUs);
 				Stat_UploadedPixels += UploadedPx;
-				++Stat_UeUploads;
 
 				const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
 					|| InstanceSettings.bSkipTextureUpload || InstanceSettings.bNoTextureUpload;
 				if (bSkipUpload) { delete UploadData; }
 				else
 				{
+					if (bHasFreshPaintThisTick && LastPaintArrivalTime > 0.0)
+					{
+						RecordTimingSampleMs(
+							(FPlatformTime::Seconds() - LastPaintArrivalTime) * 1000.0,
+							Stat_UploadAfterPaintMsSum,
+							Stat_UploadAfterPaintMsMax,
+							Stat_UploadAfterPaintSamples);
+					}
 					ENQUEUE_RENDER_COMMAND(UpdateSwuiViewOptimized)(
 						[UploadData](FRHICommandList& CommandList)
 						{
@@ -740,6 +952,8 @@ void USwuiView::TickDeferredUpload()
 								RHIUpdateTexture2D(Tex, 0, Rd.Region, Rd.SrcPitch, Base + Rd.SrcOffsetBytes);
 							delete UploadData;
 						});
+					++Stat_UeUploads;
+					if (bHasFreshPaintThisTick) ++Stat_UeUploadsFresh; else ++Stat_UeUploadsBacklog;
 				}
 			}
 		}
@@ -765,24 +979,40 @@ void USwuiView::TickDeferredUpload()
 		const float DeferredUploadAvgMs = Stat_DeferredUploadSamples > 0 ? float(Stat_DeferredUploadMsSum / Stat_DeferredUploadSamples) : 0.f;
 		const float HashAvgMs = Stat_HashSamples > 0 ? float(Stat_HashMsSum / Stat_HashSamples) : 0.f;
 		const float PackMemcpyAvgMs = Stat_PackMemcpySamples > 0 ? float(Stat_PackMemcpyMsSum / Stat_PackMemcpySamples) : 0.f;
+		const float PaintAfterBeginFrameAvgMs = Stat_PaintAfterBeginFrameSamples > 0 ? float(Stat_PaintAfterBeginFrameMsSum / Stat_PaintAfterBeginFrameSamples) : 0.f;
+		const float UploadAfterPaintAvgMs = Stat_UploadAfterPaintSamples > 0 ? float(Stat_UploadAfterPaintMsSum / Stat_UploadAfterPaintSamples) : 0.f;
 		UE_LOG(LogSwuiRuntime, Log,
-			TEXT("[SwuiPaint] ueFrames/s=%d  cefPaints/s=%d  ueUploads/s=%d  inRects/s=%d  inPx/s=%lld  largestIncoming=%d")
+			TEXT("[SwuiPaint] subsystemTicks/s=%d  viewUploadTicks/s=%d  cefPaints/s=%d")
+			TEXT("  externalBeginFrames/s=%d  invalidateView/s=%d  beginFramesWithoutPaint/s=%d  paintsAfterInvalidate/s=%d")
+			TEXT("  ueUploads/s=%d (fresh=%d backlog=%d)  hudStateFlushes/s=%d")
+			TEXT("  extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
+			TEXT("  inRects/s=%d  inPx/s=%lld  largestIncoming=%d")
 			TEXT("  candRects/s=%d  uploadedRects/s=%d  uploadedPx/s=%lld  largestUploaded=%d")
 			TEXT("  skippedTiles/s=%d  changedTiles/s=%d  deferredTiles/s=%d")
 			TEXT("  deferredUploadAvgMs=%.3f  deferredUploadMaxMs=%.3f")
 			TEXT("  hashAvgMs=%.3f  hashMaxMs=%.3f")
 			TEXT("  packMemcpyAvgMs=%.3f  packMemcpyMaxMs=%.3f  lockWaitMs=%.3f")
+			TEXT("  paintAfterBeginFrameAvgMs=%.3f  paintAfterBeginFrameMaxMs=%.3f")
+			TEXT("  uploadAfterPaintAvgMs=%.3f  uploadAfterPaintMaxMs=%.3f")
 			TEXT("  memcpyAvgMs=%.3f  memcpyMaxMs=%.3f  browserFpsCap=%d  tex=%dx%d"),
-			Stat_UeFrames, Stat_CefPaints, Stat_UeUploads,
+			Stat_SubsystemTicks, Stat_ViewUploadTicks, Stat_CefPaints,
+			Stat_ExternalBeginFrames, Stat_InvalidateView, Stat_BeginFramesWithoutPaint, Stat_PaintsAfterInvalidate,
+			Stat_UeUploads, Stat_UeUploadsFresh, Stat_UeUploadsBacklog, Stat_HudStateFlushes,
+			Stat_ExternalBeginFrameSkipInactive, Stat_ExternalBeginFrameSkipDisabled, Stat_ExternalBeginFrameSkipNoBrowser, Stat_ExternalBeginFrameSkipRateLimited,
 			Stat_IncomingRects, Stat_IncomingPx, Stat_LargestIncoming,
 			Stat_CandidateRects, Stat_UploadedRects, Stat_UploadedPixels, Stat_LargestUploaded,
 			Stat_SkippedTiles, Stat_ChangedTiles, Stat_DeferredTiles,
 			DeferredUploadAvgMs, Stat_DeferredUploadMsMax,
 			HashAvgMs, Stat_HashMsMax,
 			PackMemcpyAvgMs, Stat_PackMemcpyMsMax, Stat_LockWaitMs,
+			PaintAfterBeginFrameAvgMs, Stat_PaintAfterBeginFrameMsMax,
+			UploadAfterPaintAvgMs, Stat_UploadAfterPaintMsMax,
 			McAvgMs, McMaxMs, WindowlessFrameRate, LastSnapW, LastSnapH);
 
-		Stat_UeFrames       = 0; Stat_CefPaints      = 0; Stat_UeUploads      = 0;
+		Stat_SubsystemTicks = 0; Stat_ViewUploadTicks = 0; Stat_CefPaints = 0; Stat_ExternalBeginFrames = 0;
+		Stat_InvalidateView = 0; Stat_BeginFramesWithoutPaint = 0; Stat_PaintsAfterInvalidate = 0;
+		Stat_ExternalBeginFrameSkipInactive = 0; Stat_ExternalBeginFrameSkipDisabled = 0; Stat_ExternalBeginFrameSkipNoBrowser = 0; Stat_ExternalBeginFrameSkipRateLimited = 0;
+		Stat_UeUploads = 0; Stat_UeUploadsFresh = 0; Stat_UeUploadsBacklog = 0; Stat_HudStateFlushes = 0;
 		Stat_IncomingRects   = 0; Stat_IncomingPx     = 0; Stat_LargestIncoming = 0;
 		Stat_CandidateRects  = 0; Stat_CandidatePx    = 0;
 		Stat_UploadedRects   = 0; Stat_UploadedPixels = 0; Stat_LargestUploaded = 0;
@@ -790,6 +1020,8 @@ void USwuiView::TickDeferredUpload()
 		Stat_DeferredUploadMsSum = 0.0; Stat_DeferredUploadMsMax = 0.0; Stat_DeferredUploadSamples = 0;
 		Stat_HashMsSum = 0.0; Stat_HashMsMax = 0.0; Stat_HashSamples = 0;
 		Stat_PackMemcpyMsSum = 0.0; Stat_PackMemcpyMsMax = 0.0; Stat_PackMemcpySamples = 0;
+		Stat_PaintAfterBeginFrameMsSum = 0.0; Stat_PaintAfterBeginFrameMsMax = 0.0; Stat_PaintAfterBeginFrameSamples = 0;
+		Stat_UploadAfterPaintMsSum = 0.0; Stat_UploadAfterPaintMsMax = 0.0; Stat_UploadAfterPaintSamples = 0;
 		Stat_LockWaitMs = 0.0;
 		Stat_MemcpyUs        = 0; Stat_MemcpyMaxUs    = 0;
 		Stat_LastLogTime     = Now;
@@ -814,8 +1046,22 @@ void USwuiView::TickDeferredUpload()
 		const float MemcpyMaxMs  = float(Stat_MemcpyMaxUs) / 1000.f;
 		const float BandRatio    = Stat_IncomingPx > 0 ? float(Stat_UploadedPixels) / float(Stat_IncomingPx) : 0.f;
 		const int32 CefPaintsRate = FMath::RoundToInt(float(Stat_CefPaints) / Elapsed);
+		const int32 ExternalBeginFramesRate = FMath::RoundToInt(float(Stat_ExternalBeginFrames) / Elapsed);
+		const int32 ExternalBeginSkipInactiveRate = FMath::RoundToInt(float(Stat_ExternalBeginFrameSkipInactive) / Elapsed);
+		const int32 ExternalBeginSkipDisabledRate = FMath::RoundToInt(float(Stat_ExternalBeginFrameSkipDisabled) / Elapsed);
+		const int32 ExternalBeginSkipNoBrowserRate = FMath::RoundToInt(float(Stat_ExternalBeginFrameSkipNoBrowser) / Elapsed);
+		const int32 ExternalBeginSkipRateLimitedRate = FMath::RoundToInt(float(Stat_ExternalBeginFrameSkipRateLimited) / Elapsed);
+		const int32 InvalidateViewRate = FMath::RoundToInt(float(Stat_InvalidateView) / Elapsed);
+		const int32 BeginFramesWithoutPaintRate = FMath::RoundToInt(float(Stat_BeginFramesWithoutPaint) / Elapsed);
+		const int32 PaintsAfterInvalidateRate = FMath::RoundToInt(float(Stat_PaintsAfterInvalidate) / Elapsed);
 		const int32 UeUploadsRate = FMath::RoundToInt(float(Stat_UeUploads) / Elapsed);
-		const int32 UeFramesRate  = FMath::RoundToInt(float(Stat_UeFrames) / Elapsed);
+		const int32 UeUploadsFreshRate = FMath::RoundToInt(float(Stat_UeUploadsFresh) / Elapsed);
+		const int32 UeUploadsBacklogRate = FMath::RoundToInt(float(Stat_UeUploadsBacklog) / Elapsed);
+		const int32 SubsystemTicksRate = FMath::RoundToInt(float(Stat_SubsystemTicks) / Elapsed);
+		const int32 ViewUploadTicksRate = FMath::RoundToInt(float(Stat_ViewUploadTicks) / Elapsed);
+		const int32 HudStateFlushesRate = FMath::RoundToInt(float(Stat_HudStateFlushes) / Elapsed);
+		const float PaintAfterBeginFrameAvgMs = Stat_PaintAfterBeginFrameSamples > 0 ? float(Stat_PaintAfterBeginFrameMsSum / Stat_PaintAfterBeginFrameSamples) : 0.f;
+		const float UploadAfterPaintAvgMs = Stat_UploadAfterPaintSamples > 0 ? float(Stat_UploadAfterPaintMsSum / Stat_UploadAfterPaintSamples) : 0.f;
 
 		FString IncomingRectsJson;
 		IncomingRectsJson.Reserve(LocalOverlayRects.Num() * 52 + 2);
@@ -862,16 +1108,26 @@ void USwuiView::TickDeferredUpload()
 			TEXT("\"stats\":{\"largestRect\":%d,\"largestUploaded\":%d,")
 			TEXT("\"jsRafS\":(window.__SWUI_JS_RAF_S||0),")
 			TEXT("\"browserFpsCap\":%d,")
-			TEXT("\"cefPaintsS\":%d,\"ueUploadsS\":%d,\"ueFramesS\":%d,")
+			TEXT("\"subsystemTicksS\":%d,\"viewUploadTicksS\":%d,")
+			TEXT("\"cefPaintsS\":%d,\"externalBeginFramesS\":%d,\"invalidateViewS\":%d,\"beginFramesWithoutPaintS\":%d,\"paintsAfterInvalidateS\":%d,")
+			TEXT("\"externalBeginSkipInactiveS\":%d,\"externalBeginSkipDisabledS\":%d,\"externalBeginSkipNoBrowserS\":%d,\"externalBeginSkipRateLimitedS\":%d,")
+			TEXT("\"ueUploadsS\":%d,\"freshUploadsS\":%d,\"ueUploadsFreshS\":%d,\"ueUploadsBacklogS\":%d,\"hudStateFlushesS\":%d,")
 			TEXT("\"dirtyPxS\":%lld,\"uploadedPxS\":%lld,")
 			TEXT("\"skippedTiles\":%d,\"changedTiles\":%d,")
+			TEXT("\"paintAfterBeginFrameAvgMs\":%.3f,\"paintAfterBeginFrameMaxMs\":%.3f,")
+			TEXT("\"uploadAfterPaintAvgMs\":%.3f,\"uploadAfterPaintMaxMs\":%.3f,")
 			TEXT("\"memcpyAvgMs\":%.3f,\"memcpyMaxMs\":%.3f,\"bandRatio\":%.2f}});"),
 			LastSnapW, LastSnapH, *ActiveRectsJson, *IncomingRectsJson, *OptimizedRectsJson,
 			Stat_LargestIncoming, Stat_LargestUploaded,
 			WindowlessFrameRate,
-			CefPaintsRate, UeUploadsRate, UeFramesRate,
+			SubsystemTicksRate, ViewUploadTicksRate,
+			CefPaintsRate, ExternalBeginFramesRate, InvalidateViewRate, BeginFramesWithoutPaintRate, PaintsAfterInvalidateRate,
+			ExternalBeginSkipInactiveRate, ExternalBeginSkipDisabledRate, ExternalBeginSkipNoBrowserRate, ExternalBeginSkipRateLimitedRate,
+			UeUploadsRate, UeUploadsFreshRate, UeUploadsFreshRate, UeUploadsBacklogRate, HudStateFlushesRate,
 			DirtyPxRate, UploadPxRate,
 			Stat_SkippedTiles, Stat_ChangedTiles,
+			PaintAfterBeginFrameAvgMs, (float)Stat_PaintAfterBeginFrameMsMax,
+			UploadAfterPaintAvgMs, (float)Stat_UploadAfterPaintMsMax,
 			MemcpyAvgMs, MemcpyMaxMs, BandRatio);
 
 		if (CefData && CefData->Browser)

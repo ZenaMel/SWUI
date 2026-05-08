@@ -58,6 +58,13 @@ public:
 	// Called every UE frame by USwuiSubsystem::Tick — flushes pending CEF paints
 	// as a single per-frame upload, with tile diff to skip unchanged tiles.
 	void TickDeferredUpload();
+	bool FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame);
+	bool SendExternalBeginFrameIfDue(float DeltaTime);
+	void NotifySubsystemTick();
+	void NotifyHudStateFlushed();
+	bool IsExternalBeginFrameActive() const { return bExternalBeginFrameActive; }
+	bool HasPaintAfterExternalBeginFrame() const { return bPaintArrivedAfterExternalBeginFrame; }
+	bool HasFreshOnPaintDataPending() const;
 
 	// Per-instance settings forwarded from USwui component at Init() time.
 	// Kept public so USwuiSubsystem can read isolation flags (e.g. bPauseBrowserUpdates).
@@ -72,6 +79,13 @@ private:
 	TSharedPtr<FSwuiViewCefData> CefData;
 
 	int32 WindowlessFrameRate = 300;
+	bool bExternalBeginFrameActive = false;
+	double LastExternalBeginFrameSentTime = 0.0;
+	double ExternalBeginFrameAccumulatedTime = 0.0;
+	double PendingBeginFrameSentTime = -1.0;
+	double LastPaintArrivalTime = 0.0;
+	bool bPaintArrivedAfterExternalBeginFrame = false;
+	bool bPendingInvalidateForPaint = false;
 
 	// -----------------------------------------------------------------------
 	// Coalescing: CEF OnPaint accumulates here; TickDeferredUpload drains.
@@ -106,8 +120,20 @@ private:
 	// Aggregate stats — game thread only, reset every second in TickDeferredUpload.
 	// -----------------------------------------------------------------------
 	int32  Stat_CefPaints       = 0;   // # CEF OnPaint calls
-	int32  Stat_UeFrames        = 0;   // # TickDeferredUpload calls (UE frames)
+	int32  Stat_SubsystemTicks  = 0;   // # USwuiSubsystem::Tick calls
+	int32  Stat_ViewUploadTicks = 0;   // # TickDeferredUpload calls
+	int32  Stat_ExternalBeginFrames = 0;
+	int32  Stat_ExternalBeginFrameSkipInactive = 0;
+	int32  Stat_ExternalBeginFrameSkipDisabled = 0;
+	int32  Stat_ExternalBeginFrameSkipNoBrowser = 0;
+	int32  Stat_ExternalBeginFrameSkipRateLimited = 0;
+	int32  Stat_InvalidateView = 0;
+	int32  Stat_BeginFramesWithoutPaint = 0;
+	int32  Stat_PaintsAfterInvalidate = 0;
+	int32  Stat_HudStateFlushes = 0;
 	int32  Stat_UeUploads       = 0;   // # TickDeferredUpload enqueue calls
+	int32  Stat_UeUploadsFresh  = 0;
+	int32  Stat_UeUploadsBacklog = 0;
 	int32  Stat_IncomingRects   = 0;   // total dirty rects from CEF
 	int64  Stat_IncomingPx      = 0;   // total dirty pixels from CEF
 	int32  Stat_LargestIncoming = 0;   // largest single CEF dirty rect area (px)
@@ -128,6 +154,12 @@ private:
 	double Stat_PackMemcpyMsSum     = 0.0;
 	double Stat_PackMemcpyMsMax     = 0.0;
 	int32  Stat_PackMemcpySamples   = 0;
+	double Stat_PaintAfterBeginFrameMsSum = 0.0;
+	double Stat_PaintAfterBeginFrameMsMax = 0.0;
+	int32  Stat_PaintAfterBeginFrameSamples = 0;
+	double Stat_UploadAfterPaintMsSum = 0.0;
+	double Stat_UploadAfterPaintMsMax = 0.0;
+	int32  Stat_UploadAfterPaintSamples = 0;
 	double Stat_LockWaitMs       = 0.0;
 	int64  Stat_MemcpyUs        = 0;
 	int64  Stat_MemcpyMaxUs     = 0;

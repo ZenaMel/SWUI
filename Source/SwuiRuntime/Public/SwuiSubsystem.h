@@ -131,4 +131,15 @@ private:
 	// Dynamic delegate sink — one per observed delegate binding
 	UFUNCTION()
 	void OnObservedDelegateFired();
+
+	bool FlushHudStateToJs(float DeltaTime);
+	void QueueHudEventScript(const FString& Script);
+	bool SendExternalBeginFrameIfDue(float DeltaTime);
+	void MarkHudAnimationActive(double DurationSeconds);
+
+	TArray<FString> QueuedHudEventScripts;
+	TMap<FString, FString> LastObservedValues;
+	double HudAnimationActiveUntil = 0.0;
+	bool bForceBrowserFrameThisTick = false;
+	bool bLastFlushSentExternalBeginFrame = false;
 };
