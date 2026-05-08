@@ -9,11 +9,9 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Engine/Engine.h"
-#include "EngineUtils.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "UObject/PropertyIterator.h"
-#include "TimerManager.h"
 
 // ---- Helpers ----
 
@@ -141,22 +139,11 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	Widget->WidgetTree->RootWidget = RootPanel;
 	Widget->SetIsFocusable(false);
 	Widget->AddToViewport(ZOrder);
-
-	// Start state tick
-	World->GetTimerManager().SetTimer(
-		StateTickHandle, this, &USwuiSubsystem::TickState, 0.05f, true);
+	// State is now pushed every engine frame via FTickableGameObject::Tick
 }
 
 void USwuiSubsystem::ShutdownRenderer()
 {
-	if (UGameInstance* GI = GetGameInstance())
-	{
-		if (UWorld* World = GI->GetWorld())
-		{
-			World->GetTimerManager().ClearTimer(StateTickHandle);
-		}
-	}
-
 	if (Widget && Widget->IsInViewport())
 	{
 		Widget->RemoveFromParent();
@@ -287,9 +274,17 @@ void USwuiSubsystem::SetBindingSources(const TArray<FSwuiBindingSource>& Sources
 	UWorld* World = GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr;
 	if (!World) return;
 
-	for (TActorIterator<AActor> It(World); It; ++It)
+	// Iterate all live UObjects matching each configured source class.
+	// This handles Actors, ActorComponents, and any other UObject subclass uniformly.
+	for (const FSwuiBindingSource& Src : Sources)
 	{
-		ObserveSource(*It, /*bWarnOnMiss=*/false);
+		if (!Src.SourceClass || Src.Properties.IsEmpty()) continue;
+		for (TObjectIterator<UObject> It; It; ++It)
+		{
+			if (It->GetWorld() != World) continue;
+			if (!It->IsA(Src.SourceClass)) continue;
+			ObserveSource(*It, /*bWarnOnMiss=*/false);
+		}
 	}
 }
 
@@ -344,9 +339,9 @@ void USwuiSubsystem::Unobserve(UObject* Source)
 	ObservedDelegates.RemoveAll([&](const FSwuiObservedDelegate& E)  { return E.Source == Source; });
 }
 
-// ---- State tick ----
+// ---- FTickableGameObject::Tick — runs every engine frame ----
 
-void USwuiSubsystem::TickState()
+void USwuiSubsystem::Tick(float DeltaTime)
 {
 	if (!View || ObservedProperties.Num() == 0) return;
 

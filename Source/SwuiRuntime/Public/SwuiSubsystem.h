@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Tickable.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "SwuiBindingSource.h"
@@ -31,13 +32,19 @@ struct FSwuiObservedDelegate
 // ---- Subsystem ----
 
 UCLASS()
-class SWUIRUNTIME_API USwuiSubsystem : public UGameInstanceSubsystem
+class SWUIRUNTIME_API USwuiSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	GENERATED_BODY()
 
 public:
+	// UGameInstanceSubsystem
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+
+	// FTickableGameObject — ticks every engine frame, no timer needed
+	virtual void Tick(float DeltaTime) override;
+	virtual bool IsTickable() const override { return !IsTemplate() && View != nullptr; }
+	virtual TStatId GetStatId() const override { RETURN_QUICK_DECLARE_CYCLE_STAT(USwuiSubsystem, STATGROUP_Tickables); }
 	virtual void Deinitialize() override;
 
 	// ---- Renderer ----
@@ -110,9 +117,6 @@ private:
 	TArray<FSwuiObservedDelegate> ObservedDelegates;
 	TArray<FSwuiBindingSource>    CachedBindingSources;
 
-	FTimerHandle StateTickHandle;
-
-	void TickState();
 	FString ResolveNamespace(UObject* Source, const FString& Namespace) const;
 
 	// Dynamic delegate sink — one per observed delegate binding
