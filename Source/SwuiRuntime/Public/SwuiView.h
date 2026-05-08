@@ -34,6 +34,9 @@ public:
 
 	void Init();
 
+	// Returns the CEF windowless frame rate this view was initialised with.
+	int32 GetWindowlessFrameRate() const { return WindowlessFrameRate; }
+
 	// Internal — called by the backend adapter, not directly from Blueprint.
 	void LoadURL(const FString& URI);
 
@@ -56,6 +59,8 @@ private:
 	UMaterialInstanceDynamic* MaterialInstance;
 
 	TSharedPtr<FSwuiViewCefData> CefData;
+
+	int32 WindowlessFrameRate = 300;
 
 	void ResetTexture();
 	void DestroyTexture();

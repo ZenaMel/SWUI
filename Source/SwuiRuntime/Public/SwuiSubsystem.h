@@ -105,7 +105,8 @@ public:
 	const TArray<FSwuiObservedProperty>& GetObservedProperties() const { return ObservedProperties; }
 
 private:
-	bool bDisabledAtRuntime = false;
+	bool  bDisabledAtRuntime = false;
+	float TickAccumulator    = 0.f; // throttles JS pushes to CEF frame rate
 
 	UPROPERTY()
 	USwuiView* View = nullptr;

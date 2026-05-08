@@ -40,7 +40,15 @@ void USwuiView::Init()
 		nullptr,
 		nullptr);
 
-	Browser->GetHost()->SetWindowlessFrameRate(60);
+	// Use engine max FPS if set; otherwise pass a high ceiling (300) so CEF
+	// self-limits to whatever the OS/driver actually supports rather than
+	// being artificially capped by us.
+	int32 TargetFPS = 300;
+	if (GEngine && GEngine->GetMaxFPS() > 0)
+		TargetFPS = FMath::RoundToInt(GEngine->GetMaxFPS());
+
+	Browser->GetHost()->SetWindowlessFrameRate(TargetFPS);
+	WindowlessFrameRate = TargetFPS;
 
 	CefData->Client = Client;
 	CefData->Browser = Browser;

@@ -345,7 +345,13 @@ void USwuiSubsystem::Tick(float DeltaTime)
 {
 	if (!View || ObservedProperties.Num() == 0) return;
 
-	FString Script = TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});");
+	// Throttle JS pushes to the CEF windowless frame rate (avoid hammering the browser).
+	const int32 CefFPS  = View->GetWindowlessFrameRate();
+	const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
+	TickAccumulator += DeltaTime;
+	if (TickAccumulator < MinInterval) return;
+	TickAccumulator = 0.f;
+FString Script = TEXT("(function(){var s=(window.__SWUI__=window.__SWUI__||{state:{},events:{}});");
 	bool bAny = false;
 
 	for (int32 i = ObservedProperties.Num() - 1; i >= 0; --i)
