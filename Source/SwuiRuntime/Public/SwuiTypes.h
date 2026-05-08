@@ -22,16 +22,25 @@ struct FSwuiInstanceSettings
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
 };
 
-// Holds a single region + its tightly-packed pixel data for one RHIUpdateTexture2D call.
-// SrcX/SrcY in Region = destination in the texture. SrcPitch = Region.Width * 4 (tight).
-struct FSwuiRectUpload
+// Descriptor for one dirty rect within a shared packed pixel buffer.
+// SrcX/SrcY in Region are always 0 — data starts at SrcOffsetBytes in the shared buffer.
+struct FSwuiPackedRectDesc
 {
-	FUpdateTextureRegion2D Region;
-	uint32                 SrcPitch; // bytes per source row (tight = Width*4)
-	TArray<uint8>          SrcData;  // row-major pixels, Region.Height rows × SrcPitch bytes
+	FUpdateTextureRegion2D Region;    // DestX/DestY = texture destination; SrcX=SrcY=0
+	uint32 SrcPitch       = 0;        // tight row stride = Width * 4
+	int32  SrcOffsetBytes = 0;        // byte offset into FSwuiPaintUploadData::PackedPixels
 };
 
-// Legacy band-path struct kept for the band upload strategy.
+// Single-allocation upload payload for the per-rect path.
+// All rects are packed sequentially into one PackedPixels buffer — no per-rect heap alloc.
+struct FSwuiPaintUploadData
+{
+	FTextureResource*           Texture2DResource = nullptr;
+	TArray<uint8>               PackedPixels;  // all rect data end-to-end
+	TArray<FSwuiPackedRectDesc> Rects;
+};
+
+// Legacy band-path upload payload.
 struct FUpdateTextureRegionsData
 {
 	FTextureResource*         Texture2DResource;
@@ -40,13 +49,6 @@ struct FUpdateTextureRegionsData
 	uint32                    SrcPitch;
 	uint32                    SrcBpp;
 	TArray<uint8>             SrcData;
-};
-
-// Render-command payload for the per-rect upload path.
-struct FSwuiPerRectUploadData
-{
-	FTextureResource*           Texture2DResource;
-	TArray<FSwuiRectUpload>     Rects;
 };
 
 class ISwuiRenderTarget

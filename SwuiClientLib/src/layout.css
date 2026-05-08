@@ -83,24 +83,28 @@
   position: absolute;
   top: var(--swui-gap);
   left: var(--swui-gap);
+  contain: layout paint style;
 }
 
 .corner-tr {
   position: absolute;
   top: var(--swui-gap);
   right: var(--swui-gap);
+  contain: layout paint style;
 }
 
 .corner-bl {
   position: absolute;
   bottom: var(--swui-gap);
   left: var(--swui-gap);
+  contain: layout paint style;
 }
 
 .corner-br {
   position: absolute;
   bottom: var(--swui-gap);
   right: var(--swui-gap);
+  contain: layout paint style;
 }
 
 /* ── Full edges (flush, span entire side) ──────────────────────────────────── */

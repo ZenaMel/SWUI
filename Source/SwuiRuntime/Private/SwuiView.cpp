@@ -265,39 +265,50 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		// Stage gate 3 (per-rect path): skip pixel copy into upload buffers.
 		if (InstanceSettings.bSkipPaintMemcpy || InstanceSettings.bFreezeTexture) { FMemory::Free(Regions); return; }
 
-		FSwuiPerRectUploadData* UploadData = new FSwuiPerRectUploadData;
-		UploadData->Texture2DResource = (FTextureResource*)Texture->GetResource();
+		// ---- Single-allocation packing ----
+		// Pass 1: compute total bytes needed so we do ONE SetNumUninitialized.
+		int32 TotalBytes = 0;
+		for (int32 i = 0; i < RegionCount; ++i)
+		{
+			if (Regions[i].Width == 0 || Regions[i].Height == 0) continue;
+			TotalBytes += (int32)Regions[i].Width * 4 * (int32)Regions[i].Height;
+		}
 
+		FSwuiPaintUploadData* UploadData = new FSwuiPaintUploadData;
+		UploadData->Texture2DResource = (FTextureResource*)Texture->GetResource();
+		UploadData->PackedPixels.SetNumUninitialized(TotalBytes);
+		UploadData->Rects.Reserve(ValidRectCount);
+
+		// Pass 2: fill descriptors and pack pixels into the shared buffer.
+		uint8* WriteCursor = UploadData->PackedPixels.GetData();
 		for (int32 i = 0; i < RegionCount; ++i)
 		{
 			if (Regions[i].Width == 0 || Regions[i].Height == 0) continue;
 
 			const int32 RectW      = (int32)Regions[i].Width;
 			const int32 RectH      = (int32)Regions[i].Height;
-			const int32 RectY      = (int32)Regions[i].SrcY;
 			const int32 TightPitch = RectW * 4;
 
-			FSwuiRectUpload& Slot = UploadData->Rects.AddDefaulted_GetRef();
-			// Dest in texture
-			Slot.Region.DestX  = Regions[i].DestX;
-			Slot.Region.DestY  = Regions[i].DestY;
-			// Source starts at (0,0) within our tight buffer
-			Slot.Region.SrcX   = 0;
-			Slot.Region.SrcY   = 0;
-			Slot.Region.Width  = (uint32)RectW;
-			Slot.Region.Height = (uint32)RectH;
-			Slot.SrcPitch      = (uint32)TightPitch;
-			Slot.SrcData.SetNumUninitialized((int64)TightPitch * RectH);
+			FSwuiPackedRectDesc& Desc = UploadData->Rects.AddDefaulted_GetRef();
+			Desc.Region.DestX  = Regions[i].DestX;
+			Desc.Region.DestY  = Regions[i].DestY;
+			Desc.Region.SrcX   = 0;
+			Desc.Region.SrcY   = 0;
+			Desc.Region.Width  = (uint32)RectW;
+			Desc.Region.Height = (uint32)RectH;
+			Desc.SrcPitch      = (uint32)TightPitch;
+			Desc.SrcOffsetBytes = (int32)(WriteCursor - UploadData->PackedPixels.GetData());
 
-			// Copy row-by-row from the full-width CEF buffer into the tight buffer.
-			const uint8* Src = (const uint8*)Buffer + (int64)RectY * FullPitch + (int64)Regions[i].SrcX * 4;
-			uint8*       Dst = Slot.SrcData.GetData();
+			// Row-by-row copy: source strides FullPitch, dest strides TightPitch.
+			const uint8* Src = (const uint8*)Buffer + (int64)Regions[i].SrcY * FullPitch + (int64)Regions[i].SrcX * 4;
+			uint8*       Dst = WriteCursor;
 			for (int32 Row = 0; Row < RectH; ++Row)
 			{
 				FPlatformMemory::Memcpy(Dst, Src, TightPitch);
 				Src += FullPitch;
 				Dst += TightPitch;
 			}
+			WriteCursor += (int64)TightPitch * RectH;
 
 			UploadedAreaThisPaint += (int64)RectW * RectH;
 		}
@@ -310,13 +321,13 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		if (bVerbose)
 		{
 			UE_LOG(LogSwuiRuntime, Verbose,
-				TEXT("[SwuiPaint][frame] rects=%d valid=%d strategy=per-rect(tight) dirtyPx=%lld uploadPx=%lld ratio=%.2f memcpy=%.3fms"),
+				TEXT("[SwuiPaint][frame] rects=%d valid=%d strategy=per-rect(packed) dirtyPx=%lld uploadPx=%lld ratio=%.2f memcpy=%.3fms"),
 				RegionCount, ValidRectCount, DirtyAreaThisPaint, UploadedAreaThisPaint,
 				DirtyAreaThisPaint > 0 ? (float)UploadedAreaThisPaint / (float)DirtyAreaThisPaint : 0.f,
 				McpyUs / 1000.f);
 		}
 
-		FMemory::Free(Regions); // no longer needed — Regions[] was only used to build UploadData
+		FMemory::Free(Regions);
 
 		const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
 			|| InstanceSettings.bSkipTextureUpload
@@ -327,9 +338,11 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			ENQUEUE_RENDER_COMMAND(UpdateSwuiViewPerRect)(
 				[UploadData](FRHICommandList& CommandList)
 				{
-					for (FSwuiRectUpload& R : UploadData->Rects)
+					FRHITexture* Tex = UploadData->Texture2DResource->TextureRHI.GetReference();
+					const uint8* Base  = UploadData->PackedPixels.GetData();
+					for (const FSwuiPackedRectDesc& R : UploadData->Rects)
 					{
-						RHIUpdateTexture2D(UploadData->Texture2DResource->TextureRHI->GetTexture2D(), 0, R.Region, R.SrcPitch, R.SrcData.GetData());
+						RHIUpdateTexture2D(Tex, 0, R.Region, R.SrcPitch, Base + R.SrcOffsetBytes);
 					}
 					delete UploadData;
 				});
@@ -397,7 +410,7 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 					for (uint32 Idx = 0; Idx < RegionData->NumRegions; ++Idx)
 					{
 						if (RegionData->Regions[Idx].Width == 0 || RegionData->Regions[Idx].Height == 0) continue;
-						RHIUpdateTexture2D(RegionData->Texture2DResource->TextureRHI->GetTexture2D(), 0, RegionData->Regions[Idx], RegionData->SrcPitch, RegionData->SrcData.GetData());
+						RHIUpdateTexture2D(RegionData->Texture2DResource->TextureRHI.GetReference(), 0, RegionData->Regions[Idx], RegionData->SrcPitch, RegionData->SrcData.GetData());
 					}
 					FMemory::Free(RegionData->Regions);
 					delete RegionData;
