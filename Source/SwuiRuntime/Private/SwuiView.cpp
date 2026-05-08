@@ -43,6 +43,29 @@ struct FSwuiViewCefData
 	CefRefPtr<CefBrowser> Browser;
 };
 
+// ---------------------------------------------------------------------------
+// CefTask subclass for the dirty-rect overlay JS push.
+// Avoids base::BindOnce lambda → no C4191 reinterpret_cast warning.
+// ---------------------------------------------------------------------------
+class FSwuiOverlayPushTask : public CefTask
+{
+public:
+	FSwuiOverlayPushTask(CefRefPtr<CefBrowser> InBrowser, std::string InScript)
+		: Browser(InBrowser), Script(MoveTemp(InScript)) {}
+
+	void Execute() override
+	{
+		if (!Browser) return;
+		CefRefPtr<CefFrame> Frame = Browser->GetMainFrame();
+		if (Frame) Frame->ExecuteJavaScript(CefString(Script), Frame->GetURL(), 0);
+	}
+
+private:
+	CefRefPtr<CefBrowser> Browser;
+	std::string Script;
+	IMPLEMENT_REFCOUNTING(FSwuiOverlayPushTask);
+};
+
 USwuiView::USwuiView()
 {
 	Texture = nullptr;
@@ -211,6 +234,16 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		if ((int32)RectArea > Stat_LargestDirtyRect) Stat_LargestDirtyRect = (int32)RectArea;
 	}
 	Stat_DirtyPixels += DirtyAreaThisPaint;
+
+	// Snapshot valid dirty rects for the overlay push (captured before any FMemory::Free).
+	// Zero-size rects are excluded. Only allocated when overlay is active.
+	TArray<FUpdateTextureRegion2D> OverlayRects;
+	if (InstanceSettings.bShowDirtyRectOverlay)
+	{
+		for (int32 i = 0; i < RegionCount; ++i)
+			if (Regions[i].Width > 0 && Regions[i].Height > 0)
+				OverlayRects.Add(Regions[i]);
+	}
 
 	// Stage gate 2: skip rect strategy, memcpy, and upload.
 	if (InstanceSettings.bSkipDirtyRectStrategy) { FMemory::Free(Regions); return; }
@@ -443,6 +476,54 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		Stat_MemcpyMaxUs      = 0;
 		Stat_LargestDirtyRect = 0;
 		Stat_LastLogTime      = Now;
+	}
+
+	// -----------------------------------------------------------------------
+	// Dirty-rect overlay push (~10 Hz, only when bShowDirtyRectOverlay is set)
+	// NOTE: The overlay is rendered inside the same CEF surface, so it generates
+	// its own dirty rects. Use logs with the overlay disabled for final measurements.
+	// -----------------------------------------------------------------------
+	if (InstanceSettings.bShowDirtyRectOverlay && (Now - Stat_OverlayLastPushTime >= 0.1))
+	{
+		Stat_OverlayLastPushTime = Now;
+
+		// Rates based on the current accumulation window (capped to 1 s to avoid
+		// huge numbers on the very first push before the log timer fires).
+		const float Elapsed       = FMath::Clamp((float)(Now - (Stat_LastLogTime - 1.0)), 0.001f, 1.0f);
+		const int64 DirtyPxRate   = Elapsed > 0.f ? (int64)(Stat_DirtyPixels    / Elapsed) : 0;
+		const int64 UploadPxRate  = Elapsed > 0.f ? (int64)(Stat_UploadedPixels / Elapsed) : 0;
+		const float MemcpyAvgMs   = Stat_Paints > 0 ? float(Stat_MemcpyUs) / Stat_Paints / 1000.f : 0.f;
+		const float MemcpyMaxMs   = float(Stat_MemcpyMaxUs) / 1000.f;
+		const float BandRatio     = Stat_DirtyPixels > 0 ? float(Stat_UploadedPixels) / float(Stat_DirtyPixels) : 0.f;
+
+		// Build rects JSON array
+		FString RectsJson;
+		RectsJson.Reserve(OverlayRects.Num() * 52 + 2);
+		RectsJson.AppendChar('[');
+		for (int32 i = 0; i < OverlayRects.Num(); ++i)
+		{
+			const FUpdateTextureRegion2D& R = OverlayRects[i];
+			if (i > 0) RectsJson.AppendChar(',');
+			RectsJson += FString::Printf(
+				TEXT("{\"x\":%u,\"y\":%u,\"w\":%u,\"h\":%u,\"area\":%lld}"),
+				R.DestX, R.DestY, R.Width, R.Height, (int64)R.Width * R.Height);
+		}
+		RectsJson.AppendChar(']');
+
+		const FString Script = FString::Printf(
+			TEXT("if(window.__SWUI_DEBUG_RECTS__)window.__SWUI_DEBUG_RECTS__("
+				 "{\"texW\":%d,\"texH\":%d,\"rects\":%s,"
+				 "\"stats\":{\"largestRect\":%d,\"dirtyPxS\":%lld,\"uploadedPxS\":%lld,"
+				 "\"memcpyAvgMs\":%.3f,\"memcpyMaxMs\":%.3f,\"bandRatio\":%.2f}});"),
+			InWidth, InHeight, *RectsJson,
+			Stat_LargestDirtyRect, DirtyPxRate, UploadPxRate,
+			MemcpyAvgMs, MemcpyMaxMs, BandRatio);
+
+		if (CefData && CefData->Browser)
+		{
+			const std::string StdScript = TCHAR_TO_UTF8(*Script);
+			CefPostTask(TID_UI, new FSwuiOverlayPushTask(CefData->Browser, StdScript));
+		}
 	}
 }
 

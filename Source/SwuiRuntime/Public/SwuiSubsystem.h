@@ -57,6 +57,10 @@ public:
 
 	void ShutdownRenderer();
 
+	/** Push updated per-instance settings to the live view without restarting.
+	 *  Call from USwui::PostEditChangeProperty to apply Details panel changes during PIE. */
+	void UpdateInstanceSettings(const FSwuiInstanceSettings& NewSettings);
+
 	/** Immediately shuts down SWUI rendering. Safe to call at BeginPlay on any actor.
 	 *  Prevents any further InitRenderer calls for the lifetime of this game instance. */
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI|Debug")

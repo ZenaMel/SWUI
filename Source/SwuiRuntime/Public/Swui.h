@@ -141,6 +141,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
 	bool bHideDrawComponent = false;
 
+	/** Push dirty-rect and paint-stats data to window.__SWUI_DEBUG_RECTS__ in the browser at ~10 Hz.
+	 *  Enables the in-browser colored overlay showing which areas CEF dirtied each frame.
+	 *  NOTE: the overlay itself adds its own paint cost. Use logs for final measurements. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bShowDirtyRectOverlay = false;
+
 	// Stop syncing all observed properties/events for a source object.
 	// Call from PlayerController's OnUnPossess, passing the old pawn.
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))
@@ -160,4 +166,10 @@ public:
 private:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+#if WITH_EDITOR
+	/** Push updated settings to the running view when a property is changed
+	 *  in the Details panel during PIE — no restart required. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 };

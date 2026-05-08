@@ -75,6 +75,7 @@ private:
 	int64  Stat_MemcpyMaxUs     = 0;   // worst-case single Memcpy this second
 	int32  Stat_LargestDirtyRect = 0;  // largest single dirty rect area (px) this second
 	double Stat_LastLogTime     = 0.0;
+	double Stat_OverlayLastPushTime = 0.0; // throttle for dirty-rect overlay pushes (~10 Hz)
 
 	void ResetTexture();
 	void DestroyTexture();

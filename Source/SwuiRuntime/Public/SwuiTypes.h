@@ -20,6 +20,7 @@ struct FSwuiInstanceSettings
 	bool  bFreezeTexture            = false; // keep last texture, skip new uploads
 	bool  bPauseBrowserUpdates      = false; // skip JS state push and runtime tick dispatch
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
+	bool  bShowDirtyRectOverlay     = false; // push dirty rects + stats to __SWUI_DEBUG_RECTS__ at ~10 Hz
 };
 
 // Descriptor for one dirty rect within a shared packed pixel buffer.

@@ -176,6 +176,27 @@ void USwuiSubsystem::ShutdownRenderer()
 	View   = nullptr;
 }
 
+void USwuiSubsystem::UpdateInstanceSettings(const FSwuiInstanceSettings& NewSettings)
+{
+	if (!View) return;
+	View->InstanceSettings = NewSettings;
+
+	// Re-apply CVars so flags backed by CVars take effect immediately.
+	// (The CVars are static in SwuiView.cpp; reach them via the console manager.)
+	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
+	const bool bWantVerbose  = NewSettings.bVerbosePaintLog || (Settings && Settings->bVerbosePaintLog);
+	const bool bWantNoUpload = NewSettings.bNoTextureUpload || (Settings && Settings->bNoTextureUpload);
+	if (IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("swui.prof.VerbosePaint")))
+		V->Set(bWantVerbose  ? 1 : 0, ECVF_SetByCode);
+	if (IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("swui.prof.NoTextureUpload")))
+		V->Set(bWantNoUpload ? 1 : 0, ECVF_SetByCode);
+
+	if (NewSettings.bHideDrawComponent && Widget)
+		Widget->SetVisibility(ESlateVisibility::Collapsed);
+	else if (!NewSettings.bHideDrawComponent && Widget)
+		Widget->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
 void USwuiSubsystem::SetWidgetVisible(bool bVisible)
 {
 	if (Widget)

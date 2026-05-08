@@ -90,6 +90,7 @@ void USwui::BeginPlay()
 	InstSettings.bFreezeTexture            = bFreezeTexture;
 	InstSettings.bPauseBrowserUpdates      = bPauseBrowserUpdates;
 	InstSettings.bHideDrawComponent        = bHideDrawComponent;
+	InstSettings.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
 
 	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
@@ -128,4 +129,35 @@ void USwui::SetHUDVisible(bool bVisible)
 		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
 			Sub->SetWidgetVisible(bVisible);
 }
+
+#if WITH_EDITOR
+void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	// Propagate any property change to the live view during PIE without restarting.
+	UWorld* World = GetWorld();
+	if (!World || !World->IsPlayInEditor()) return;
+	UGameInstance* GI = World->GetGameInstance();
+	if (!GI) return;
+	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
+	if (!Sub) return;
+
+	FSwuiInstanceSettings Rebuilt;
+	Rebuilt.OverrideFrameRate         = OverrideFrameRate;
+	Rebuilt.OverrideBandOvercopyRatio = OverrideBandOvercopyRatio;
+	Rebuilt.OverrideMaxPerRectUploads = OverrideMaxPerRectUploads;
+	Rebuilt.bVerbosePaintLog          = bVerbosePaintLog;
+	Rebuilt.bNoTextureUpload          = bNoTextureUpload;
+	Rebuilt.bSkipOnPaintProcessing    = bSkipOnPaintProcessing;
+	Rebuilt.bSkipDirtyRectStrategy    = bSkipDirtyRectStrategy;
+	Rebuilt.bSkipPaintMemcpy          = bSkipPaintMemcpy;
+	Rebuilt.bSkipTextureUpload        = bSkipTextureUpload;
+	Rebuilt.bFreezeTexture            = bFreezeTexture;
+	Rebuilt.bPauseBrowserUpdates      = bPauseBrowserUpdates;
+	Rebuilt.bHideDrawComponent        = bHideDrawComponent;
+	Rebuilt.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
+	Sub->UpdateInstanceSettings(Rebuilt);
+}
+#endif
 
