@@ -1,4 +1,5 @@
 #include "SwuiManager.h"
+#include "SwuiSettings.h"
 
 SwuiManager::SwuiManager()
 {
@@ -18,10 +19,11 @@ void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	/////////////////
 
 	CommandLine->AppendSwitch("off-screen-rendering-enabled");
-	// Per-browser SetWindowlessFrameRate() takes precedence, but this sets the
-	// process-wide scheduler ceiling. 300 lets high-refresh views (144/165 Hz)
-	// work without being throttled at the CEF process level.
-	CommandLine->AppendSwitchWithValue("off-screen-frame-rate", "300");
+	// Process-wide scheduler ceiling from Project Settings.
+	// Per-browser SetWindowlessFrameRate() still takes precedence per view.
+	const USwuiSettings* SwuiCfg = GetDefault<USwuiSettings>();
+	const int32 OsrRate = (SwuiCfg && SwuiCfg->CefOffscreenFrameRate > 0) ? SwuiCfg->CefOffscreenFrameRate : 300;
+	CommandLine->AppendSwitchWithValue("off-screen-frame-rate", TCHAR_TO_UTF8(*FString::FromInt(OsrRate)));
 	CommandLine->AppendSwitch("enable-font-antialiasing");
 	CommandLine->AppendSwitch("enable-media-stream");
 
