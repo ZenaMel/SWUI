@@ -3,6 +3,7 @@
 #include "Swui.h"
 #include "SwuiView.h"
 #include "ISwuiRuntime.h"
+#include "GenericPlatform/GenericApplication.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Image.h"
@@ -86,13 +87,28 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	if (!World) return;
 
 	int32 FinalWidth = Width, FinalHeight = Height;
-	if (bIsHUD && GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
+	if (bIsHUD)
 	{
-		FIntPoint RenderSize = GEngine->GameViewport->Viewport->GetSizeXY();
-		if (RenderSize.X > 0 && RenderSize.Y > 0)
+		// 1. Try the live viewport (valid once the first frame has rendered)
+		if (GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
 		{
-			FinalWidth  = RenderSize.X;
-			FinalHeight = RenderSize.Y;
+			FIntPoint RenderSize = GEngine->GameViewport->Viewport->GetSizeXY();
+			if (RenderSize.X > 0 && RenderSize.Y > 0)
+			{
+				FinalWidth  = RenderSize.X;
+				FinalHeight = RenderSize.Y;
+			}
+		}
+		// 2. Viewport not ready yet (BeginPlay before first render) — ask the OS
+		if (FinalWidth <= 0 || FinalHeight <= 0 || (FinalWidth == 1280 && FinalHeight == 720))
+		{
+			FDisplayMetrics Metrics;
+			FDisplayMetrics::RebuildDisplayMetrics(Metrics);
+			if (Metrics.PrimaryDisplayWidth > 0 && Metrics.PrimaryDisplayHeight > 0)
+			{
+				FinalWidth  = Metrics.PrimaryDisplayWidth;
+				FinalHeight = Metrics.PrimaryDisplayHeight;
+			}
 		}
 	}
 
