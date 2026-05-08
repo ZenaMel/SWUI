@@ -3,6 +3,8 @@
 #include "SwuiSettings.h"
 #include "Swui.h"
 #include "SwuiView.h"
+#include "SwuiCVars.h"
+#include "SwuiCVarHelpers.h"
 #include "ISwuiRuntime.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Blueprint/UserWidget.h"
@@ -48,16 +50,6 @@ static FString Swui_SerializeProperty(FProperty* Prop, void* Container)
 	if (const FNameProperty* P = CastField<FNameProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
 	if (const FTextProperty* P = CastField<FTextProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
 	return FString();
-}
-
-static bool SwuiCVarBool(int32 Override, bool DefaultValue)
-{
-	return Override < 0 ? DefaultValue : Override != 0;
-}
-
-static int32 SwuiCVarInt(int32 Override, int32 DefaultValue)
-{
-	return Override < 0 ? DefaultValue : Override;
 }
 
 static int32 SwuiGetIntCVar(const TCHAR* Name, int32 DefaultValue = -1)
@@ -203,14 +195,14 @@ void USwuiSubsystem::UpdateInstanceSettings(const FSwuiInstanceSettings& NewSett
 	View->InstanceSettings = NewSettings;
 
 	// Re-apply CVars so flags backed by CVars take effect immediately.
-	// (The CVars are static in SwuiView.cpp; reach them via the console manager.)
+	// CVars are centrally owned in SwuiCVars.cpp.
 	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
 	const bool bWantVerbose  = NewSettings.bVerbosePaintLog || (Settings && Settings->bVerbosePaintLog);
 	const bool bWantNoUpload = NewSettings.bNoTextureUpload || (Settings && Settings->bNoTextureUpload);
-	if (IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("swui.prof.VerbosePaint")))
-		V->Set(bWantVerbose  ? 1 : 0, ECVF_SetByCode);
-	if (IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(TEXT("swui.prof.NoTextureUpload")))
-		V->Set(bWantNoUpload ? 1 : 0, ECVF_SetByCode);
+	if (IConsoleVariable* VerbosePaintVar = CVarSwuiVerbosePaint.operator->())
+		VerbosePaintVar->Set(bWantVerbose ? 1 : 0, ECVF_SetByCode);
+	if (IConsoleVariable* NoTextureUploadVar = CVarSwuiNoTextureUpload.operator->())
+		NoTextureUploadVar->Set(bWantNoUpload ? 1 : 0, ECVF_SetByCode);
 
 	if (NewSettings.bHideDrawComponent && Widget)
 		Widget->SetVisibility(ESlateVisibility::Collapsed);

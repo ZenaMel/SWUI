@@ -1,0 +1,7 @@
+build project again fully 
+
+F:\GameDev\UE_AngelScript\Engine\Build\BatchFiles\Build.bat ADAEditor Win64 Development -Project="F:\GameDev\ADA\ADA.uproject" -WaitMutex
+
+start project 
+
+F:\GameDev\UE_AngelScript\Engine\Binaries\Win64\UnrealEditor.exe "F:\GameDev\ADA\ADA.uproject"

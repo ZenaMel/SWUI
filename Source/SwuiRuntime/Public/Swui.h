@@ -158,7 +158,7 @@ public:
 	bool bFlushHudStateBeforeBrowserFrame = true;
 
 	/** Browser frame cap for HUD mode. If UE runs above this, frames are paced to this cap. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD Frame Lock", meta=(EditCondition="bIsHUD", ClampMin="1", ClampMax="300"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance", meta=(EditCondition="bIsHUD", ClampMin="1", ClampMax="300"))
 	int32 MaxBrowserFramesPerSecond = 60;
 
 	// ---- Performance | Upload Strategy ------------------------------------
