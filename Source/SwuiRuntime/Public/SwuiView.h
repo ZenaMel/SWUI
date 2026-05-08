@@ -62,6 +62,16 @@ private:
 
 	int32 WindowlessFrameRate = 300;
 
+	// Paint diagnostics — all written only from CEF's renderer thread, safe without atomics.
+	int32  Stat_Paints          = 0;
+	int32  Stat_DirtyRects      = 0;
+	int64  Stat_DirtyPixels     = 0;   // sum of each dirty rect's w*h
+	int64  Stat_UploadedPixels  = 0;   // actual bytes/4 copied (band or per-rect row slices)
+	int64  Stat_MemcpyUs        = 0;   // accumulated Memcpy time in microseconds
+	int64  Stat_MemcpyMaxUs     = 0;   // worst-case single Memcpy this second
+	int32  Stat_LargestDirtyRect = 0;  // largest single dirty rect area (px) this second
+	double Stat_LastLogTime     = 0.0;
+
 	void ResetTexture();
 	void DestroyTexture();
 	void ResetMatInstance();

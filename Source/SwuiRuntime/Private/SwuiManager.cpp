@@ -18,7 +18,10 @@ void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 	/////////////////
 
 	CommandLine->AppendSwitch("off-screen-rendering-enabled");
-	CommandLine->AppendSwitchWithValue("off-screen-frame-rate", "60");
+	// Per-browser SetWindowlessFrameRate() takes precedence, but this sets the
+	// process-wide scheduler ceiling. 300 lets high-refresh views (144/165 Hz)
+	// work without being throttled at the CEF process level.
+	CommandLine->AppendSwitchWithValue("off-screen-frame-rate", "300");
 	CommandLine->AppendSwitch("enable-font-antialiasing");
 	CommandLine->AppendSwitch("enable-media-stream");
 
