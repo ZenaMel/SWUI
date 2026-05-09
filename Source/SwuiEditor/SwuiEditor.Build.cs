@@ -23,6 +23,7 @@ public class SwuiEditor : ModuleRules
 			"Kismet",
 			// Class picker widget in Details panel
 			"ClassViewer",
+			"GameplayTags",
 		});
 
 		PrivateIncludePaths.Add("SwuiEditor/Private");

@@ -11,7 +11,9 @@
 #include "Misc/ConfigCacheIni.h"
 
 #include "Swui.h"
+#include "SwuiNavigation.h"
 #include "SwuiDetails.h"
+#include "SwuiNavigationDetails.h"
 #include "SwuiTSGenerator.h"
 #include "K2Node_SwuiObserve.h"
 #include "K2Node_SwuiObserveEvent.h"
@@ -41,6 +43,10 @@ public:
 			USwui::StaticClass()->GetFName(),
 			FOnGetDetailCustomizationInstance::CreateStatic(&FSwuiDetails::MakeInstance));
 
+		PropertyModule.RegisterCustomClassLayout(
+			USwuiNavigation::StaticClass()->GetFName(),
+			FOnGetDetailCustomizationInstance::CreateStatic(&FSwuiNavigationDetails::MakeInstance));
+
 		UToolMenus::RegisterStartupCallback(
 			FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FSwuiEditorModule::RegisterMenus));
 
@@ -65,6 +71,7 @@ public:
 			FPropertyEditorModule& PropertyModule =
 				FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 			PropertyModule.UnregisterCustomClassLayout(USwui::StaticClass()->GetFName());
+			PropertyModule.UnregisterCustomClassLayout(USwuiNavigation::StaticClass()->GetFName());
 		}
 	}
 
@@ -138,7 +145,7 @@ private:
 			}
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("SWUI: Refreshed JS bindings for %d SwuiBridge component(s)."), Count);
+		UE_LOG(LogTemp, Log, TEXT("SWUI: Refreshed JS bindings for %d USwui component(s)."), Count);
 	}
 };
 

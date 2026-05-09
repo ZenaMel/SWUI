@@ -2,6 +2,7 @@
 
 #include "Components/ActorComponent.h"
 #include "InputCoreTypes.h"
+#include "GameplayTagContainer.h"
 #include "SwuiTypes.h"
 #include "SwuiNavigation.generated.h"
 
@@ -11,21 +12,80 @@ class USwui;
 // Delegates — Blueprint-assignable events for side effects.
 // ---------------------------------------------------------------------------
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSwuiOnNavigationAction, FName, ActionName, const FString&, JsonPayload);
+/** Fired for every navigation event (generic). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSwuiNavigationEventDelegate, FGameplayTag, Event, const FString&, JsonPayload);
+/** Fired for directional navigation. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnNavigate, ESwuiNavDirection, Direction);
+/** Fired for simple actions (confirm/cancel/next tab/previous tab). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FSwuiOnSimpleAction);
+/** Fired for pointer movement. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnPointerMove, FVector2D, ScreenPosition);
+/** Fired for pointer button transitions. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnPointerButton, ESwuiPointerButton, Button);
+/** Fired for pointer wheel input. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnPointerWheel, float, Delta);
+/** Fired for keyboard key input. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnKeyAction, FKey, Key);
+/** Fired for text input. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnTextInput, const FString&, Text);
+
+// ---------------------------------------------------------------------------
+// Built-in SWUI Gameplay Tags — resolved once at startup.
+// ---------------------------------------------------------------------------
+struct SWUIRUNTIME_API FSwuiNavTags
+{
+	// Navigation
+	FGameplayTag Confirm;
+	FGameplayTag Cancel;
+	FGameplayTag Up;
+	FGameplayTag Down;
+	FGameplayTag Left;
+	FGameplayTag Right;
+	FGameplayTag NextTab;
+	FGameplayTag PreviousTab;
+
+	// Menu
+	FGameplayTag MenuPauseOpen;
+	FGameplayTag MenuPauseClose;
+	FGameplayTag MenuSettingsOpen;
+	FGameplayTag MenuSettingsBack;
+	FGameplayTag MenuQuit;
+
+	// High-level pointer
+	FGameplayTag PointerHover;
+	FGameplayTag PointerLeftClick;
+	FGameplayTag PointerRightClick;
+	FGameplayTag PointerMiddleClick;
+	FGameplayTag PointerScrollUp;
+	FGameplayTag PointerScrollDown;
+
+	// Low-level pointer
+	FGameplayTag PointerMove;
+	FGameplayTag PointerLeftDown;
+	FGameplayTag PointerLeftUp;
+	FGameplayTag PointerRightDown;
+	FGameplayTag PointerRightUp;
+	FGameplayTag PointerMiddleDown;
+	FGameplayTag PointerMiddleUp;
+	FGameplayTag PointerWheel;
+
+	static const FSwuiNavTags& Get();
+
+private:
+	void Initialize();
+	static FSwuiNavTags Instance;
+	static bool bInitialized;
+};
 
 /**
  * USwuiNavigation — Central API for routing menu/navigation input into SWUI.
  *
- * Add to a PlayerController alongside USwui. Provides Blueprint-callable
- * navigation methods, Blueprint event callbacks for native side effects
- * (sounds, animations, state), and automatic JS event forwarding.
+ * Add to a PlayerController alongside USwui. Automatically targets the
+ * sibling USwui component on the same owner. Navigation events use Gameplay
+ * Tags that map directly to JS event names (dot-separated).
+ *
+ * Event flow: Blueprint callback runs first and can consume the event.
+ * Unconsumed events forward to JS when Forward to JS is enabled.
  *
  * Input-system agnostic: call methods from Enhanced Input, legacy input,
  * custom C++, or Blueprint — whatever the game project uses.
@@ -38,120 +98,165 @@ class SWUIRUNTIME_API USwuiNavigation : public UActorComponent
 public:
 	USwuiNavigation();
 
-	// ---- Focus ----
+	// ---- Target Resolution ----
 
-	/** The USwui component receiving forwarded navigation input. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	USwui* FocusedSwui = nullptr;
-
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
-	void SetFocusedSwui(USwui* InSwui);
-
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
-	void ClearFocusedSwui();
-
-	UFUNCTION(BlueprintPure, Category="SWUI|Navigation")
-	USwui* GetFocusedSwui() const { return FocusedSwui; }
+	/** Returns the sibling USwui component on the same owner Actor. */
+	UFUNCTION(BlueprintPure, Category="SWUI|Navigation",
+		meta=(ToolTip="Returns the sibling USwui component on the same owner."))
+	USwui* GetTargetSwui() const;
 
 	// ---- Input Mode ----
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	/** Controls how player input is routed while this navigation component is active. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(ToolTip="Controls how player input is routed while this navigation component is active."))
 	ESwuiInputMode InputMode = ESwuiInputMode::HudOnly;
 
-	/** Show the mouse cursor when a USwui is focused and InputMode != HudOnly. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	/** Show the mouse cursor when InputMode is not HUD Only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(ToolTip="Show the mouse cursor when InputMode is not HUD Only."))
 	bool bShowCursorWhenFocused = true;
 
-	/** Auto-focus the first USwui found on the owner at BeginPlay. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	bool bFocusOnBeginPlay = false;
-
-	/** Cancel() also clears focus and restores input mode. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	/** Cancel also clears focus and restores game-only input mode. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(ToolTip="Cancel also clears focus and restores game-only input mode."))
 	bool bCloseOnEscape = false;
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Set and apply the input mode on the owning PlayerController."))
 	void SetInputMode(ESwuiInputMode Mode);
 
 	/** Apply the current InputMode to the owning PlayerController. */
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Apply the current InputMode to the owning PlayerController."))
 	void ApplyInputMode();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Show or hide the mouse cursor."))
 	void ShowCursor(bool bShow);
 
-	// ---- Dispatch ----
+	/** Restore game-only input mode and hide cursor. */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Restore game-only input mode and hide cursor."))
+	void RestoreGameInput();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	ESwuiNavigationDispatchOrder DispatchOrder = ESwuiNavigationDispatchOrder::BlueprintFirst;
+	// ---- Debug ----
 
-	/** Log every routed action for debugging. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation|Debug")
-	bool bLogNavigationActions = false;
+	/** Log every routed navigation event for debugging. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation|Debug",
+		meta=(ToolTip="Log every routed navigation event for debugging."))
+	bool bLogNavigationEvents = false;
 
-	// ---- Action Map ----
+	// ---- Navigation Events ----
 
-	/** Custom named navigation actions. Entries define JS event routing per action. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	TArray<FSwuiNavigationAction> NavigationActions;
+	/** Navigation events exposed by this component. Event names are Gameplay Tags
+	 *  and map directly to JS event names by default. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(DisplayName="Navigation Events",
+			ToolTip="Navigation events exposed by this component. Event names are Gameplay Tags and map directly to JS event names by default."))
+	TArray<FSwuiNavigationEvent> NavigationEvents;
 
-	// ---- Navigation API ----
+	// ---- Core Navigation API ----
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	/** Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled. */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled."))
+	void SendNavigationEvent(FGameplayTag Event);
+
+	/** Routes a named SWUI navigation event with a JSON payload. */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Routes a named SWUI navigation event with a JSON payload."))
+	void SendNavigationEventWithPayload(FGameplayTag Event, const FString& JsonPayload);
+
+	// ---- Convenience Navigation Wrappers ----
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send directional navigation event."))
 	void Navigate(ESwuiNavDirection Direction);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send confirm navigation event."))
 	void Confirm();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send cancel navigation event."))
 	void Cancel();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send next-tab navigation event."))
 	void NextTab();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send previous-tab navigation event."))
 	void PreviousTab();
 
-	// ---- Custom Actions ----
+	// ---- High-Level Pointer Convenience Wrappers ----
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
-	void TriggerAction(FName ActionName);
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Pointer hovered or focused a UI element."))
+	void Hover();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation")
-	void TriggerActionWithPayload(FName ActionName, const FString& JsonPayload);
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Primary click / select."))
+	void LeftClick();
 
-	// ---- Pointer Input ----
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Secondary click / context / back."))
+	void RightClick();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Middle mouse button click."))
+	void MiddleClick();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Scroll wheel up / list up."))
+	void ScrollUp();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Scroll wheel down / list down."))
+	void ScrollDown();
+
+	// ---- Low-Level Pointer Input ----
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Raw pointer movement with screen position payload."))
 	void PointerMove(FVector2D ScreenPosition);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Pointer button pressed."))
 	void PointerPress(ESwuiPointerButton Button);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Pointer button released."))
 	void PointerRelease(ESwuiPointerButton Button);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
+		meta=(ToolTip="Raw wheel delta event. Also emits scroll-up/scroll-down for nonzero deltas."))
 	void PointerWheel(float Delta);
 
 	// ---- Keyboard Input ----
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard",
+		meta=(ToolTip="Keyboard key pressed."))
 	void KeyDown(FKey Key);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard",
+		meta=(ToolTip="Keyboard key released."))
 	void KeyUp(FKey Key);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard")
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Keyboard",
+		meta=(ToolTip="Text character input."))
 	void TextInput(const FString& Text);
 
 	// ---- Blueprint Events (side effects: sounds, animations, state) ----
 
+	/** Fired for every navigation event. */
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
-	FSwuiOnNavigationAction OnNavigationAction;
+	FSwuiNavigationEventDelegate OnNavigationEvent;
 
+	/** Fired for every navigation event with payload. */
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
-	FSwuiOnNavigationAction OnNavigationActionWithPayload;
+	FSwuiNavigationEventDelegate OnNavigationEventWithPayload;
 
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
 	FSwuiOnNavigate OnNavigate;
@@ -190,13 +295,11 @@ public:
 	FSwuiOnTextInput OnTextInput;
 
 	// ---- Handled/Consumed Handlers ----
-	// Return true to consume the action (skip JS forwarding in BlueprintFirst mode).
+	// Return true to consume the event (skip JS forwarding).
 
-	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
-	bool HandleNavigationAction(FName ActionName, const FString& JsonPayload);
-
-	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
-	bool HandleNavigate(ESwuiNavDirection Direction);
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation",
+		meta=(ToolTip="Override to consume a navigation event. Return true to skip JS forwarding."))
+	bool HandleNavigationEvent(FGameplayTag Event, const FString& JsonPayload);
 
 	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
 	bool HandleConfirm();
@@ -205,23 +308,33 @@ public:
 	bool HandleCancel();
 
 	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleNavigate(ESwuiNavDirection Direction);
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
 	bool HandleNextTab();
 
 	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
 	bool HandlePreviousTab();
 
+#if WITH_EDITOR
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+#endif
+
 protected:
 	virtual void BeginPlay() override;
 
 private:
-	// JS forwarding helpers.
+	// JS forwarding — sends CustomEvent to the browser via the subsystem.
 	void ForwardToJs(const FString& JsEventName, const FString& DetailJson);
-	void DispatchBuiltIn(const FString& JsEventName, const FString& DetailJson,
-		TFunction<bool()> BlueprintHandler, const FString* GenericDetailJson = nullptr);
+
+	// Core dispatch: Blueprint first, then JS if unconsumed + enabled.
+	void DispatchEvent(FGameplayTag Event, const FString& JsonPayload,
+		TFunction<bool()> BlueprintHandler);
+
+	// Finds the FSwuiNavigationEvent config for a tag, or nullptr.
+	const FSwuiNavigationEvent* FindEventConfig(FGameplayTag Event) const;
 
 	static FString EscapeJsonString(const FString& Raw);
 	static const TCHAR* DirectionToString(ESwuiNavDirection Direction);
 	static const TCHAR* PointerButtonToString(ESwuiPointerButton Button);
-
-	const FSwuiNavigationAction* FindAction(FName ActionName) const;
 };

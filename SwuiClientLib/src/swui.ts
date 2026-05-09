@@ -10,19 +10,20 @@
  *   Swui.get(key)      — one-shot snapshot read.
  *   Swui.getAll()      — full state snapshot.
  *
- * Navigation API:
- *   Swui.onNavigation(fn)          — generic navigation events
- *   Swui.onAction(name, fn)        — specific named action
+ * Navigation API (dot-separated event names match Gameplay Tags):
+ *   Swui.onEvent(tagName, fn)      — any dot-named event (e.g. "swui.navigation.confirm")
  *   Swui.onNavigate(fn)            — directional navigation
  *   Swui.onConfirm(fn)             — confirm action
  *   Swui.onCancel(fn)              — cancel action
  *   Swui.onNextTab(fn)             — next tab
  *   Swui.onPreviousTab(fn)         — previous tab
- *   Swui.emitAction(name, payload?)— JS → Unreal action (if bridge exists)
- *   Swui.confirm()                 — emit confirm
- *   Swui.cancel()                  — emit cancel
- *   Swui.nextTab()                 — emit next tab
- *   Swui.previousTab()             — emit previous tab
+ *   Swui.onPointerMove(fn)         — pointer movement
+ *   Swui.onPointerPress(fn)        — pointer button pressed
+ *   Swui.onPointerRelease(fn)      — pointer button released
+ *   Swui.onPointerWheel(fn)        — pointer wheel delta
+ *   Swui.onKeyDown(fn)             — keyboard key pressed
+ *   Swui.onKeyUp(fn)               — keyboard key released
+ *   Swui.onTextInput(fn)           — text character input
  */
 
 // ── Internal types ──────────────────────────────────────────────────────────
@@ -102,18 +103,32 @@ export type SwuiNavDirection =
   | "Next"
   | "Previous";
 
-export interface SwuiNavigationEvent {
-  action: string;
-  payload?: unknown;
-  source?: string;
-}
-
 export interface SwuiNavigateEvent {
   direction: SwuiNavDirection;
-  source?: string;
 }
 
-// ── Navigation helpers ──────────────────────────────────────────────────────
+export interface SwuiPointerMoveEvent {
+  x: number;
+  y: number;
+}
+
+export interface SwuiPointerButtonEvent {
+  button: "Left" | "Right" | "Middle";
+}
+
+export interface SwuiWheelEvent {
+  delta: number;
+}
+
+export interface SwuiKeyEvent {
+  key: string;
+}
+
+export interface SwuiTextEvent {
+  text: string;
+}
+
+// ── Navigation helpers (dot-separated event names) ──────────────────────────
 
 /** Listen for a CustomEvent and return an unsubscribe function. */
 function _listenEvent<T>(eventName: string, fn: (detail: T) => void): Unsubscribe {
@@ -122,66 +137,85 @@ function _listenEvent<T>(eventName: string, fn: (detail: T) => void): Unsubscrib
   return () => window.removeEventListener(eventName, handler);
 }
 
-/** Subscribe to all navigation events (generic `swui:navigation`). */
-function onNavigation(fn: (event: SwuiNavigationEvent) => void): Unsubscribe {
-  return _listenEvent<SwuiNavigationEvent>("swui:navigation", fn);
+/** Subscribe to any dot-named navigation event by its full tag name. */
+function onEvent<T = unknown>(tagName: string, fn: (detail: T) => void): Unsubscribe {
+  return _listenEvent<T>(tagName, fn);
 }
 
-/** Subscribe to a specific named action from `swui:navigation`. */
-function onAction(actionName: string, fn: (event: SwuiNavigationEvent) => void): Unsubscribe {
-  return _listenEvent<SwuiNavigationEvent>("swui:navigation", (e) => {
-    if (e.action === actionName) fn(e);
-  });
-}
-
-/** Subscribe to directional navigation (`swui:navigate`). */
+/** Subscribe to directional navigation. */
 function onNavigate(fn: (event: SwuiNavigateEvent) => void): Unsubscribe {
-  return _listenEvent<SwuiNavigateEvent>("swui:navigate", fn);
+  // Direction-specific tags all have {direction} in detail.
+  // Listen to each direction tag individually.
+  const unsubs = [
+    _listenEvent<SwuiNavigateEvent>("swui.navigation.up", fn),
+    _listenEvent<SwuiNavigateEvent>("swui.navigation.down", fn),
+    _listenEvent<SwuiNavigateEvent>("swui.navigation.left", fn),
+    _listenEvent<SwuiNavigateEvent>("swui.navigation.right", fn),
+  ];
+  return () => unsubs.forEach(u => u());
 }
 
-/** Subscribe to confirm action (`swui:confirm`). */
-function onConfirm(fn: () => void): Unsubscribe {
-  return _listenEvent("swui:confirm", fn);
+/** Subscribe to confirm action. */
+function onConfirm(fn: (detail: unknown) => void): Unsubscribe {
+  return _listenEvent("swui.navigation.confirm", fn);
 }
 
-/** Subscribe to cancel action (`swui:cancel`). */
-function onCancel(fn: () => void): Unsubscribe {
-  return _listenEvent("swui:cancel", fn);
+/** Subscribe to cancel action. */
+function onCancel(fn: (detail: unknown) => void): Unsubscribe {
+  return _listenEvent("swui.navigation.cancel", fn);
 }
 
-/** Subscribe to next-tab action (`swui:next-tab`). */
-function onNextTab(fn: () => void): Unsubscribe {
-  return _listenEvent("swui:next-tab", fn);
+/** Subscribe to next-tab action. */
+function onNextTab(fn: (detail: unknown) => void): Unsubscribe {
+  return _listenEvent("swui.navigation.nextTab", fn);
 }
 
-/** Subscribe to previous-tab action (`swui:previous-tab`). */
-function onPreviousTab(fn: () => void): Unsubscribe {
-  return _listenEvent("swui:previous-tab", fn);
+/** Subscribe to previous-tab action. */
+function onPreviousTab(fn: (detail: unknown) => void): Unsubscribe {
+  return _listenEvent("swui.navigation.previousTab", fn);
 }
 
-// ── Emit helpers (JS → Unreal, if a bridge is available) ────────────────────
+// ── Pointer helpers ─────────────────────────────────────────────────────────
 
-/** Dispatch a CustomEvent that UE can observe (or other JS listeners). */
-function _emitEvent(eventName: string, detail?: unknown): void {
-  window.dispatchEvent(new CustomEvent(eventName, { detail }));
+function onPointerMove(fn: (event: SwuiPointerMoveEvent) => void): Unsubscribe {
+  return _listenEvent<SwuiPointerMoveEvent>("swui.pointer.move", fn);
 }
 
-/** Emit a named action. */
-function emitAction(actionName: string, payload?: unknown): void {
-  _emitEvent("swui:navigation", { action: actionName, payload, source: "SwuiClientLib" });
+function onPointerPress(fn: (event: SwuiPointerButtonEvent) => void): Unsubscribe {
+  const unsubs = [
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.leftDown", fn),
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.rightDown", fn),
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.middleDown", fn),
+  ];
+  return () => unsubs.forEach(u => u());
 }
 
-/** Emit confirm. */
-function confirm(): void { _emitEvent("swui:confirm", { source: "SwuiClientLib" }); }
+function onPointerRelease(fn: (event: SwuiPointerButtonEvent) => void): Unsubscribe {
+  const unsubs = [
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.leftUp", fn),
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.rightUp", fn),
+    _listenEvent<SwuiPointerButtonEvent>("swui.pointer.middleUp", fn),
+  ];
+  return () => unsubs.forEach(u => u());
+}
 
-/** Emit cancel. */
-function cancel(): void { _emitEvent("swui:cancel", { source: "SwuiClientLib" }); }
+function onPointerWheel(fn: (event: SwuiWheelEvent) => void): Unsubscribe {
+  return _listenEvent<SwuiWheelEvent>("swui.pointer.wheel", fn);
+}
 
-/** Emit next-tab. */
-function nextTab(): void { _emitEvent("swui:next-tab", { source: "SwuiClientLib" }); }
+// ── Keyboard helpers ────────────────────────────────────────────────────────
 
-/** Emit previous-tab. */
-function previousTab(): void { _emitEvent("swui:previous-tab", { source: "SwuiClientLib" }); }
+function onKeyDown(fn: (event: SwuiKeyEvent) => void): Unsubscribe {
+  return _listenEvent<SwuiKeyEvent>("swui.keyboard.keyDown", fn);
+}
+
+function onKeyUp(fn: (event: SwuiKeyEvent) => void): Unsubscribe {
+  return _listenEvent<SwuiKeyEvent>("swui.keyboard.keyUp", fn);
+}
+
+function onTextInput(fn: (event: SwuiTextEvent) => void): Unsubscribe {
+  return _listenEvent<SwuiTextEvent>("swui.keyboard.textInput", fn);
+}
 
 // ── Export ──────────────────────────────────────────────────────────────────
 
@@ -189,8 +223,10 @@ const Swui = {
   // State
   on, get, getAll,
   // Navigation — subscribe
-  onNavigation, onAction, onNavigate, onConfirm, onCancel, onNextTab, onPreviousTab,
-  // Navigation — emit
-  emitAction, confirm, cancel, nextTab, previousTab,
+  onEvent, onNavigate, onConfirm, onCancel, onNextTab, onPreviousTab,
+  // Pointer
+  onPointerMove, onPointerPress, onPointerRelease, onPointerWheel,
+  // Keyboard
+  onKeyDown, onKeyUp, onTextInput,
 };
 export default Swui;

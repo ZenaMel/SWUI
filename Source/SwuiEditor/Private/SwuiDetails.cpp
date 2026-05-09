@@ -77,6 +77,34 @@ IDetailCategoryBuilder& Cat = DetailBuilder.EditCategory(
 LOCTEXT("BindingsCat", "Web UI Bindings"),
 ECategoryPriority::Important);
 
+// ---- Generate button (top of section) ----
+Cat.AddCustomRow(LOCTEXT("GenerateRow", "Generate"))
+.WholeRowContent()
+.HAlign(HAlign_Right)
+[
+SNew(SButton)
+.Text(LOCTEXT("RefreshBtn", "Refresh JS Bindings"))
+.ToolTipText(LOCTEXT("RefreshBtnTip",
+"Generates TypeScript bindings into Content/UI/generated/ from the checked properties."))
+.OnClicked_Lambda([this]()
+{
+	bool bOK = false;
+	if (SwuiPtr.IsValid())
+		bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
+
+	FNotificationInfo Info(bOK
+		? LOCTEXT("GenOK",  "JS Bindings generated successfully.")
+		: LOCTEXT("GenFail", "JS Bindings generation failed — check the Output Log."));
+	Info.bFireAndForget = true;
+	Info.FadeInDuration  = 0.2f;
+	Info.FadeOutDuration = 0.5f;
+	Info.ExpireDuration  = 3.f;
+	Info.Image = FAppStyle::GetBrush(bOK ? TEXT("NotificationList.SuccessImage") : TEXT("NotificationList.FailImage"));
+	FSlateNotificationManager::Get().AddNotification(Info);
+	return FReply::Handled();
+})
+];
+
 // ---- One collapsible group per binding source ----
 for (int32 i = 0; i < Swui->BindingSources.Num(); ++i)
 {
@@ -265,34 +293,6 @@ Cat.AddCustomRow(LOCTEXT("AddSourceRow", "Add Source"))
 			if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
 		}),
 		LOCTEXT("AddSourceTip", "Add a new source class"))
-];
-
-// ---- Generate button ----
-Cat.AddCustomRow(LOCTEXT("GenerateRow", "Generate"))
-.WholeRowContent()
-.HAlign(HAlign_Right)
-[
-SNew(SButton)
-.Text(LOCTEXT("RefreshBtn", "Refresh JS Bindings"))
-.ToolTipText(LOCTEXT("RefreshBtnTip",
-"Generates TypeScript bindings into Content/UI/generated/ from the checked properties."))
-.OnClicked_Lambda([this]()
-{
-	bool bOK = false;
-	if (SwuiPtr.IsValid())
-		bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
-
-	FNotificationInfo Info(bOK
-		? LOCTEXT("GenOK",  "JS Bindings generated successfully.")
-		: LOCTEXT("GenFail", "JS Bindings generation failed — check the Output Log."));
-	Info.bFireAndForget = true;
-	Info.FadeInDuration  = 0.2f;
-	Info.FadeOutDuration = 0.5f;
-	Info.ExpireDuration  = 3.f;
-	Info.Image = FAppStyle::GetBrush(bOK ? TEXT("NotificationList.SuccessImage") : TEXT("NotificationList.FailImage"));
-	FSlateNotificationManager::Get().AddNotification(Info);
-	return FReply::Handled();
-})
 ];
 }
 

@@ -3,8 +3,71 @@
 #include "SwuiSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
+#include "GameplayTagsManager.h"
+
+#if WITH_EDITOR
+#include "Misc/DataValidation.h"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogSwuiNavigation, Log, All);
+
+// ---------------------------------------------------------------------------
+// Built-in Gameplay Tags singleton
+// ---------------------------------------------------------------------------
+
+FSwuiNavTags FSwuiNavTags::Instance;
+bool FSwuiNavTags::bInitialized = false;
+
+const FSwuiNavTags& FSwuiNavTags::Get()
+{
+	if (!bInitialized)
+	{
+		Instance.Initialize();
+		bInitialized = true;
+	}
+	return Instance;
+}
+
+void FSwuiNavTags::Initialize()
+{
+	UGameplayTagsManager& Mgr = UGameplayTagsManager::Get();
+
+	auto Add = [&](const FString& Name, const FString& Comment) -> FGameplayTag
+	{
+		return Mgr.AddNativeGameplayTag(FName(*Name), Comment);
+	};
+
+	Confirm        = Add(TEXT("swui.navigation.confirm"),       TEXT("Confirm / accept / select"));
+	Cancel         = Add(TEXT("swui.navigation.cancel"),        TEXT("Cancel / back / escape"));
+	Up             = Add(TEXT("swui.navigation.up"),            TEXT("Navigate up"));
+	Down           = Add(TEXT("swui.navigation.down"),          TEXT("Navigate down"));
+	Left           = Add(TEXT("swui.navigation.left"),          TEXT("Navigate left"));
+	Right          = Add(TEXT("swui.navigation.right"),         TEXT("Navigate right"));
+	NextTab        = Add(TEXT("swui.navigation.nextTab"),       TEXT("Next tab / bumper right"));
+	PreviousTab    = Add(TEXT("swui.navigation.previousTab"),   TEXT("Previous tab / bumper left"));
+
+	MenuPauseOpen      = Add(TEXT("swui.menu.pause.open"),      TEXT("Open pause menu"));
+	MenuPauseClose     = Add(TEXT("swui.menu.pause.close"),     TEXT("Close pause menu"));
+	MenuSettingsOpen   = Add(TEXT("swui.menu.settings.open"),   TEXT("Open settings menu"));
+	MenuSettingsBack   = Add(TEXT("swui.menu.settings.back"),   TEXT("Back from settings"));
+	MenuQuit           = Add(TEXT("swui.menu.quit"),            TEXT("Quit / exit"));
+
+	PointerHover       = Add(TEXT("swui.pointer.hover"),        TEXT("Pointer hovered or focused"));
+	PointerLeftClick   = Add(TEXT("swui.pointer.leftClick"),    TEXT("Primary click / select"));
+	PointerRightClick  = Add(TEXT("swui.pointer.rightClick"),   TEXT("Secondary click / context"));
+	PointerMiddleClick = Add(TEXT("swui.pointer.middleClick"),  TEXT("Middle mouse click"));
+	PointerScrollUp    = Add(TEXT("swui.pointer.scrollUp"),     TEXT("Scroll wheel up"));
+	PointerScrollDown  = Add(TEXT("swui.pointer.scrollDown"),   TEXT("Scroll wheel down"));
+
+	PointerMove        = Add(TEXT("swui.pointer.move"),         TEXT("Raw pointer movement"));
+	PointerLeftDown    = Add(TEXT("swui.pointer.leftDown"),     TEXT("Left button pressed"));
+	PointerLeftUp      = Add(TEXT("swui.pointer.leftUp"),       TEXT("Left button released"));
+	PointerRightDown   = Add(TEXT("swui.pointer.rightDown"),    TEXT("Right button pressed"));
+	PointerRightUp     = Add(TEXT("swui.pointer.rightUp"),      TEXT("Right button released"));
+	PointerMiddleDown  = Add(TEXT("swui.pointer.middleDown"),   TEXT("Middle button pressed"));
+	PointerMiddleUp    = Add(TEXT("swui.pointer.middleUp"),     TEXT("Middle button released"));
+	PointerWheel       = Add(TEXT("swui.pointer.wheel"),        TEXT("Raw wheel delta"));
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -13,49 +76,24 @@ DEFINE_LOG_CATEGORY_STATIC(LogSwuiNavigation, Log, All);
 USwuiNavigation::USwuiNavigation()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	// Force tags to register early.
+	FSwuiNavTags::Get();
 }
 
 void USwuiNavigation::BeginPlay()
 {
 	Super::BeginPlay();
-
-	if (bFocusOnBeginPlay && !FocusedSwui)
-	{
-		AActor* Owner = GetOwner();
-		if (Owner)
-		{
-			FocusedSwui = Owner->FindComponentByClass<USwui>();
-		}
-	}
-
-	if (FocusedSwui)
-	{
-		ApplyInputMode();
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Focus
-// ---------------------------------------------------------------------------
-
-void USwuiNavigation::SetFocusedSwui(USwui* InSwui)
-{
-	FocusedSwui = InSwui;
 	ApplyInputMode();
 }
 
-void USwuiNavigation::ClearFocusedSwui()
-{
-	FocusedSwui = nullptr;
+// ---------------------------------------------------------------------------
+// Target Resolution
+// ---------------------------------------------------------------------------
 
-	// Restore game-only input when clearing focus.
-	APlayerController* PC = Cast<APlayerController>(GetOwner());
-	if (PC)
-	{
-		PC->bShowMouseCursor = false;
-		FInputModeGameOnly GameMode;
-		PC->SetInputMode(GameMode);
-	}
+USwui* USwuiNavigation::GetTargetSwui() const
+{
+	AActor* Owner = GetOwner();
+	return Owner ? Owner->FindComponentByClass<USwui>() : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +122,7 @@ void USwuiNavigation::ApplyInputMode()
 		break;
 
 	case ESwuiInputMode::UiOnly:
-		PC->bShowMouseCursor = bShowCursorWhenFocused && FocusedSwui != nullptr;
+		PC->bShowMouseCursor = bShowCursorWhenFocused;
 		{
 			FInputModeUIOnly UIMode;
 			PC->SetInputMode(UIMode);
@@ -92,7 +130,7 @@ void USwuiNavigation::ApplyInputMode()
 		break;
 
 	case ESwuiInputMode::GameAndUi:
-		PC->bShowMouseCursor = bShowCursorWhenFocused && FocusedSwui != nullptr;
+		PC->bShowMouseCursor = bShowCursorWhenFocused;
 		{
 			FInputModeGameAndUI GameUI;
 			PC->SetInputMode(GameUI);
@@ -107,6 +145,17 @@ void USwuiNavigation::ShowCursor(bool bShow)
 	if (PC)
 	{
 		PC->bShowMouseCursor = bShow;
+	}
+}
+
+void USwuiNavigation::RestoreGameInput()
+{
+	APlayerController* PC = Cast<APlayerController>(GetOwner());
+	if (PC)
+	{
+		PC->bShowMouseCursor = false;
+		FInputModeGameOnly GameMode;
+		PC->SetInputMode(GameMode);
 	}
 }
 
@@ -150,18 +199,19 @@ const TCHAR* USwuiNavigation::PointerButtonToString(ESwuiPointerButton Button)
 	return TEXT("Unknown");
 }
 
-const FSwuiNavigationAction* USwuiNavigation::FindAction(FName ActionName) const
+const FSwuiNavigationEvent* USwuiNavigation::FindEventConfig(FGameplayTag Event) const
 {
-	for (const FSwuiNavigationAction& Action : NavigationActions)
+	for (const FSwuiNavigationEvent& NavEvent : NavigationEvents)
 	{
-		if (Action.ActionName == ActionName) return &Action;
+		if (NavEvent.Event == Event) return &NavEvent;
 	}
 	return nullptr;
 }
 
 void USwuiNavigation::ForwardToJs(const FString& JsEventName, const FString& DetailJson)
 {
-	if (!FocusedSwui) return;
+	USwui* Target = GetTargetSwui();
+	if (!Target) return;
 
 	UWorld* World = GetWorld();
 	if (!World) return;
@@ -170,7 +220,6 @@ void USwuiNavigation::ForwardToJs(const FString& JsEventName, const FString& Det
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
 	if (!Sub) return;
 
-	// window.dispatchEvent(new CustomEvent("eventName", { detail: {...} }));
 	const FString Script = FString::Printf(
 		TEXT("window.dispatchEvent(new CustomEvent(\"%s\",{detail:%s}));"),
 		*EscapeJsonString(JsEventName),
@@ -180,219 +229,232 @@ void USwuiNavigation::ForwardToJs(const FString& JsEventName, const FString& Det
 	Sub->ExecuteJavaScript(Script);
 }
 
-void USwuiNavigation::DispatchBuiltIn(const FString& JsEventName, const FString& DetailJson,
-	TFunction<bool()> BlueprintHandler, const FString* GenericDetailJson)
+// ---------------------------------------------------------------------------
+// Core dispatch: Blueprint first, then JS if unconsumed + enabled.
+// ---------------------------------------------------------------------------
+
+void USwuiNavigation::DispatchEvent(FGameplayTag Event, const FString& JsonPayload,
+	TFunction<bool()> BlueprintHandler)
 {
-	if (bLogNavigationActions)
+	const FSwuiNavigationEvent* Config = FindEventConfig(Event);
+	const FString TagName = Event.GetTagName().ToString();
+
+	if (bLogNavigationEvents)
 	{
-		UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] %s  detail=%s  dispatch=%s"),
-			*JsEventName, *DetailJson,
-			DispatchOrder == ESwuiNavigationDispatchOrder::BlueprintFirst ? TEXT("BP->JS") : TEXT("JS->BP"));
+		UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] %s  payload=%s"), *TagName, *JsonPayload);
 	}
 
-	auto DoJS = [&]()
-	{
-		if (GenericDetailJson)
-		{
-			ForwardToJs(TEXT("swui:navigation"), *GenericDetailJson);
-		}
-		ForwardToJs(JsEventName, DetailJson);
-	};
+	// Fire generic delegate.
+	OnNavigationEvent.Broadcast(Event, FString());
+	OnNavigationEventWithPayload.Broadcast(Event, JsonPayload);
 
-	if (DispatchOrder == ESwuiNavigationDispatchOrder::BlueprintFirst)
+	// Blueprint handler — returns true if consumed.
+	bool bConsumed = false;
+	if (!Config || Config->bBlueprintCallback)
 	{
-		const bool bConsumed = BlueprintHandler();
-		if (!bConsumed)
-		{
-			DoJS();
-		}
+		bConsumed = BlueprintHandler();
 	}
-	else // JavaScriptFirst
+
+	// JS forwarding.
+	if (!bConsumed && (!Config || Config->bForwardToJS))
 	{
-		DoJS();
-		BlueprintHandler();
+		const FString JsName = Config ? Config->GetEffectiveJsEventName() : TagName;
+		const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;
+		ForwardToJs(JsName, Detail);
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Built-in Navigation Actions
+// Core Navigation API
+// ---------------------------------------------------------------------------
+
+void USwuiNavigation::SendNavigationEvent(FGameplayTag Event)
+{
+	SendNavigationEventWithPayload(Event, TEXT("{}"));
+}
+
+void USwuiNavigation::SendNavigationEventWithPayload(FGameplayTag Event, const FString& JsonPayload)
+{
+	DispatchEvent(Event, JsonPayload, [this, Event, &JsonPayload]()
+	{
+		return HandleNavigationEvent(Event, JsonPayload);
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Convenience Navigation Wrappers
 // ---------------------------------------------------------------------------
 
 void USwuiNavigation::Navigate(ESwuiNavDirection Direction)
 {
 	const TCHAR* DirStr = DirectionToString(Direction);
-	const FString SpecializedDetail = FString::Printf(TEXT("{\"direction\":\"%s\",\"source\":\"USwuiNavigation\"}"), DirStr);
-	const FString GenericDetail = FString::Printf(
-		TEXT("{\"action\":\"Navigate\",\"payload\":{\"direction\":\"%s\"},\"source\":\"USwuiNavigation\"}"), DirStr);
+	const FString Detail = FString::Printf(TEXT("{\"direction\":\"%s\"}"), DirStr);
+	const auto& Tags = FSwuiNavTags::Get();
 
-	DispatchBuiltIn(TEXT("swui:navigate"), SpecializedDetail, [this, Direction]()
+	FGameplayTag DirTag;
+	switch (Direction)
+	{
+	case ESwuiNavDirection::Up:       DirTag = Tags.Up; break;
+	case ESwuiNavDirection::Down:     DirTag = Tags.Down; break;
+	case ESwuiNavDirection::Left:     DirTag = Tags.Left; break;
+	case ESwuiNavDirection::Right:    DirTag = Tags.Right; break;
+	case ESwuiNavDirection::Next:     DirTag = Tags.NextTab; break;
+	case ESwuiNavDirection::Previous: DirTag = Tags.PreviousTab; break;
+	}
+
+	DispatchEvent(DirTag, Detail, [this, Direction]()
 	{
 		OnNavigate.Broadcast(Direction);
 		return HandleNavigate(Direction);
-	}, &GenericDetail);
+	});
 }
 
 void USwuiNavigation::Confirm()
 {
-	const FString Detail = TEXT("{\"source\":\"USwuiNavigation\"}");
-	const FString GenericDetail = TEXT("{\"action\":\"Confirm\",\"source\":\"USwuiNavigation\"}");
-
-	DispatchBuiltIn(TEXT("swui:confirm"), Detail, [this]()
+	DispatchEvent(FSwuiNavTags::Get().Confirm, TEXT("{}"), [this]()
 	{
 		OnConfirm.Broadcast();
 		return HandleConfirm();
-	}, &GenericDetail);
+	});
 }
 
 void USwuiNavigation::Cancel()
 {
-	const FString Detail = TEXT("{\"source\":\"USwuiNavigation\"}");
-	const FString GenericDetail = TEXT("{\"action\":\"Cancel\",\"source\":\"USwuiNavigation\"}");
-
-	DispatchBuiltIn(TEXT("swui:cancel"), Detail, [this]()
+	DispatchEvent(FSwuiNavTags::Get().Cancel, TEXT("{}"), [this]()
 	{
 		OnCancel.Broadcast();
 		return HandleCancel();
-	}, &GenericDetail);
+	});
 
-	// bCloseOnEscape: after dispatch, clear focus and restore input.
-	if (bCloseOnEscape && FocusedSwui)
+	if (bCloseOnEscape)
 	{
-		ClearFocusedSwui();
+		RestoreGameInput();
 	}
 }
 
 void USwuiNavigation::NextTab()
 {
-	const FString Detail = TEXT("{\"source\":\"USwuiNavigation\"}");
-	const FString GenericDetail = TEXT("{\"action\":\"NextTab\",\"source\":\"USwuiNavigation\"}");
-
-	DispatchBuiltIn(TEXT("swui:next-tab"), Detail, [this]()
+	DispatchEvent(FSwuiNavTags::Get().NextTab, TEXT("{}"), [this]()
 	{
 		OnNextTab.Broadcast();
 		return HandleNextTab();
-	}, &GenericDetail);
+	});
 }
 
 void USwuiNavigation::PreviousTab()
 {
-	const FString Detail = TEXT("{\"source\":\"USwuiNavigation\"}");
-	const FString GenericDetail = TEXT("{\"action\":\"PreviousTab\",\"source\":\"USwuiNavigation\"}");
-
-	DispatchBuiltIn(TEXT("swui:previous-tab"), Detail, [this]()
+	DispatchEvent(FSwuiNavTags::Get().PreviousTab, TEXT("{}"), [this]()
 	{
 		OnPreviousTab.Broadcast();
 		return HandlePreviousTab();
-	}, &GenericDetail);
+	});
 }
 
 // ---------------------------------------------------------------------------
-// Custom Actions
+// High-Level Pointer Convenience Wrappers
 // ---------------------------------------------------------------------------
 
-void USwuiNavigation::TriggerAction(FName ActionName)
+void USwuiNavigation::Hover()
 {
-	TriggerActionWithPayload(ActionName, TEXT("{}"));
+	SendNavigationEvent(FSwuiNavTags::Get().PointerHover);
 }
 
-void USwuiNavigation::TriggerActionWithPayload(FName ActionName, const FString& JsonPayload)
+void USwuiNavigation::LeftClick()
 {
-	const FSwuiNavigationAction* ActionDef = FindAction(ActionName);
+	SendNavigationEvent(FSwuiNavTags::Get().PointerLeftClick);
+}
 
-	const bool bForwardJs = ActionDef ? ActionDef->bForwardToJavaScript : true;
-	const bool bTriggerBP = ActionDef ? ActionDef->bTriggerBlueprintEvents : true;
-	const FString JsEvent = ActionDef ? ActionDef->JsEventName : TEXT("swui:navigation");
+void USwuiNavigation::RightClick()
+{
+	SendNavigationEvent(FSwuiNavTags::Get().PointerRightClick);
+}
 
-	if (bLogNavigationActions)
-	{
-		UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] TriggerAction  name=%s  payload=%s  jsEvent=%s  dispatch=%s"),
-			*ActionName.ToString(), *JsonPayload, *JsEvent,
-			DispatchOrder == ESwuiNavigationDispatchOrder::BlueprintFirst ? TEXT("BP->JS") : TEXT("JS->BP"));
-	}
+void USwuiNavigation::MiddleClick()
+{
+	SendNavigationEvent(FSwuiNavTags::Get().PointerMiddleClick);
+}
 
-	// Generic navigation event always sent.
-	const FString GenericDetail = FString::Printf(
-		TEXT("{\"action\":\"%s\",\"payload\":%s,\"source\":\"USwuiNavigation\"}"),
-		*EscapeJsonString(ActionName.ToString()), *JsonPayload);
+void USwuiNavigation::ScrollUp()
+{
+	SendNavigationEvent(FSwuiNavTags::Get().PointerScrollUp);
+}
 
-	auto DoBP = [&]() -> bool
-	{
-		if (bTriggerBP)
-		{
-			OnNavigationAction.Broadcast(ActionName, FString());
-			OnNavigationActionWithPayload.Broadcast(ActionName, JsonPayload);
-			return HandleNavigationAction(ActionName, JsonPayload);
-		}
-		return false;
-	};
-
-	auto DoJS = [&]()
-	{
-		if (bForwardJs)
-		{
-			ForwardToJs(TEXT("swui:navigation"), GenericDetail);
-
-			// Also send to the action-specific JS event if configured differently.
-			if (JsEvent != TEXT("swui:navigation"))
-			{
-				ForwardToJs(JsEvent, GenericDetail);
-			}
-		}
-	};
-
-	if (DispatchOrder == ESwuiNavigationDispatchOrder::BlueprintFirst)
-	{
-		const bool bConsumed = DoBP();
-		if (!bConsumed) DoJS();
-	}
-	else
-	{
-		DoJS();
-		DoBP();
-	}
+void USwuiNavigation::ScrollDown()
+{
+	SendNavigationEvent(FSwuiNavTags::Get().PointerScrollDown);
 }
 
 // ---------------------------------------------------------------------------
-// Pointer Input
+// Low-Level Pointer Input
 // ---------------------------------------------------------------------------
 
 void USwuiNavigation::PointerMove(FVector2D ScreenPosition)
 {
-	OnPointerMove.Broadcast(ScreenPosition);
-
 	const FString Detail = FString::Printf(
-		TEXT("{\"x\":%.1f,\"y\":%.1f,\"source\":\"USwuiNavigation\"}"),
-		ScreenPosition.X, ScreenPosition.Y);
-	ForwardToJs(TEXT("swui:pointer-move"), Detail);
+		TEXT("{\"x\":%.1f,\"y\":%.1f}"), ScreenPosition.X, ScreenPosition.Y);
+
+	DispatchEvent(FSwuiNavTags::Get().PointerMove, Detail, [this, ScreenPosition]()
+	{
+		OnPointerMove.Broadcast(ScreenPosition);
+		return false;
+	});
 }
 
 void USwuiNavigation::PointerPress(ESwuiPointerButton Button)
 {
-	OnPointerPress.Broadcast(Button);
+	const auto& Tags = FSwuiNavTags::Get();
+	FGameplayTag BtnTag;
+	switch (Button)
+	{
+	case ESwuiPointerButton::Left:   BtnTag = Tags.PointerLeftDown; break;
+	case ESwuiPointerButton::Right:  BtnTag = Tags.PointerRightDown; break;
+	case ESwuiPointerButton::Middle: BtnTag = Tags.PointerMiddleDown; break;
+	}
 
 	const FString Detail = FString::Printf(
-		TEXT("{\"button\":\"%s\",\"source\":\"USwuiNavigation\"}"),
-		PointerButtonToString(Button));
-	ForwardToJs(TEXT("swui:pointer-press"), Detail);
+		TEXT("{\"button\":\"%s\"}"), PointerButtonToString(Button));
+
+	DispatchEvent(BtnTag, Detail, [this, Button]()
+	{
+		OnPointerPress.Broadcast(Button);
+		return false;
+	});
 }
 
 void USwuiNavigation::PointerRelease(ESwuiPointerButton Button)
 {
-	OnPointerRelease.Broadcast(Button);
+	const auto& Tags = FSwuiNavTags::Get();
+	FGameplayTag BtnTag;
+	switch (Button)
+	{
+	case ESwuiPointerButton::Left:   BtnTag = Tags.PointerLeftUp; break;
+	case ESwuiPointerButton::Right:  BtnTag = Tags.PointerRightUp; break;
+	case ESwuiPointerButton::Middle: BtnTag = Tags.PointerMiddleUp; break;
+	}
 
 	const FString Detail = FString::Printf(
-		TEXT("{\"button\":\"%s\",\"source\":\"USwuiNavigation\"}"),
-		PointerButtonToString(Button));
-	ForwardToJs(TEXT("swui:pointer-release"), Detail);
+		TEXT("{\"button\":\"%s\"}"), PointerButtonToString(Button));
+
+	DispatchEvent(BtnTag, Detail, [this, Button]()
+	{
+		OnPointerRelease.Broadcast(Button);
+		return false;
+	});
 }
 
 void USwuiNavigation::PointerWheel(float Delta)
 {
-	OnPointerWheel.Broadcast(Delta);
+	const FString Detail = FString::Printf(TEXT("{\"delta\":%.4f}"), Delta);
 
-	const FString Detail = FString::Printf(
-		TEXT("{\"delta\":%.4f,\"source\":\"USwuiNavigation\"}"), Delta);
-	ForwardToJs(TEXT("swui:pointer-wheel"), Detail);
+	DispatchEvent(FSwuiNavTags::Get().PointerWheel, Detail, [this, Delta]()
+	{
+		OnPointerWheel.Broadcast(Delta);
+		return false;
+	});
+
+	// Also emit scroll-up/scroll-down for nonzero deltas.
+	if (Delta > 0.f) ScrollUp();
+	else if (Delta < 0.f) ScrollDown();
 }
 
 // ---------------------------------------------------------------------------
@@ -404,9 +466,8 @@ void USwuiNavigation::KeyDown(FKey Key)
 	OnKeyDown.Broadcast(Key);
 
 	const FString Detail = FString::Printf(
-		TEXT("{\"key\":\"%s\",\"source\":\"USwuiNavigation\"}"),
-		*EscapeJsonString(Key.ToString()));
-	ForwardToJs(TEXT("swui:key-down"), Detail);
+		TEXT("{\"key\":\"%s\"}"), *EscapeJsonString(Key.ToString()));
+	ForwardToJs(TEXT("swui.keyboard.keyDown"), Detail);
 }
 
 void USwuiNavigation::KeyUp(FKey Key)
@@ -414,9 +475,8 @@ void USwuiNavigation::KeyUp(FKey Key)
 	OnKeyUp.Broadcast(Key);
 
 	const FString Detail = FString::Printf(
-		TEXT("{\"key\":\"%s\",\"source\":\"USwuiNavigation\"}"),
-		*EscapeJsonString(Key.ToString()));
-	ForwardToJs(TEXT("swui:key-up"), Detail);
+		TEXT("{\"key\":\"%s\"}"), *EscapeJsonString(Key.ToString()));
+	ForwardToJs(TEXT("swui.keyboard.keyUp"), Detail);
 }
 
 void USwuiNavigation::TextInput(const FString& Text)
@@ -424,17 +484,36 @@ void USwuiNavigation::TextInput(const FString& Text)
 	OnTextInput.Broadcast(Text);
 
 	const FString Detail = FString::Printf(
-		TEXT("{\"text\":\"%s\",\"source\":\"USwuiNavigation\"}"),
-		*EscapeJsonString(Text));
-	ForwardToJs(TEXT("swui:text-input"), Detail);
+		TEXT("{\"text\":\"%s\"}"), *EscapeJsonString(Text));
+	ForwardToJs(TEXT("swui.keyboard.textInput"), Detail);
 }
 
 // ---------------------------------------------------------------------------
-// BlueprintNativeEvent defaults — return false (unconsumed) by default.
-// Blueprint subclasses can override to consume actions.
+// Editor Validation
 // ---------------------------------------------------------------------------
 
-bool USwuiNavigation::HandleNavigationAction_Implementation(FName ActionName, const FString& JsonPayload) { return false; }
+#if WITH_EDITOR
+EDataValidationResult USwuiNavigation::IsDataValid(FDataValidationContext& Context) const
+{
+	EDataValidationResult Result = Super::IsDataValid(Context);
+
+	AActor* Owner = GetOwner();
+	if (Owner && !Owner->FindComponentByClass<USwui>())
+	{
+		Context.AddError(FText::FromString(
+			TEXT("USwuiNavigation requires a sibling USwui component on the same Actor.")));
+		Result = EDataValidationResult::Invalid;
+	}
+
+	return Result;
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// BlueprintNativeEvent defaults — return false (unconsumed) by default.
+// ---------------------------------------------------------------------------
+
+bool USwuiNavigation::HandleNavigationEvent_Implementation(FGameplayTag Event, const FString& JsonPayload) { return false; }
 bool USwuiNavigation::HandleNavigate_Implementation(ESwuiNavDirection Direction) { return false; }
 bool USwuiNavigation::HandleConfirm_Implementation() { return false; }
 bool USwuiNavigation::HandleCancel_Implementation() { return false; }

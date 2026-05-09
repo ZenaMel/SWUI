@@ -13,11 +13,10 @@ class SWUIRUNTIME_API USwuiBridgeWidget : public UUserWidget
 };
 
 /**
- * USwuiBridge — Add this to any Actor to render a web UI and sync
- * reflected game state into it. Configure which properties to expose
- * via the "Web UI Bindings" section in the Details panel.
+ * USwuiBridge — Legacy component. Prefer USwui + USwuiNavigation instead.
+ * Hidden from the editor component picker.
  */
-UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent, NotBlueprintSpawnable))
 class SWUIRUNTIME_API USwuiBridge : public UActorComponent
 {
 	GENERATED_BODY()

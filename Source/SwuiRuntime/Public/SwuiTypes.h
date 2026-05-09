@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
 #include "SwuiTypes.generated.h"
 
 // ---------------------------------------------------------------------------
@@ -45,13 +46,6 @@ enum class ESwuiPointerButton : uint8
 };
 
 UENUM(BlueprintType)
-enum class ESwuiNavigationDispatchOrder : uint8
-{
-	BlueprintFirst  UMETA(DisplayName = "Blueprint First"),
-	JavaScriptFirst UMETA(DisplayName = "JavaScript First")
-};
-
-UENUM(BlueprintType)
 enum class ESwuiInputMode : uint8
 {
 	HudOnly   UMETA(DisplayName = "HUD Only"),
@@ -60,25 +54,41 @@ enum class ESwuiInputMode : uint8
 };
 
 // ---------------------------------------------------------------------------
-// Navigation action mapping — configurable per-action routing.
+// Navigation event — Gameplay Tag based, configurable per-event routing.
 // ---------------------------------------------------------------------------
 
 USTRUCT(BlueprintType)
-struct FSwuiNavigationAction
+struct FSwuiNavigationEvent
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	FName ActionName;
+	/** Navigation event tag used by Unreal, Blueprint, and JS. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(ToolTip="Navigation event tag used by Unreal, Blueprint, and JS."))
+	FGameplayTag Event;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	FString JsEventName = TEXT("swui:navigation");
+	/** JS event name. Defaults to the navigation tag name, e.g. swui.menu.pause.open. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(DisplayName="JS Event Name", ToolTip="JS event name. Defaults to the navigation tag name."))
+	FString JsEventName;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	bool bForwardToJavaScript = true;
+	/** Forward this event to the SWUI web view. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(DisplayName="Forward to JS", ToolTip="Forward this navigation event to the SWUI web view."))
+	bool bForwardToJS = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
-	bool bTriggerBlueprintEvents = true;
+	/** Trigger Blueprint callbacks for this event. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
+		meta=(ToolTip="Trigger Blueprint callbacks for this navigation event."))
+	bool bBlueprintCallback = true;
+
+	/** Returns the effective JS event name — the configured JsEventName, or the tag string. */
+	FString GetEffectiveJsEventName() const
+	{
+		return JsEventName.IsEmpty()
+			? (Event.IsValid() ? Event.ToString() : FString())
+			: JsEventName;
+	}
 };
 
 // Per-instance rendering overrides forwarded from USwui → InitRenderer → USwuiView::Init().
