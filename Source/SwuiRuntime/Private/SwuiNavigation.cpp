@@ -17,6 +17,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogSwuiNavigation, Log, All);
 
 FSwuiNavTags FSwuiNavTags::Instance;
 bool FSwuiNavTags::bInitialized = false;
+TSet<FName> FSwuiNavTags::BuiltInTagNames;
 
 const FSwuiNavTags& FSwuiNavTags::Get()
 {
@@ -67,6 +68,21 @@ void FSwuiNavTags::Initialize()
 	PointerMiddleDown  = Add(TEXT("swui.pointer.middleDown"),   TEXT("Middle button pressed"));
 	PointerMiddleUp    = Add(TEXT("swui.pointer.middleUp"),     TEXT("Middle button released"));
 	PointerWheel       = Add(TEXT("swui.pointer.wheel"),        TEXT("Raw wheel delta"));
+
+	// Collect all built-in tag names.
+	BuiltInTagNames.Reset();
+	const FGameplayTag* Begin = &Confirm;
+	const FGameplayTag* End   = &PointerWheel + 1;
+	for (const FGameplayTag* It = Begin; It != End; ++It)
+	{
+		if (It->IsValid()) BuiltInTagNames.Add(It->GetTagName());
+	}
+}
+
+const TSet<FName>& FSwuiNavTags::GetAllBuiltInTagNames()
+{
+	Get(); // ensure initialized
+	return BuiltInTagNames;
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +519,29 @@ EDataValidationResult USwuiNavigation::IsDataValid(FDataValidationContext& Conte
 		Context.AddError(FText::FromString(
 			TEXT("USwuiNavigation requires a sibling USwui component on the same Actor.")));
 		Result = EDataValidationResult::Invalid;
+	}
+
+	// Check for duplicate Navigation Event entries.
+	TSet<FGameplayTag> Seen;
+	for (int32 i = 0; i < NavigationEvents.Num(); ++i)
+	{
+		const FSwuiNavigationEvent& Evt = NavigationEvents[i];
+		if (!Evt.Event.IsValid())
+		{
+			Context.AddError(FText::Format(
+				NSLOCTEXT("SwuiNav", "InvalidTag", "Navigation Event [{0}] has an invalid/missing Gameplay Tag."),
+				FText::AsNumber(i)));
+			Result = EDataValidationResult::Invalid;
+			continue;
+		}
+		if (Seen.Contains(Evt.Event))
+		{
+			Context.AddError(FText::Format(
+				NSLOCTEXT("SwuiNav", "DuplicateTag", "Duplicate Navigation Event for tag '{0}' at index [{1}]."),
+				FText::FromName(Evt.Event.GetTagName()), FText::AsNumber(i)));
+			Result = EDataValidationResult::Invalid;
+		}
+		Seen.Add(Evt.Event);
 	}
 
 	return Result;

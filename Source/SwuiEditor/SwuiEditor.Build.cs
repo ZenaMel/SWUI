@@ -24,6 +24,7 @@ public class SwuiEditor : ModuleRules
 			// Class picker widget in Details panel
 			"ClassViewer",
 			"GameplayTags",
+			"GameplayTagsEditor",
 		});
 
 		PrivateIncludePaths.Add("SwuiEditor/Private");

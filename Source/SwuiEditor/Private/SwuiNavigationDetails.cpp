@@ -6,21 +6,200 @@
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailWidgetRow.h"
+#include "IDetailGroup.h"
 #include "PropertyCustomizationHelpers.h"
 #include "GameplayTagsManager.h"
+#include "GameplayTagContainer.h"
+#include "GameplayTagsEditorModule.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Misc/MessageDialog.h"
 
 #define LOCTEXT_NAMESPACE "SwuiNavigationDetails"
+
+// ---------------------------------------------------------------------------
 
 TSharedRef<IDetailCustomization> FSwuiNavigationDetails::MakeInstance()
 {
 	return MakeShareable(new FSwuiNavigationDetails);
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Gather all registered Gameplay Tags that start with "swui." */
+static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag>& OutCustom)
+{
+	const TSet<FName>& BuiltIn = FSwuiNavTags::GetAllBuiltInTagNames();
+
+	FGameplayTagContainer AllTags;
+	UGameplayTagsManager::Get().RequestAllGameplayTags(AllTags, /*bOnlyIncludeDictionaryTags=*/false);
+
+	for (const FGameplayTag& Tag : AllTags)
+	{
+		const FString Name = Tag.GetTagName().ToString();
+		if (!Name.StartsWith(TEXT("swui."))) continue;
+
+		if (BuiltIn.Contains(Tag.GetTagName()))
+			OutDefault.Add(Tag);
+		else
+			OutCustom.Add(Tag);
+	}
+
+	OutDefault.Sort([](const FGameplayTag& A, const FGameplayTag& B)
+	{
+		return A.GetTagName().LexicalLess(B.GetTagName());
+	});
+	OutCustom.Sort([](const FGameplayTag& A, const FGameplayTag& B)
+	{
+		return A.GetTagName().LexicalLess(B.GetTagName());
+	});
+}
+
+/** Check if a Navigation Event entry exists for the given tag. */
+static bool HasNavigationEvent(const USwuiNavigation* Nav, const FGameplayTag& Tag)
+{
+	for (const FSwuiNavigationEvent& Evt : Nav->NavigationEvents)
+	{
+		if (Evt.Event == Tag) return true;
+	}
+	return false;
+}
+
+/** Add a Navigation Event entry for the tag. */
+static void AddNavigationEvent(USwuiNavigation* Nav, const FGameplayTag& Tag)
+{
+	if (HasNavigationEvent(Nav, Tag)) return;
+	Nav->Modify();
+	FSwuiNavigationEvent Evt;
+	Evt.Event = Tag;
+	Nav->NavigationEvents.Add(Evt);
+}
+
+/** Remove the Navigation Event entry for the tag. */
+static void RemoveNavigationEvent(USwuiNavigation* Nav, const FGameplayTag& Tag)
+{
+	Nav->Modify();
+	Nav->NavigationEvents.RemoveAll([&Tag](const FSwuiNavigationEvent& Evt)
+	{
+		return Evt.Event == Tag;
+	});
+}
+
+/** Validate a user-entered tag suffix. Returns empty string on success, error message on failure. */
+static FString ValidateTagSuffix(const FString& Suffix)
+{
+	if (Suffix.IsEmpty())
+		return TEXT("Suffix cannot be empty.");
+
+	if (Suffix.StartsWith(TEXT(".")))
+		return TEXT("Suffix cannot start with a dot.");
+
+	if (Suffix.EndsWith(TEXT(".")))
+		return TEXT("Suffix cannot end with a dot.");
+
+	if (Suffix.Contains(TEXT("..")))
+		return TEXT("Suffix cannot contain consecutive dots.");
+
+	// Check for invalid characters (only alphanumeric and dots allowed).
+	for (TCHAR Ch : Suffix)
+	{
+		if (!FChar::IsAlnum(Ch) && Ch != TEXT('.'))
+			return FString::Printf(TEXT("Invalid character '%c'. Use alphanumeric and dots only."), Ch);
+	}
+
+	return FString();
+}
+
+// ---------------------------------------------------------------------------
+// UI builder — adds one row per tag with a checkbox
+// ---------------------------------------------------------------------------
+
+static void AddTagRows(
+	IDetailGroup& Group,
+	const TArray<FGameplayTag>& Tags,
+	USwuiNavigation* Nav,
+	IDetailLayoutBuilder* Builder,
+	bool bAllowRemove)
+{
+	for (const FGameplayTag& Tag : Tags)
+	{
+		const FString TagStr = Tag.GetTagName().ToString();
+
+		auto NameWidget = SNew(STextBlock)
+			.Text(FText::FromString(TagStr))
+			.Font(IDetailLayoutBuilder::GetDetailFont());
+
+		auto ValueBox = SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SCheckBox)
+				.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Nav, Tag]()
+				{
+					return HasNavigationEvent(Nav, Tag)
+						? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				}))
+				.OnCheckStateChanged_Lambda([Nav, Tag, Builder](ECheckBoxState NewState)
+				{
+					if (NewState == ECheckBoxState::Checked)
+						AddNavigationEvent(Nav, Tag);
+					else
+						RemoveNavigationEvent(Nav, Tag);
+					if (Builder) Builder->ForceRefreshDetails();
+				})
+			];
+
+		if (bAllowRemove)
+		{
+			ValueBox->AddSlot()
+				.AutoWidth()
+				.Padding(8.f, 0.f, 0.f, 0.f)
+				.VAlign(VAlign_Center)
+				[
+					PropertyCustomizationHelpers::MakeDeleteButton(
+						FSimpleDelegate::CreateLambda([Nav, Tag, Builder]()
+						{
+							const FText Msg = FText::Format(
+								LOCTEXT("RemoveTagConfirm", "Remove custom tag '{0}' from the project?\nThis also removes its Navigation Event entry."),
+								FText::FromString(Tag.GetTagName().ToString()));
+
+							if (FMessageDialog::Open(EAppMsgType::YesNo, Msg) != EAppReturnType::Yes)
+								return;
+
+							RemoveNavigationEvent(Nav, Tag);
+
+							// Remove from project gameplay tags (editor-only).
+							IGameplayTagsEditorModule& TagEditor =
+								IGameplayTagsEditorModule::Get();
+							TagEditor.DeleteTagFromINI(Tag.GetTagName().ToString());
+
+							if (Builder) Builder->ForceRefreshDetails();
+						}),
+						LOCTEXT("RemoveCustomTagTip", "Remove this custom tag from the project"))
+				];
+		}
+
+		Group.AddWidgetRow()
+		.NameContent()
+		[
+			NameWidget
+		]
+		.ValueContent()
+		[
+			ValueBox
+		];
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CustomizeDetails
+// ---------------------------------------------------------------------------
 
 void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 {
@@ -34,7 +213,10 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 	if (!Nav) return;
 	NavPtr = Nav;
 
-	// Hide the raw NavigationEvents array — we draw our own rows.
+	// Ensure built-in tags are registered.
+	FSwuiNavTags::Get();
+
+	// Hide the raw NavigationEvents array — we draw our own UI.
 	TSharedRef<IPropertyHandle> EventsHandle =
 		DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(USwuiNavigation, NavigationEvents));
 	DetailBuilder.HideProperty(EventsHandle);
@@ -77,96 +259,116 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		})
 	];
 
-	// ---- Existing navigation events ----
-	for (int32 i = 0; i < Nav->NavigationEvents.Num(); ++i)
-	{
-		const FSwuiNavigationEvent& Evt = Nav->NavigationEvents[i];
-		const FString TagStr = Evt.Event.IsValid() ? Evt.Event.GetTagName().ToString() : TEXT("(none)");
-		const FString JsName = Evt.GetEffectiveJsEventName();
+	// ---- Gather tags ----
+	TArray<FGameplayTag> DefaultTags, CustomTags;
+	GatherSwuiTags(DefaultTags, CustomTags);
 
-		Cat.AddCustomRow(FText::FromString(TagStr))
-		.NameContent()
-		[
-			SNew(STextBlock)
-			.Text(FText::FromString(TagStr))
-			.Font(IDetailLayoutBuilder::GetDetailFont())
-			.ToolTipText(FText::Format(
-				LOCTEXT("EventRowTip", "JS event: {0}"), FText::FromString(JsName)))
-		]
-		.ValueContent()
-		.MinDesiredWidth(100.f)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 0.f, 8.f, 0.f)
-			[
-				SNew(STextBlock)
-				.Text(FText::FromString(JsName))
-				.Font(IDetailLayoutBuilder::GetDetailFont())
-				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				PropertyCustomizationHelpers::MakeDeleteButton(
-					FSimpleDelegate::CreateLambda([this, i]()
-					{
-						if (NavPtr.IsValid() && NavPtr->NavigationEvents.IsValidIndex(i))
-						{
-							NavPtr->Modify();
-							NavPtr->NavigationEvents.RemoveAt(i);
-							if (CachedDetailBuilder)
-								CachedDetailBuilder->ForceRefreshDetails();
-						}
-					}),
-					LOCTEXT("RemoveEventTip", "Remove this navigation event"))
-			]
-		];
-	}
+	// ---- Default group ----
+	IDetailGroup& DefaultGroup = Cat.AddGroup(
+		TEXT("SwuiDefaultTags"),
+		LOCTEXT("DefaultGroup", "Default"),
+		/*bStartExpanded=*/true);
+	AddTagRows(DefaultGroup, DefaultTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/false);
 
-	// ---- Add new tag row ----
-	TSharedRef<SEditableTextBox> NewTagBox = SNew(SEditableTextBox)
+	// ---- Custom group ----
+	IDetailGroup& CustomGroup = Cat.AddGroup(
+		TEXT("SwuiCustomTags"),
+		LOCTEXT("CustomGroup", "Custom"),
+		/*bStartExpanded=*/true);
+	AddTagRows(CustomGroup, CustomTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/true);
+
+	// ---- Add New row ----
+	TSharedRef<SEditableTextBox> SuffixBox = SNew(SEditableTextBox)
 		.Font(IDetailLayoutBuilder::GetDetailFont())
-		.HintText(LOCTEXT("NewTagHint", "swui.custom.myEvent"));
+		.HintText(LOCTEXT("SuffixHint", "menu.pause.open"));
 
-	Cat.AddCustomRow(LOCTEXT("AddTagRow", "Add Tag"))
+	Cat.AddCustomRow(LOCTEXT("AddNewRow", "Add New"))
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.f, 2.f, 0.f, 2.f)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("FixedPrefix", "swui."))
+			.Font(IDetailLayoutBuilder::GetDetailFontBold())
+		]
 		+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 2.f)
 		[
-			NewTagBox
+			SuffixBox
 		]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 2.f, 0.f, 2.f)
 		[
 			SNew(SButton)
-			.Text(LOCTEXT("AddTagBtn", "Add"))
-			.ToolTipText(LOCTEXT("AddTagBtnTip",
-				"Create a Gameplay Tag and add a Navigation Event for it."))
-			.OnClicked_Lambda([this, NewTagBox]()
+			.Text(LOCTEXT("AddBtn", "Add"))
+			.ToolTipText(LOCTEXT("AddBtnTip",
+				"Create a Gameplay Tag with the swui. prefix and enable it as a Navigation Event."))
+			.OnClicked_Lambda([this, SuffixBox]()
 			{
 				if (!NavPtr.IsValid()) return FReply::Handled();
 
-				const FString TagString = NewTagBox->GetText().ToString().TrimStartAndEnd();
-				if (TagString.IsEmpty()) return FReply::Handled();
+				const FString Suffix = SuffixBox->GetText().ToString().TrimStartAndEnd();
 
-				// Request the tag (creates if not yet registered).
-				FGameplayTag Tag = UGameplayTagsManager::Get().RequestGameplayTag(
-					FName(*TagString), /*bErrorIfNotFound=*/false);
-
-				if (!Tag.IsValid())
+				// Validate suffix.
+				const FString Error = ValidateTagSuffix(Suffix);
+				if (!Error.IsEmpty())
 				{
-					// Manually add via native registration then re-request.
-					UGameplayTagsManager::Get().AddNativeGameplayTag(
-						FName(*TagString), TEXT("Custom SWUI navigation event"));
-					Tag = UGameplayTagsManager::Get().RequestGameplayTag(
-						FName(*TagString), /*bErrorIfNotFound=*/false);
+					FNotificationInfo Info(FText::FromString(Error));
+					Info.bFireAndForget = true;
+					Info.ExpireDuration = 3.f;
+					Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.FailImage"));
+					FSlateNotificationManager::Get().AddNotification(Info);
+					return FReply::Handled();
 				}
 
-				if (Tag.IsValid())
+				const FString FullTagName = TEXT("swui.") + Suffix;
+				const FName TagFName(*FullTagName);
+
+				// Check for duplicates across all known tags.
+				FGameplayTag Existing = UGameplayTagsManager::Get().RequestGameplayTag(
+					TagFName, /*bErrorIfNotFound=*/false);
+				if (Existing.IsValid())
 				{
-					NavPtr->Modify();
-					FSwuiNavigationEvent NewEvt;
-					NewEvt.Event = Tag;
-					NavPtr->NavigationEvents.Add(NewEvt);
+					FNotificationInfo Info(FText::Format(
+						LOCTEXT("DuplicateTag", "Tag '{0}' already exists."),
+						FText::FromString(FullTagName)));
+					Info.bFireAndForget = true;
+					Info.ExpireDuration = 3.f;
+					Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.FailImage"));
+					FSlateNotificationManager::Get().AddNotification(Info);
+
+					// If it exists but isn't enabled, enable it now.
+					if (!HasNavigationEvent(NavPtr.Get(), Existing))
+					{
+						AddNavigationEvent(NavPtr.Get(), Existing);
+					}
+
+					if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();
+					return FReply::Handled();
+				}
+
+				// Create the tag via the editor module (persists to project INI).
+				IGameplayTagsEditorModule& TagEditor = IGameplayTagsEditorModule::Get();
+				const bool bAdded = TagEditor.AddNewGameplayTagToINI(
+					FullTagName, TEXT("Custom SWUI navigation event"));
+
+				if (bAdded)
+				{
+					FGameplayTag NewTag = UGameplayTagsManager::Get().RequestGameplayTag(
+						TagFName, /*bErrorIfNotFound=*/false);
+					if (NewTag.IsValid())
+					{
+						AddNavigationEvent(NavPtr.Get(), NewTag);
+					}
+				}
+				else
+				{
+					FNotificationInfo Info(FText::Format(
+						LOCTEXT("AddFail", "Failed to create tag '{0}'."),
+						FText::FromString(FullTagName)));
+					Info.bFireAndForget = true;
+					Info.ExpireDuration = 3.f;
+					Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.FailImage"));
+					FSlateNotificationManager::Get().AddNotification(Info);
 				}
 
 				if (CachedDetailBuilder) CachedDetailBuilder->ForceRefreshDetails();

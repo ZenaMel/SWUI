@@ -71,10 +71,14 @@ struct SWUIRUNTIME_API FSwuiNavTags
 
 	static const FSwuiNavTags& Get();
 
+	/** Returns the set of all built-in (Default) swui.* tag names. */
+	static const TSet<FName>& GetAllBuiltInTagNames();
+
 private:
 	void Initialize();
 	static FSwuiNavTags Instance;
 	static bool bInitialized;
+	static TSet<FName> BuiltInTagNames;
 };
 
 /**
