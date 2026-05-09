@@ -16,7 +16,7 @@ class SWUIRUNTIME_API USwuiBridgeWidget : public UUserWidget
  * USwuiBridge — Legacy component. Prefer USwui + USwuiNavigation instead.
  * Hidden from the editor component picker.
  */
-UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent, NotBlueprintSpawnable))
+UCLASS(ClassGroup=Swui, Blueprintable, meta=(BlueprintSpawnableComponent, NotBlueprintSpawnable, Hidden))
 class SWUIRUNTIME_API USwuiBridge : public UActorComponent
 {
 	GENERATED_BODY()

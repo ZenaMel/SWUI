@@ -37,9 +37,10 @@ TSharedRef<IDetailCustomization> FSwuiNavigationDetails::MakeInstance()
 static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag>& OutCustom)
 {
 	const TSet<FName>& BuiltIn = FSwuiNavTags::GetAllBuiltInTagNames();
+	UGameplayTagsManager& TagManager = UGameplayTagsManager::Get();
 
 	FGameplayTagContainer AllTags;
-	UGameplayTagsManager::Get().RequestAllGameplayTags(AllTags, /*bOnlyIncludeDictionaryTags=*/false);
+	TagManager.RequestAllGameplayTags(AllTags, /*bOnlyIncludeDictionaryTags=*/false);
 
 	for (const FGameplayTag& Tag : AllTags)
 	{
@@ -128,38 +129,81 @@ static void AddTagRows(
 	IDetailLayoutBuilder* Builder,
 	bool bAllowRemove)
 {
+	if (Tags.IsEmpty())
+	{
+		Group.AddWidgetRow()
+			.WholeRowContent()
+			[
+				SNew(STextBlock)
+				.Text(bAllowRemove
+					? LOCTEXT("NoCustomTags", "No custom swui.* tags found.")
+					: LOCTEXT("NoDefaultTags", "No built-in swui.* tags found."))
+				.Font(IDetailLayoutBuilder::GetDetailFont())
+			];
+		return;
+	}
+
 	for (const FGameplayTag& Tag : Tags)
 	{
 		const FString TagStr = Tag.GetTagName().ToString();
-
 		auto NameWidget = SNew(STextBlock)
 			.Text(FText::FromString(TagStr))
 			.Font(IDetailLayoutBuilder::GetDetailFont());
 
-		auto ValueBox = SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SCheckBox)
-				.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Nav, Tag]()
-				{
-					return HasNavigationEvent(Nav, Tag)
-						? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-				}))
-				.OnCheckStateChanged_Lambda([Nav, Tag, Builder](ECheckBoxState NewState)
-				{
-					if (NewState == ECheckBoxState::Checked)
-						AddNavigationEvent(Nav, Tag);
-					else
-						RemoveNavigationEvent(Nav, Tag);
-					if (Builder) Builder->ForceRefreshDetails();
-				})
-			];
-
-		if (bAllowRemove)
+		if (!bAllowRemove)
 		{
+			// Default tags: just the name, no controls.
+			Group.AddWidgetRow()
+				.NameContent()[NameWidget]
+				.ValueContent()
+				[
+					SNullWidget::NullWidget
+				];
+		}
+		else
+		{
+			// Custom tags: checkbox + Add BP Event + delete.
+			auto ValueBox = SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SCheckBox)
+					.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Nav, Tag]()
+					{
+						return HasNavigationEvent(Nav, Tag)
+							? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+					}))
+					.OnCheckStateChanged_Lambda([Nav, Tag, Builder](ECheckBoxState NewState)
+					{
+						if (NewState == ECheckBoxState::Checked)
+							AddNavigationEvent(Nav, Tag);
+						else
+							RemoveNavigationEvent(Nav, Tag);
+						if (Builder) Builder->ForceRefreshDetails();
+					})
+				];
+
+			// "Add BP Event" button
 			ValueBox->AddSlot()
 				.AutoWidth()
 				.Padding(8.f, 0.f, 0.f, 0.f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("AddBPEvent", "Add BP Event"))
+					.ToolTipText(LOCTEXT("AddBPEventTip", "Add a Blueprint Event node for this navigation event."))
+					.OnClicked_Lambda([Nav, Tag, Builder]()
+					{
+						if (!HasNavigationEvent(Nav, Tag))
+							AddNavigationEvent(Nav, Tag);
+						if (Builder) Builder->ForceRefreshDetails();
+						return FReply::Handled();
+					})
+				];
+
+			// Delete button
+			ValueBox->AddSlot()
+				.AutoWidth()
+				.Padding(4.f, 0.f, 0.f, 0.f)
 				.VAlign(VAlign_Center)
 				[
 					PropertyCustomizationHelpers::MakeDeleteButton(
@@ -174,26 +218,24 @@ static void AddTagRows(
 
 							RemoveNavigationEvent(Nav, Tag);
 
-							// Remove from project gameplay tags (editor-only).
 							IGameplayTagsEditorModule& TagEditor =
 								IGameplayTagsEditorModule::Get();
-							TagEditor.DeleteTagFromINI(Tag.GetTagName().ToString());
+							TSharedPtr<FGameplayTagNode> TagNode = UGameplayTagsManager::Get().FindTagNode(Tag.GetTagName());
+							if (TagNode.IsValid())
+							{
+								TagEditor.DeleteTagFromINI(TagNode);
+							}
+							UGameplayTagsManager::Get().EditorRefreshGameplayTagTree();
 
 							if (Builder) Builder->ForceRefreshDetails();
-						}),
-						LOCTEXT("RemoveCustomTagTip", "Remove this custom tag from the project"))
+						})
+					)
 				];
-		}
 
-		Group.AddWidgetRow()
-		.NameContent()
-		[
-			NameWidget
-		]
-		.ValueContent()
-		[
-			ValueBox
-		];
+			Group.AddWidgetRow()
+				.NameContent()[NameWidget]
+				.ValueContent()[ValueBox];
+		}
 	}
 }
 
@@ -215,6 +257,7 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 
 	// Ensure built-in tags are registered.
 	FSwuiNavTags::Get();
+	UGameplayTagsManager::Get().EditorRefreshGameplayTagTree();
 
 	// Hide the raw NavigationEvents array — we draw our own UI.
 	TSharedRef<IPropertyHandle> EventsHandle =
@@ -277,12 +320,12 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		/*bStartExpanded=*/true);
 	AddTagRows(CustomGroup, CustomTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/true);
 
-	// ---- Add New row ----
+	// ---- Add New row (inside Custom group) ----
 	TSharedRef<SEditableTextBox> SuffixBox = SNew(SEditableTextBox)
 		.Font(IDetailLayoutBuilder::GetDetailFont())
-		.HintText(LOCTEXT("SuffixHint", "menu.pause.open"));
+		.HintText(LOCTEXT("SuffixHint", "pause.open"));
 
-	Cat.AddCustomRow(LOCTEXT("AddNewRow", "Add New"))
+	CustomGroup.AddWidgetRow()
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
@@ -353,6 +396,7 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 
 				if (bAdded)
 				{
+					UGameplayTagsManager::Get().EditorRefreshGameplayTagTree();
 					FGameplayTag NewTag = UGameplayTagsManager::Get().RequestGameplayTag(
 						TagFName, /*bErrorIfNotFound=*/false);
 					if (NewTag.IsValid())

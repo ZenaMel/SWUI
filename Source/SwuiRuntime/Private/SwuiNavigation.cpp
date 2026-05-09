@@ -47,10 +47,11 @@ void FSwuiNavTags::Initialize()
 	NextTab        = Add(TEXT("swui.navigation.nextTab"),       TEXT("Next tab / bumper right"));
 	PreviousTab    = Add(TEXT("swui.navigation.previousTab"),   TEXT("Previous tab / bumper left"));
 
-	MenuPauseOpen      = Add(TEXT("swui.menu.pause.open"),      TEXT("Open pause menu"));
-	MenuPauseClose     = Add(TEXT("swui.menu.pause.close"),     TEXT("Close pause menu"));
-	MenuSettingsOpen   = Add(TEXT("swui.menu.settings.open"),   TEXT("Open settings menu"));
-	MenuSettingsBack   = Add(TEXT("swui.menu.settings.back"),   TEXT("Back from settings"));
+	MenuOpen           = Add(TEXT("swui.menu.open"),            TEXT("Open menu"));
+	MenuClose          = Add(TEXT("swui.menu.close"),           TEXT("Close menu"));
+	MenuBack           = Add(TEXT("swui.menu.back"),            TEXT("Back / previous menu"));
+	MenuContinue       = Add(TEXT("swui.menu.continue"),        TEXT("Continue / resume"));
+	MenuSettings       = Add(TEXT("swui.menu.settings"),        TEXT("Open settings"));
 	MenuQuit           = Add(TEXT("swui.menu.quit"),            TEXT("Quit / exit"));
 
 	PointerHover       = Add(TEXT("swui.pointer.hover"),        TEXT("Pointer hovered or focused"));
@@ -236,13 +237,23 @@ void USwuiNavigation::ForwardToJs(const FString& JsEventName, const FString& Det
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
 	if (!Sub) return;
 
-	const FString Script = FString::Printf(
+	// Send generic "swui.navigation" event with the tag name in the detail.
+	const FString GenericDetail = FString::Printf(
+		TEXT("{\"event\":\"%s\",\"detail\":%s}"),
+		*EscapeJsonString(JsEventName),
+		*DetailJson);
+	const FString GenericScript = FString::Printf(
+		TEXT("window.dispatchEvent(new CustomEvent(\"%s\",{detail:%s}));"),
+		TEXT("swui.navigation"),
+		*GenericDetail);
+	Sub->ExecuteJavaScript(GenericScript);
+
+	// Send tag-specific event.
+	const FString SpecificScript = FString::Printf(
 		TEXT("window.dispatchEvent(new CustomEvent(\"%s\",{detail:%s}));"),
 		*EscapeJsonString(JsEventName),
-		*DetailJson
-	);
-
-	Sub->ExecuteJavaScript(Script);
+		*DetailJson);
+	Sub->ExecuteJavaScript(SpecificScript);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +374,64 @@ void USwuiNavigation::PreviousTab()
 	{
 		OnPreviousTab.Broadcast();
 		return HandlePreviousTab();
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Menu Convenience Wrappers
+// ---------------------------------------------------------------------------
+
+void USwuiNavigation::MenuOpen()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuOpen, TEXT("{}"), [this]()
+	{
+		OnMenuOpen.Broadcast();
+		return HandleMenuOpen();
+	});
+}
+
+void USwuiNavigation::MenuClose()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuClose, TEXT("{}"), [this]()
+	{
+		OnMenuClose.Broadcast();
+		return HandleMenuClose();
+	});
+}
+
+void USwuiNavigation::MenuBack()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuBack, TEXT("{}"), [this]()
+	{
+		OnMenuBack.Broadcast();
+		return HandleMenuBack();
+	});
+}
+
+void USwuiNavigation::MenuContinue()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuContinue, TEXT("{}"), [this]()
+	{
+		OnMenuContinue.Broadcast();
+		return HandleMenuContinue();
+	});
+}
+
+void USwuiNavigation::MenuSettings()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuSettings, TEXT("{}"), [this]()
+	{
+		OnMenuSettings.Broadcast();
+		return HandleMenuSettings();
+	});
+}
+
+void USwuiNavigation::MenuQuit()
+{
+	DispatchEvent(FSwuiNavTags::Get().MenuQuit, TEXT("{}"), [this]()
+	{
+		OnMenuQuit.Broadcast();
+		return HandleMenuQuit();
 	});
 }
 
@@ -558,3 +627,9 @@ bool USwuiNavigation::HandleConfirm_Implementation() { return false; }
 bool USwuiNavigation::HandleCancel_Implementation() { return false; }
 bool USwuiNavigation::HandleNextTab_Implementation() { return false; }
 bool USwuiNavigation::HandlePreviousTab_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuOpen_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuClose_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuBack_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuContinue_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuSettings_Implementation() { return false; }
+bool USwuiNavigation::HandleMenuQuit_Implementation() { return false; }

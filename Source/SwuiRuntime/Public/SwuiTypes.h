@@ -67,7 +67,7 @@ struct FSwuiNavigationEvent
 		meta=(ToolTip="Navigation event tag used by Unreal, Blueprint, and JS."))
 	FGameplayTag Event;
 
-	/** JS event name. Defaults to the navigation tag name, e.g. swui.menu.pause.open. */
+	/** JS event name. Defaults to the navigation tag name, e.g. swui.menu.open. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
 		meta=(DisplayName="JS Event Name", ToolTip="JS event name. Defaults to the navigation tag name."))
 	FString JsEventName;

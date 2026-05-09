@@ -45,10 +45,11 @@ struct SWUIRUNTIME_API FSwuiNavTags
 	FGameplayTag PreviousTab;
 
 	// Menu
-	FGameplayTag MenuPauseOpen;
-	FGameplayTag MenuPauseClose;
-	FGameplayTag MenuSettingsOpen;
-	FGameplayTag MenuSettingsBack;
+	FGameplayTag MenuOpen;
+	FGameplayTag MenuClose;
+	FGameplayTag MenuBack;
+	FGameplayTag MenuContinue;
+	FGameplayTag MenuSettings;
 	FGameplayTag MenuQuit;
 
 	// High-level pointer
@@ -194,6 +195,32 @@ public:
 		meta=(ToolTip="Send previous-tab navigation event."))
 	void PreviousTab();
 
+	// ---- Menu Convenience Wrappers ----
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-open navigation event."))
+	void MenuOpen();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-close navigation event."))
+	void MenuClose();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-back navigation event."))
+	void MenuBack();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-continue navigation event."))
+	void MenuContinue();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-settings navigation event."))
+	void MenuSettings();
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+		meta=(ToolTip="Send menu-quit navigation event."))
+	void MenuQuit();
+
 	// ---- High-Level Pointer Convenience Wrappers ----
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation|Pointer",
@@ -278,6 +305,24 @@ public:
 	FSwuiOnSimpleAction OnPreviousTab;
 
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuOpen;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuClose;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuBack;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuContinue;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuSettings;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	FSwuiOnSimpleAction OnMenuQuit;
+
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
 	FSwuiOnPointerMove OnPointerMove;
 
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
@@ -319,6 +364,24 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
 	bool HandlePreviousTab();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuOpen();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuClose();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuBack();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuContinue();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuSettings();
+
+	UFUNCTION(BlueprintNativeEvent, Category="SWUI|Navigation")
+	bool HandleMenuQuit();
 
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;

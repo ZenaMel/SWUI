@@ -123,7 +123,7 @@ private:
 			"RefreshJSBindings",
 			LOCTEXT("RefreshJSBindings", "Refresh JS Bindings"),
 			LOCTEXT("RefreshJSBindingsTip",
-				"Re-generates TypeScript bindings for all SwuiBridge components in the current level."),
+			"Re-generates TypeScript bindings for all USwui components in the current level."),
 			FSlateIcon(),
 			FUIAction(FExecuteAction::CreateRaw(this, &FSwuiEditorModule::OnRefreshAllBindings))
 		);
