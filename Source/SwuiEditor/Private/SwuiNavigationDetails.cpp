@@ -155,10 +155,7 @@ static void AddTagRows(
 			// Default tags: just the name, no controls.
 			Group.AddWidgetRow()
 				.NameContent()[NameWidget]
-				.ValueContent()
-				[
-					SNullWidget::NullWidget
-				];
+				.ValueContent()[SNullWidget::NullWidget];
 		}
 		else
 		{
@@ -306,21 +303,20 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 	TArray<FGameplayTag> DefaultTags, CustomTags;
 	GatherSwuiTags(DefaultTags, CustomTags);
 
-	// ---- Default group ----
+	// ---- Default Events group ----
 	IDetailGroup& DefaultGroup = Cat.AddGroup(
-		TEXT("SwuiDefaultTags"),
-		LOCTEXT("DefaultGroup", "Default"),
-		/*bStartExpanded=*/true);
+		TEXT("SwuiDefaultEvents"),
+		LOCTEXT("DefaultEventsHeader", "Default Events"),
+		/*bForAdvanced=*/false, /*bStartExpanded=*/true);
 	AddTagRows(DefaultGroup, DefaultTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/false);
 
-	// ---- Custom group ----
+	// ---- Custom Events group ----
 	IDetailGroup& CustomGroup = Cat.AddGroup(
-		TEXT("SwuiCustomTags"),
-		LOCTEXT("CustomGroup", "Custom"),
-		/*bStartExpanded=*/true);
-	AddTagRows(CustomGroup, CustomTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/true);
+		TEXT("SwuiCustomEvents"),
+		LOCTEXT("CustomEventsHeader", "Custom Events"),
+		/*bForAdvanced=*/false, /*bStartExpanded=*/true);
 
-	// ---- Add New row (inside Custom group) ----
+	// ---- Add New row (at top of Custom Events) ----
 	TSharedRef<SEditableTextBox> SuffixBox = SNew(SEditableTextBox)
 		.Font(IDetailLayoutBuilder::GetDetailFont())
 		.HintText(LOCTEXT("SuffixHint", "pause.open"));
@@ -420,6 +416,8 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			})
 		]
 	];
+
+	AddTagRows(CustomGroup, CustomTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/true);
 }
 
 #undef LOCTEXT_NAMESPACE
