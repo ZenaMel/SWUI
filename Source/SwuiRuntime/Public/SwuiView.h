@@ -71,6 +71,12 @@ public:
 	FSwuiInstanceSettings InstanceSettings;
 
 private:
+	// --- Browser frame pacer ---
+	double LastBrowserFrameTime = 0.0;
+	double LastDirtyTime = 0.0;
+	bool bBrowserAnimating = false;
+	bool bBrowserDirty = false;
+	double BrowserFrameTimeout = 0.100; // 100ms safety
 	UPROPERTY()
 	UTexture2D* Texture;
 

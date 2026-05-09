@@ -675,6 +675,39 @@ void USwuiView::TickDeferredUpload()
 	const bool bHasFreshPaintThisTick = bDrainedFreshPaintThisTick;
 	if (LocalLargestIn > Stat_LargestIncoming) Stat_LargestIncoming = LocalLargestIn;
 
+	// --- Browser frame pacer logic ---
+	// Use existing const double Now
+	int32 TargetFPS = WindowlessFrameRate > 0 ? WindowlessFrameRate : 60;
+	double MinFrameInterval = 1.0 / double(TargetFPS);
+
+	// Mark dirty if new rects or tiles
+	bBrowserDirty = (LocalRects.Num() > 0 || HasActiveDirtyTiles());
+	if (bBrowserDirty)
+		LastDirtyTime = Now;
+
+	// Animate if browser is in a known animating state (user can set bBrowserAnimating externally if needed)
+	bool bShouldSendFrame = false;
+	if (bBrowserDirty || bBrowserAnimating)
+	{
+		if ((Now - LastBrowserFrameTime) >= MinFrameInterval || bBrowserDirty)
+		{
+			bShouldSendFrame = true;
+		}
+	}
+	// Safety: if browser hasn't received a frame in a while, force one
+	if ((Now - LastBrowserFrameTime) > BrowserFrameTimeout)
+	{
+		bShouldSendFrame = true;
+	}
+	if (bShouldSendFrame)
+	{
+		SendExternalBeginFrameIfDue(float(Now - LastBrowserFrameTime));
+		LastBrowserFrameTime = Now;
+		if (!bBrowserAnimating)
+			bBrowserDirty = false;
+	}
+
+	// --- Original upload/paint logic ---
 	if (Texture && Texture->GetResource() && (LocalRects.Num() > 0 || bNeedsFullBaselineUpload || HasActiveDirtyTiles()))
 	{
 		const double DeferredStart = FPlatformTime::Seconds();
