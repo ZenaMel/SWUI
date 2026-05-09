@@ -5,3 +5,7 @@ F:\GameDev\UE_AngelScript\Engine\Build\BatchFiles\Build.bat ADAEditor Win64 Deve
 start project 
 
 F:\GameDev\UE_AngelScript\Engine\Binaries\Win64\UnrealEditor.exe "F:\GameDev\ADA\ADA.uproject"
+
+ROUNDTRIP
+
+Get-CimInstance Win32_Process -Filter "Name='UnrealEditor.exe'" | Where-Object { $_.CommandLine -like '*ADA.uproject*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; Get-Process BluBrowserProcess,EpicWebHelper -ErrorAction SilentlyContinue | Stop-Process -Force; & "F:\GameDev\UE_AngelScript\Engine\Build\BatchFiles\Build.bat" ADAEditor Win64 Development -Project="F:\GameDev\ADA\ADA.uproject" -WaitMutex; if ($LASTEXITCODE -eq 0) { Start-Process "F:\GameDev\UE_AngelScript\Engine\Binaries\Win64\UnrealEditor.exe" -ArgumentList '"F:\GameDev\ADA\ADA.uproject" -log -NoLiveCoding -LiveCoding=0' }
