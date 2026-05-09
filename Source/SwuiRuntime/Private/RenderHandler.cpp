@@ -2,11 +2,15 @@
 #include "ISwuiRuntime.h"
 #include "Interfaces/IPluginManager.h"
 
-RenderHandler::RenderHandler(int32 Width, int32 Height, ISwuiRenderTarget* InRenderTarget)
+RenderHandler::RenderHandler(int32 Width, int32 Height, ISwuiRenderTarget* InRenderTarget,
+	ISwuiAcceleratedRenderTarget* InAcceleratedTarget,
+	ESwuiRenderingMode InMode)
 {
 	this->Width = Width;
 	this->Height = Height;
 	this->RenderTarget = InRenderTarget;
+	this->AcceleratedTarget = InAcceleratedTarget;
+	this->ActiveMode = InMode;
 }
 
 void RenderHandler::GetViewRect(CefRefPtr<CefBrowser> Browser, CefRect &Rect)
@@ -35,6 +39,34 @@ void RenderHandler::OnPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type
 	}
 
 	RenderTarget->OnPaint(Buffer, UpdateRegions, DirtyRects.size(), InWidth, InHeight);
+}
+
+// ---------------------------------------------------------------------------
+// GPU Accelerated path — CEF calls this instead of OnPaint when
+// shared_texture_enabled is set on the CefWindowInfo.
+//
+// Thread: CEF renderer thread.
+// The shared handle in Info is only valid for the duration of this call.
+// We forward the raw HANDLE to USwuiView which opens/copies it on the
+// render thread before returning.
+// ---------------------------------------------------------------------------
+void RenderHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type, const RectList &DirtyRects, const CefAcceleratedPaintInfo& Info)
+{
+	if (!AcceleratedTarget)
+	{
+		return;
+	}
+
+#if PLATFORM_WINDOWS
+	void* SharedHandle = Info.shared_texture_handle;
+	if (!SharedHandle)
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("OnAcceleratedPaint: null shared texture handle"));
+		return;
+	}
+
+	AcceleratedTarget->OnAcceleratedPaint(SharedHandle, Width, Height);
+#endif
 }
 
 void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> Browser)

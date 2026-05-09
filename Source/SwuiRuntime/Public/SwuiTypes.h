@@ -1,11 +1,33 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "SwuiTypes.generated.h"
+
+// ---------------------------------------------------------------------------
+// Rendering mode — selects the SWUI render backend per component instance.
+//
+//  Auto           – prefers GPU Accelerated on supported Windows/D3D setups,
+//                   falls back to CPU Compatible with a log when unavailable.
+//  GpuAccelerated – uses CEF OnAcceleratedPaint with shared D3D11 textures.
+//                   Zero-copy GPU path for high-refresh HUDs and animated UI.
+//  CpuCompatible  – uses the existing CEF OnPaint CPU BGRA bitmap path.
+//                   Compatibility fallback; works on all platforms.
+// ---------------------------------------------------------------------------
+UENUM(BlueprintType)
+enum class ESwuiRenderingMode : uint8
+{
+	Auto            UMETA(DisplayName = "Auto"),
+	GpuAccelerated  UMETA(DisplayName = "GPU Accelerated"),
+	CpuCompatible   UMETA(DisplayName = "CPU Compatible")
+};
 
 // Per-instance rendering overrides forwarded from USwui → InitRenderer → USwuiView::Init().
 // A value of 0 / 0.f means "use the project-wide USwuiSettings default".
 struct FSwuiInstanceSettings
 {
+	// Rendering backend selection (Auto / GPU Accelerated / CPU Compatible).
+	ESwuiRenderingMode RenderingMode = ESwuiRenderingMode::Auto;
+
 	bool  bIsHUD                          = false;
 	bool  bUseUEFrameLockedBrowser        = true;
 	bool  bUseExternalBeginFrames         = true;
@@ -75,4 +97,20 @@ public:
 	virtual ~ISwuiRenderTarget() = default;
 	virtual void OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int32 RegionCount, int32 Width, int32 Height) = 0;
 	virtual UTexture2D* GetOrCreateTexture(int32 Width, int32 Height) = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Accelerated paint target interface — implemented by USwuiView when the
+// GPU Accelerated backend is active.
+//
+// Thread: OnAcceleratedPaint is called on the CEF renderer thread.
+// The shared texture handle (a D3D11 HANDLE on Windows) is only valid for
+// the duration of the call — the callee must open/copy the resource before
+// returning.
+// ---------------------------------------------------------------------------
+class ISwuiAcceleratedRenderTarget
+{
+public:
+	virtual ~ISwuiAcceleratedRenderTarget() = default;
+	virtual void OnAcceleratedPaint(void* SharedHandle, int32 Width, int32 Height) = 0;
 };

@@ -3,6 +3,7 @@
 #include "Components/ActorComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "SwuiBindingSource.h"
+#include "SwuiTypes.h"
 #include "Swui.generated.h"
 
 USTRUCT(BlueprintType)
@@ -108,6 +109,22 @@ public:
 	// When true the surface automatically matches the game render resolution.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI")
 	bool bIsHUD = true;
+
+	// ---------------------------------------------------------------------------
+	// Rendering Mode — selects the SWUI render backend for this component.
+	//
+	//  Auto           – Uses the best supported rendering path for the current
+	//                   platform. Prefers GPU Accelerated on Windows/D3D.
+	//  GPU Accelerated – Uses GPU-backed rendering (CEF OnAcceleratedPaint with
+	//                   shared D3D11 textures) for high-refresh HUDs and
+	//                   animated UI. Zero CPU memcpy on the paint path.
+	//  CPU Compatible – Uses the CPU bitmap rendering path (CEF OnPaint) for
+	//                   compatibility and fallback behavior. Existing optimized
+	//                   dirty-rect upload pipeline.
+	// ---------------------------------------------------------------------------
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|Rendering",
+		meta=(DisplayName="Rendering Mode"))
+	ESwuiRenderingMode RenderingMode = ESwuiRenderingMode::Auto;
 
 	// Manual resolution — ignored when bIsHUD is true.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI", meta=(EditCondition="!bIsHUD"))

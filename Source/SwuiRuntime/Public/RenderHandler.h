@@ -3,18 +3,42 @@
 #include "CEFInclude.h"
 #include "SwuiTypes.h"
 
+// ---------------------------------------------------------------------------
+// RenderHandler — CEF CefRenderHandler implementation.
+//
+// Thread ownership:
+//   - All CEF paint callbacks (OnPaint, OnAcceleratedPaint) fire on the
+//     CEF renderer thread.
+//   - RenderTarget / AcceleratedTarget pointers are set once during Init()
+//     on the game thread before the browser is created, then read-only on
+//     the CEF thread.
+// ---------------------------------------------------------------------------
 class RenderHandler : public CefRenderHandler
 {
 	public:
 		int32 Width;
 		int32 Height;
+
+		// CPU Compatible backend target (existing path).
 		ISwuiRenderTarget* RenderTarget;
+
+		// GPU Accelerated backend target (new path).
+		ISwuiAcceleratedRenderTarget* AcceleratedTarget;
+
+		// Which backend this handler is configured for.
+		ESwuiRenderingMode ActiveMode;
 
 		virtual void GetViewRect(CefRefPtr<CefBrowser> Browser, CefRect &Rect) override;
 
+		// CPU Compatible path — called when shared_texture_enabled is false.
 		void OnPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type, const RectList &DirtyRects, const void *Buffer, int Width, int Height) override;
 
-		RenderHandler(int32 Width, int32 Height, ISwuiRenderTarget* InRenderTarget);
+		// GPU Accelerated path — called when shared_texture_enabled is true.
+		void OnAcceleratedPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type, const RectList &DirtyRects, const CefAcceleratedPaintInfo& Info) override;
+
+		RenderHandler(int32 Width, int32 Height, ISwuiRenderTarget* InRenderTarget,
+			ISwuiAcceleratedRenderTarget* InAcceleratedTarget = nullptr,
+			ESwuiRenderingMode InMode = ESwuiRenderingMode::CpuCompatible);
 
 	public:
 		IMPLEMENT_REFCOUNTING(RenderHandler);

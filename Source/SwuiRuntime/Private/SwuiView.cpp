@@ -6,6 +6,17 @@
 #include "SwuiCVarHelpers.h"
 #include "Misc/Crc.h"
 
+#if PLATFORM_WINDOWS
+#include "Windows/AllowWindowsPlatformTypes.h"
+#include <d3d11.h>
+#include <dxgi.h>
+#include "Windows/HideWindowsPlatformTypes.h"
+#endif
+
+#include "RHI.h"
+#include "RHICommandList.h"
+#include "RenderingThread.h"
+
 struct FSwuiViewCefData
 {
 	CefRefPtr<BrowserClient> Client;
@@ -194,10 +205,67 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 		bExternalBeginFramesEnabled;
 	Info.external_begin_frame_enabled = bWantsExternalBeginFrames ? 1 : 0;
 
+	// -----------------------------------------------------------------------
+	// Resolve rendering mode (Auto → concrete backend).
+	//
+	// Thread: Game thread.  This runs once during Init() before the browser
+	// is created, so no synchronisation is needed with CEF callbacks.
+	// -----------------------------------------------------------------------
+	{
+		const ESwuiRenderingMode RequestedMode = InstanceSettings.RenderingMode;
+		if (RequestedMode == ESwuiRenderingMode::GpuAccelerated)
+		{
+			if (IsGpuAcceleratedSupported())
+			{
+				ResolvedRenderingMode = ESwuiRenderingMode::GpuAccelerated;
+			}
+			else
+			{
+				GpuFallbackReason = TEXT("GPU Accelerated requested but not supported on this platform/RHI — falling back to CPU Compatible.");
+				ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
+				UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: %s"), *GpuFallbackReason);
+			}
+		}
+		else if (RequestedMode == ESwuiRenderingMode::Auto)
+		{
+			if (IsGpuAcceleratedSupported())
+			{
+				ResolvedRenderingMode = ESwuiRenderingMode::GpuAccelerated;
+			}
+			else
+			{
+				GpuFallbackReason = TEXT("Auto mode: GPU Accelerated unavailable — using CPU Compatible.");
+				ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
+				UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: %s"), *GpuFallbackReason);
+			}
+		}
+		else
+		{
+			ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
+		}
+
+		// Enable CEF shared texture support for the GPU Accelerated path.
+		if (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated)
+		{
+			Info.shared_texture_enabled = 1;
+		}
+
+		const TCHAR* ModeStr =
+			ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated ? TEXT("GPU Accelerated") : TEXT("CPU Compatible");
+		UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: Rendering mode resolved: %s (requested=%d)"),
+			ModeStr, (int32)RequestedMode);
+	}
+
 	CefBrowserSettings BrowserSettings;
 	BrowserSettings.webgl = STATE_ENABLED;
 
-	RenderHandler* Renderer = new RenderHandler(Width, Height, this);
+	// Create render handler with the appropriate backend target pointers.
+	// CPU Compatible: RenderTarget = this (ISwuiRenderTarget), AcceleratedTarget = null.
+	// GPU Accelerated: RenderTarget = null, AcceleratedTarget = this (ISwuiAcceleratedRenderTarget).
+	// CEF calls OnPaint or OnAcceleratedPaint exclusively depending on shared_texture_enabled.
+	ISwuiRenderTarget* CpuTarget = (ResolvedRenderingMode == ESwuiRenderingMode::CpuCompatible) ? static_cast<ISwuiRenderTarget*>(this) : nullptr;
+	ISwuiAcceleratedRenderTarget* GpuTarget = (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated) ? static_cast<ISwuiAcceleratedRenderTarget*>(this) : nullptr;
+	RenderHandler* Renderer = new RenderHandler(Width, Height, CpuTarget, GpuTarget, ResolvedRenderingMode);
 	CefRefPtr<BrowserClient> Client = new BrowserClient(Renderer);
 
 	CefRefPtr<CefBrowser> Browser = CefBrowserHost::CreateBrowserSync(
@@ -357,6 +425,14 @@ void USwuiView::NotifySubsystemTick()
 
 bool USwuiView::HasFreshOnPaintDataPending() const
 {
+	// GPU Accelerated path: check accelerated paint pending flag.
+	if (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated)
+	{
+		FScopeLock Lock(const_cast<FCriticalSection*>(&AccelPaintMutex));
+		return bHasPendingAccelPaint && AccelPaintGeneration > AccelDrainedGeneration;
+	}
+
+	// CPU Compatible path: check CPU paint pending flag.
 	FScopeLock Lock(const_cast<FCriticalSection*>(&PaintMutex));
 	return
 		bHasPendingUpload &&
@@ -601,6 +677,67 @@ void USwuiView::TickDeferredUpload()
 {
 	const double Now = FPlatformTime::Seconds();
 	++Stat_ViewUploadTicks;
+
+	// --- GPU Accelerated path: drain shared texture, skip CPU pipeline entirely ---
+	if (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated)
+	{
+		TickAcceleratedUpload();
+
+		// --- Browser frame pacer (same logic as CPU path) ---
+		int32 TargetFPS = WindowlessFrameRate > 0 ? WindowlessFrameRate : 60;
+		double MinFrameInterval = 1.0 / double(TargetFPS);
+		bool bShouldSendFrame = false;
+		if ((Now - LastBrowserFrameTime) >= MinFrameInterval)
+		{
+			bShouldSendFrame = true;
+		}
+		if ((Now - LastBrowserFrameTime) > BrowserFrameTimeout)
+		{
+			bShouldSendFrame = true;
+		}
+		if (bShouldSendFrame)
+		{
+			SendExternalBeginFrameIfDue(float(Now - LastBrowserFrameTime));
+			LastBrowserFrameTime = Now;
+		}
+
+		// --- GPU stats log (per-second) ---
+		if (SwuiCVarBool(CVarSwuiDebugLogPaintStats.GetValueOnGameThread(), InstanceSettings.bLogSwuiPaintStats) && (Now - Stat_LastLogTime >= 1.0))
+		{
+			const float AccelCopyAvgMs = Stat_AccelCopySamples > 0 ? float(Stat_AccelCopyMsSum / Stat_AccelCopySamples) : 0.f;
+			const TCHAR* ModeStr = TEXT("GPU Accelerated");
+			UE_LOG(LogSwuiRuntime, Log,
+				TEXT("[SwuiPaint] mode=%s  subsystemTicks/s=%d  viewUploadTicks/s=%d")
+				TEXT("  accelPaints/s=%d  accelCopies/s=%d  accelHandleFails/s=%d")
+				TEXT("  accelCopyAvgMs=%.3f  accelCopyMaxMs=%.3f")
+				TEXT("  texRecreates=%d  resizes=%d")
+				TEXT("  externalBeginFrames/s=%d")
+				TEXT("  browserFpsCap=%d  tex=%dx%d"),
+				ModeStr, Stat_SubsystemTicks, Stat_ViewUploadTicks,
+				Stat_AccelPaints, Stat_AccelCopies, Stat_AccelHandleFails,
+				AccelCopyAvgMs, Stat_AccelCopyMsMax,
+				Stat_AccelTexRecreates, Stat_AccelResizes,
+				Stat_ExternalBeginFrames,
+				WindowlessFrameRate, Width, Height);
+
+			if (!GpuFallbackReason.IsEmpty())
+			{
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPaint] fallbackReason=%s"), *GpuFallbackReason);
+			}
+
+			Stat_SubsystemTicks = 0; Stat_ViewUploadTicks = 0;
+			Stat_AccelPaints = 0; Stat_AccelCopies = 0; Stat_AccelHandleFails = 0;
+			Stat_AccelCopyMsSum = 0.0; Stat_AccelCopyMsMax = 0.0; Stat_AccelCopySamples = 0;
+			Stat_AccelTexRecreates = 0; Stat_AccelResizes = 0;
+			Stat_ExternalBeginFrames = 0;
+			Stat_ExternalBeginFrameSkipInactive = 0; Stat_ExternalBeginFrameSkipDisabled = 0;
+			Stat_ExternalBeginFrameSkipNoBrowser = 0; Stat_ExternalBeginFrameSkipRateLimited = 0;
+			Stat_LastLogTime = Now;
+		}
+		return; // GPU path complete — skip entire CPU pipeline below.
+	}
+
+	// --- CPU Compatible path (existing implementation) ---
 
 	auto RecordTimingSampleMs = [](double SampleMs, double& SumMs, double& MaxMs, int32& SampleCount)
 	{
@@ -1098,7 +1235,7 @@ void USwuiView::TickDeferredUpload()
 		const float PaintAfterBeginFrameAvgMs = Stat_PaintAfterBeginFrameSamples > 0 ? float(Stat_PaintAfterBeginFrameMsSum / Stat_PaintAfterBeginFrameSamples) : 0.f;
 		const float UploadAfterPaintAvgMs = Stat_UploadAfterPaintSamples > 0 ? float(Stat_UploadAfterPaintMsSum / Stat_UploadAfterPaintSamples) : 0.f;
 		UE_LOG(LogSwuiRuntime, Log,
-			TEXT("[SwuiPaint] subsystemTicks/s=%d  viewUploadTicks/s=%d  cefPaints/s=%d")
+			TEXT("[SwuiPaint] mode=CPU Compatible  subsystemTicks/s=%d  viewUploadTicks/s=%d  cefPaints/s=%d")
 			TEXT("  externalBeginFrames/s=%d  invalidateView/s=%d  beginFramesWithoutPaint/s=%d  paintsAfterInvalidate/s=%d")
 			TEXT("  ueUploads/s=%d (fresh=%d backlog=%d)  hudStateFlushes/s=%d")
 			TEXT("  extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
@@ -1325,6 +1462,209 @@ void USwuiView::ResetMatInstance()
 	}
 
 	MaterialInstance->SetTextureParameterValue(TextureParameterName, Texture);
+}
+
+// ---------------------------------------------------------------------------
+// GPU Accelerated backend support
+// ---------------------------------------------------------------------------
+
+// static
+bool USwuiView::IsGpuAcceleratedSupported()
+{
+#if PLATFORM_WINDOWS
+	// Require D3D11 RHI — shared texture handles are D3D11-only in CEF.
+	const FString RHIName = GDynamicRHI ? GDynamicRHI->GetName() : TEXT("");
+	if (RHIName.Contains(TEXT("D3D11")))
+	{
+		return true;
+	}
+	// D3D12 could theoretically work with D3D11on12 interop, but CEF's
+	// shared textures are D3D11-native.  Conservatively reject for now.
+	return false;
+#else
+	return false;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// OnAcceleratedPaint — called on the CEF renderer thread.
+//
+// The shared handle in |SharedHandle| is only valid for the duration of this
+// call.  Per CEF docs: "The handle's resource cannot be cached and cannot be
+// accessed outside of this callback."
+//
+// We enqueue a blocking render command that opens the shared handle on UE's
+// D3D11 device, copies it to the persistent UE texture, and releases the
+// resource — all before this callback returns.
+//
+// Thread safety:
+//   - D3D11 Device::OpenSharedResource is thread-safe.
+//   - We synchronise with the render thread via FlushRenderingCommands.
+//   - The CEF thread blocks briefly during the GPU copy (~0.1 ms typical).
+// ---------------------------------------------------------------------------
+void USwuiView::OnAcceleratedPaint(void* SharedHandle, int32 InWidth, int32 InHeight)
+{
+	if (!SharedHandle) return;
+
+#if PLATFORM_WINDOWS
+	// Track generation for HasFreshOnPaintDataPending().
+	{
+		FScopeLock Lock(&AccelPaintMutex);
+		++AccelPaintGeneration;
+		PendingAccelWidth  = InWidth;
+		PendingAccelHeight = InHeight;
+	}
+
+	// Ensure texture exists on the game thread (GetOrCreateTexture is game-thread only).
+	// If the texture doesn't exist yet or size mismatches, we'll skip this frame.
+	// The next game-thread tick will create the texture, and the following accelerated
+	// paint will succeed.
+	if (!Texture || !Texture->GetResource()) return;
+	if (Texture->GetSizeX() != InWidth || Texture->GetSizeY() != InHeight)
+	{
+		// Signal that a resize is needed — game thread will handle it.
+		FScopeLock Lock(&AccelPaintMutex);
+		bHasPendingAccelPaint = true;
+		PendingSharedHandle = nullptr; // handle expires after this callback
+		return;
+	}
+
+	FTextureResource* TexResource = (FTextureResource*)Texture->GetResource();
+	if (!TexResource) return;
+
+	// Open the shared handle on UE's D3D11 device.  Device::OpenSharedResource
+	// is thread-safe on D3D11 — it can be called from the CEF thread.
+	ID3D11Device* Device = static_cast<ID3D11Device*>(GDynamicRHI->RHIGetNativeDevice());
+	if (!Device)
+	{
+		++Stat_AccelHandleFails;
+		return;
+	}
+
+	ID3D11Texture2D* SharedTex = nullptr;
+	HRESULT Hr = Device->OpenSharedResource(SharedHandle, __uuidof(ID3D11Texture2D), (void**)&SharedTex);
+	if (FAILED(Hr) || !SharedTex)
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("OnAcceleratedPaint: OpenSharedResource failed (HRESULT=0x%08X)"), Hr);
+		++Stat_AccelHandleFails;
+		return;
+	}
+
+	// Enqueue a render command to copy the opened shared texture to UE's texture.
+	// We own the SharedTex reference — the render command releases it.
+	int32* StatCopies = &Stat_AccelCopies;
+	int32* StatFails  = &Stat_AccelHandleFails;
+
+	// Use a completion event so we can block the CEF thread until the copy
+	// finishes.  This ensures the shared handle pool resource remains valid
+	// during the GPU copy.
+	FEvent* CompletionEvent = FPlatformProcess::GetSynchEventFromPool(true);
+
+	ENQUEUE_RENDER_COMMAND(SwuiAcceleratedCopy)(
+		[TexResource, SharedTex, StatCopies, StatFails, CompletionEvent](FRHICommandListImmediate& RHICmdList)
+		{
+			FRHITexture* RHITex = TexResource->TextureRHI.GetReference();
+			ID3D11Texture2D* DestTex = RHITex ? static_cast<ID3D11Texture2D*>(RHITex->GetNativeResource()) : nullptr;
+
+			if (DestTex)
+			{
+				ID3D11Device* Dev = nullptr;
+				DestTex->GetDevice(&Dev);
+				if (Dev)
+				{
+					ID3D11DeviceContext* Ctx = nullptr;
+					Dev->GetImmediateContext(&Ctx);
+					if (Ctx)
+					{
+						// Full GPU-to-GPU copy — no CPU staging, no memcpy.
+						Ctx->CopyResource(DestTex, SharedTex);
+						++(*StatCopies);
+						Ctx->Release();
+					}
+					else
+					{
+						++(*StatFails);
+					}
+					Dev->Release();
+				}
+				else
+				{
+					++(*StatFails);
+				}
+			}
+			else
+			{
+				++(*StatFails);
+			}
+
+			SharedTex->Release();
+			CompletionEvent->Trigger();
+		});
+
+	// Block the CEF thread until the render command completes the copy.
+	// The GPU copy is fast (~0.05–0.2 ms) — well within CEF callback tolerance.
+	const double CopyStart = FPlatformTime::Seconds();
+	CompletionEvent->Wait();
+	FPlatformProcess::ReturnSynchEventToPool(CompletionEvent);
+
+	const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
+	Stat_AccelCopyMsSum += CopyMs;
+	if (CopyMs > Stat_AccelCopyMsMax) Stat_AccelCopyMsMax = CopyMs;
+	++Stat_AccelCopySamples;
+	++Stat_AccelPaints;
+
+	// Mark as drained so HasFreshOnPaintDataPending knows.
+	{
+		FScopeLock Lock(&AccelPaintMutex);
+		AccelDrainedGeneration = AccelPaintGeneration;
+		bHasPendingAccelPaint = false;
+	}
+#endif // PLATFORM_WINDOWS
+}
+
+// ---------------------------------------------------------------------------
+// TickAcceleratedUpload — called on the game thread from TickDeferredUpload.
+//
+// In GPU Accelerated mode, the actual shared-texture copy happens
+// synchronously inside OnAcceleratedPaint on the CEF thread (via a blocking
+// render command).  TickAcceleratedUpload handles deferred work that must
+// run on the game thread:
+//   - Texture recreation on resize.
+//   - Stats tracking.
+// ---------------------------------------------------------------------------
+void USwuiView::TickAcceleratedUpload()
+{
+#if PLATFORM_WINDOWS
+	int32 LocalWidth = 0;
+	int32 LocalHeight = 0;
+	bool bNeedsResize = false;
+
+	{
+		FScopeLock Lock(&AccelPaintMutex);
+		LocalWidth  = PendingAccelWidth;
+		LocalHeight = PendingAccelHeight;
+		// Check if OnAcceleratedPaint signaled a size mismatch.
+		bNeedsResize = bHasPendingAccelPaint && PendingSharedHandle == nullptr
+			&& LocalWidth > 0 && LocalHeight > 0;
+		if (bNeedsResize)
+		{
+			bHasPendingAccelPaint = false;
+		}
+	}
+
+	// Handle deferred texture resize (game thread only).
+	if (bNeedsResize)
+	{
+		if (!Texture || Texture->GetSizeX() != LocalWidth || Texture->GetSizeY() != LocalHeight)
+		{
+			GetOrCreateTexture(LocalWidth, LocalHeight);
+			++Stat_AccelTexRecreates;
+			++Stat_AccelResizes;
+			UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: GPU Accelerated texture resized to %dx%d"), LocalWidth, LocalHeight);
+		}
+	}
+
+#endif // PLATFORM_WINDOWS
 }
 
 void USwuiView::BeginDestroy()

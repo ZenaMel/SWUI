@@ -10,7 +10,7 @@
 struct FSwuiViewCefData;
 
 UCLASS(ClassGroup=Swui, Blueprintable)
-class SWUIRUNTIME_API USwuiView : public UObject, public ISwuiRenderTarget
+class SWUIRUNTIME_API USwuiView : public UObject, public ISwuiRenderTarget, public ISwuiAcceleratedRenderTarget
 {
 	GENERATED_BODY()
 
@@ -49,9 +49,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
 	UTexture2D* GetTexture() const;
 
-	// ISwuiRenderTarget
+	// ISwuiRenderTarget (CPU Compatible path)
 	virtual void OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int32 RegionCount, int32 Width, int32 Height) override;
 	virtual UTexture2D* GetOrCreateTexture(int32 InWidth, int32 InHeight) override;
+
+	// ISwuiAcceleratedRenderTarget (GPU Accelerated path)
+	virtual void OnAcceleratedPaint(void* SharedHandle, int32 InWidth, int32 InHeight) override;
+
+	// The rendering mode resolved at Init() time (never Auto — always concrete).
+	ESwuiRenderingMode GetResolvedRenderingMode() const { return ResolvedRenderingMode; }
 
 	virtual void BeginDestroy() override;
 
@@ -184,6 +190,43 @@ private:
 	int64  Stat_MemcpyMaxUs     = 0;
 	double Stat_LastLogTime     = 0.0;
 	double Stat_OverlayLastPushTime = 0.0;
+
+	// -----------------------------------------------------------------------
+	// GPU Accelerated backend state
+	// -----------------------------------------------------------------------
+
+	// Concrete mode resolved from Auto / explicit at Init() time.
+	ESwuiRenderingMode ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
+
+	// Reason string logged when Auto falls back to CPU Compatible.
+	FString GpuFallbackReason;
+
+	// --- Accelerated paint coalescing (CEF thread → game thread → render thread) ---
+	// Guarded by AccelPaintMutex.
+	FCriticalSection               AccelPaintMutex;
+	void*                          PendingSharedHandle = nullptr;
+	int32                          PendingAccelWidth   = 0;
+	int32                          PendingAccelHeight  = 0;
+	bool                           bHasPendingAccelPaint = false;
+	uint64                         AccelPaintGeneration = 0;
+	uint64                         AccelDrainedGeneration = 0;
+
+	// --- GPU stats (game thread only) ---
+	int32  Stat_AccelPaints         = 0;   // OnAcceleratedPaint calls/s
+	int32  Stat_AccelCopies         = 0;   // successful GPU copies/s
+	int32  Stat_AccelHandleFails    = 0;   // shared handle open failures/s
+	int32  Stat_AccelTexRecreates   = 0;   // texture recreations
+	int32  Stat_AccelResizes        = 0;   // resize events
+	double Stat_AccelCopyMsSum      = 0.0;
+	double Stat_AccelCopyMsMax      = 0.0;
+	int32  Stat_AccelCopySamples    = 0;
+
+	// Drains the latest accelerated paint from the CEF thread and issues
+	// a render-thread GPU copy into the persistent UE texture.
+	void TickAcceleratedUpload();
+
+	// Checks if the current platform/RHI supports the GPU Accelerated path.
+	static bool IsGpuAcceleratedSupported();
 
 	void ResetTexture();
 	void DestroyTexture();

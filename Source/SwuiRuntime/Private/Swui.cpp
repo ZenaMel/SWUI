@@ -103,6 +103,7 @@ void USwui::InitializeSwuiView()
 	if (!Sub) return;
 
 	FSwuiInstanceSettings InstSettings;
+	InstSettings.RenderingMode                    = RenderingMode;
 	InstSettings.bIsHUD                           = bIsHUD;
 	InstSettings.bUseUEFrameLockedBrowser         = bUseUEFrameLockedBrowser;
 	InstSettings.bUseExternalBeginFrames          = bUseExternalBeginFrames;
@@ -192,6 +193,7 @@ void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 	if (!Sub) return;
 
 	FSwuiInstanceSettings Rebuilt;
+	Rebuilt.RenderingMode                    = RenderingMode;
 	Rebuilt.bIsHUD                           = bIsHUD;
 	Rebuilt.bUseUEFrameLockedBrowser         = bUseUEFrameLockedBrowser;
 	Rebuilt.bUseExternalBeginFrames          = bUseExternalBeginFrames;
