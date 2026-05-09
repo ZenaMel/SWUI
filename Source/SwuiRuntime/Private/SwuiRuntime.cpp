@@ -82,22 +82,39 @@ class FSwuiRuntime : public ISwuiRuntime
 		return;
 #endif
 
-		const FString RootCachePath = FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPlatformProcess::UserTempDir(), TEXT("SWUI_BundledCEF")));
+		       const uint32 ProcessId = FPlatformProcess::GetCurrentProcessId();
 
-		const FString CachePath = FPaths::Combine(RootCachePath, TEXT("Default"));
+		       const FString RootCachePath = FPaths::ConvertRelativePathToFull(
+			       FPaths::Combine(
+				       FPlatformProcess::UserTempDir(),
+				       FString::Printf(TEXT("SWUI_BundledCEF_%u"), ProcessId)
+			       )
+		       );
 
-		const FString CefLogPath = FPaths::ConvertRelativePathToFull(
-			FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Logs/SwuiCefDebug.log")));
+		       const FString CachePath = FPaths::Combine(RootCachePath, TEXT("Default"));
 
-		IFileManager::Get().MakeDirectory(*RootCachePath, true);
-		IFileManager::Get().MakeDirectory(*CachePath, true);
-		IFileManager::Get().MakeDirectory(*FPaths::GetPath(CefLogPath), true);
+		       const FString CefLogPath = FPaths::ConvertRelativePathToFull(
+			       FPaths::Combine(
+				       FPaths::ProjectLogDir(),
+				       FString::Printf(TEXT("SwuiCefDebug_%u.log"), ProcessId)
+			       )
+		       );
 
-		SwuiSetCefString(SwuiManager::Settings.browser_subprocess_path, ExecutablePath);
-		SwuiSetCefString(SwuiManager::Settings.resources_dir_path, ResourcesPath);
-		SwuiSetCefString(SwuiManager::Settings.locales_dir_path, LocalesPath);
-		SwuiSetCefString(SwuiManager::Settings.root_cache_path, RootCachePath);
+		       IFileManager::Get().MakeDirectory(*RootCachePath, true);
+		       IFileManager::Get().MakeDirectory(*CachePath, true);
+		       IFileManager::Get().MakeDirectory(*FPaths::GetPath(CefLogPath), true);
+
+		       SwuiSetCefString(SwuiManager::Settings.browser_subprocess_path, ExecutablePath);
+		       SwuiSetCefString(SwuiManager::Settings.resources_dir_path, ResourcesPath);
+		       SwuiSetCefString(SwuiManager::Settings.locales_dir_path, LocalesPath);
+		       SwuiSetCefString(SwuiManager::Settings.root_cache_path, RootCachePath);
+		       SwuiSetCefString(SwuiManager::Settings.cache_path, CachePath);
+		       SwuiSetCefString(SwuiManager::Settings.log_file, CefLogPath);
+
+		       UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF process id: %u"), ProcessId);
+		       UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF root_cache_path: %s exists=%s"), *RootCachePath, FPaths::DirectoryExists(RootCachePath) ? TEXT("true") : TEXT("false"));
+		       UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF cache_path: %s exists=%s"), *CachePath, FPaths::DirectoryExists(CachePath) ? TEXT("true") : TEXT("false"));
+		       UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF log_file: %s"), *CefLogPath);
 		SwuiSetCefString(SwuiManager::Settings.cache_path, CachePath);
 		SwuiSetCefString(SwuiManager::Settings.log_file, CefLogPath);
 		SwuiManager::Settings.log_severity = LOGSEVERITY_VERBOSE;
