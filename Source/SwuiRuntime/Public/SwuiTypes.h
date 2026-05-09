@@ -21,6 +21,66 @@ enum class ESwuiRenderingMode : uint8
 	CpuCompatible   UMETA(DisplayName = "CPU Compatible")
 };
 
+// ---------------------------------------------------------------------------
+// Navigation enums — used by USwuiNavigation for menu/input routing.
+// ---------------------------------------------------------------------------
+
+UENUM(BlueprintType)
+enum class ESwuiNavDirection : uint8
+{
+	Up       UMETA(DisplayName = "Up"),
+	Down     UMETA(DisplayName = "Down"),
+	Left     UMETA(DisplayName = "Left"),
+	Right    UMETA(DisplayName = "Right"),
+	Next     UMETA(DisplayName = "Next"),
+	Previous UMETA(DisplayName = "Previous")
+};
+
+UENUM(BlueprintType)
+enum class ESwuiPointerButton : uint8
+{
+	Left   UMETA(DisplayName = "Left"),
+	Right  UMETA(DisplayName = "Right"),
+	Middle UMETA(DisplayName = "Middle")
+};
+
+UENUM(BlueprintType)
+enum class ESwuiNavigationDispatchOrder : uint8
+{
+	BlueprintFirst  UMETA(DisplayName = "Blueprint First"),
+	JavaScriptFirst UMETA(DisplayName = "JavaScript First")
+};
+
+UENUM(BlueprintType)
+enum class ESwuiInputMode : uint8
+{
+	HudOnly   UMETA(DisplayName = "HUD Only"),
+	UiOnly    UMETA(DisplayName = "UI Only"),
+	GameAndUi UMETA(DisplayName = "Game and UI")
+};
+
+// ---------------------------------------------------------------------------
+// Navigation action mapping — configurable per-action routing.
+// ---------------------------------------------------------------------------
+
+USTRUCT(BlueprintType)
+struct FSwuiNavigationAction
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	FName ActionName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	FString JsEventName = TEXT("swui:navigation");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	bool bForwardToJavaScript = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation")
+	bool bTriggerBlueprintEvents = true;
+};
+
 // Per-instance rendering overrides forwarded from USwui → InitRenderer → USwuiView::Init().
 // A value of 0 / 0.f means "use the project-wide USwuiSettings default".
 struct FSwuiInstanceSettings
