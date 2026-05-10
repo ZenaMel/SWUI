@@ -219,6 +219,46 @@ static UBlueprint* FindOwningBlueprint(USwuiNavigation* Nav)
 	return Nav->GetTypedOuter<UBlueprint>();
 }
 
+static USwui* ResolveTargetSwuiForEditor(USwuiNavigation* Nav)
+{
+	if (!Nav)
+	{
+		return nullptr;
+	}
+
+	if (USwui* RuntimeTarget = Nav->GetTargetSwui())
+	{
+		return RuntimeTarget;
+	}
+
+	UBlueprint* Blueprint = FindOwningBlueprint(Nav);
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript.Get();
+	if (!SCS)
+	{
+		return nullptr;
+	}
+
+	for (USCS_Node* Node : SCS->GetAllNodes())
+	{
+		if (!Node || !Node->ComponentTemplate)
+		{
+			continue;
+		}
+
+		if (USwui* Swui = Cast<USwui>(Node->ComponentTemplate))
+		{
+			return Swui;
+		}
+	}
+
+	return nullptr;
+}
+
 static TSharedPtr<IBlueprintEditor> FindOwningBlueprintEditor(UBlueprint* Blueprint, USwuiNavigation* Nav)
 {
 	auto MatchesBlueprint = [Blueprint](const TSharedPtr<IBlueprintEditor>& Candidate) -> bool
@@ -829,14 +869,14 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			bool bOK = false;
 			if (NavPtr.IsValid())
 			{
-				USwui* Swui = NavPtr->GetTargetSwui();
+				USwui* Swui = ResolveTargetSwuiForEditor(NavPtr.Get());
 				if (Swui)
 				{
 					bOK = FSwuiTSGenerator::GenerateNavigation(Swui, NavPtr->NavigationEvents);
 				}
 				else
 				{
-					UE_LOG(LogTemp, Error, TEXT("SWUI: Navigation JS bindings generation failed because SwuiNavigation has no target USwui."));
+					UE_LOG(LogTemp, Error, TEXT("SWUI: Navigation JS bindings generation failed because no sibling USwui component could be resolved for this SwuiNavigation."));
 				}
 			}
 

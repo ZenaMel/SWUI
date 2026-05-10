@@ -109,8 +109,37 @@ void USwuiNavigation::BeginPlay()
 
 USwui* USwuiNavigation::GetTargetSwui() const
 {
-	AActor* Owner = GetOwner();
-	return Owner ? Owner->FindComponentByClass<USwui>() : nullptr;
+	if (AActor* Owner = GetOwner())
+	{
+		if (USwui* Swui = Owner->FindComponentByClass<USwui>())
+		{
+			return Swui;
+		}
+	}
+
+	if (AActor* OuterActor = GetTypedOuter<AActor>())
+	{
+		if (USwui* Swui = OuterActor->FindComponentByClass<USwui>())
+		{
+			return Swui;
+		}
+	}
+
+	if (UClass* OuterClass = GetTypedOuter<UClass>())
+	{
+		if (OuterClass->IsChildOf<AActor>())
+		{
+			if (AActor* ActorCDO = Cast<AActor>(OuterClass->GetDefaultObject()))
+			{
+				if (USwui* Swui = ActorCDO->FindComponentByClass<USwui>())
+				{
+					return Swui;
+				}
+			}
+		}
+	}
+
+	return nullptr;
 }
 
 // ---------------------------------------------------------------------------
