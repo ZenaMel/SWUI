@@ -1,7 +1,9 @@
 ﻿#include "SwuiTSGenerator.h"
+#include "SwuiNavigation.h"
 #include "Swui.h"
 #include "SwuiBindingSource.h"
 #include "SwuiTypes.h"
+#include "Containers/Map.h"
 #include "Containers/Set.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -84,42 +86,493 @@ static FString SwuiMakeNavigationIdentifier(const FString& EventName)
 	return Identifier;
 }
 
+static FString SwuiMakeNavigationConstantIdentifier(const FString& EventName)
+{
+	FString Identifier = SwuiMakeNavigationIdentifier(EventName);
+	if (!Identifier.IsEmpty())
+	{
+		Identifier[0] = FChar::ToLower(Identifier[0]);
+	}
+	return Identifier;
+}
+
+static FString SwuiEscapeTsStringLiteral(const FString& Value)
+{
+	FString Escaped = Value;
+	Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
+	Escaped.ReplaceInline(TEXT("'"), TEXT("\\'"));
+	Escaped.ReplaceInline(TEXT("\r"), TEXT("\\r"));
+	Escaped.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+	Escaped.ReplaceInline(TEXT("\t"), TEXT("\\t"));
+	return Escaped;
+}
+
+static FString SwuiQuotePreviewString(const FString& Value)
+{
+	return TEXT("'") + SwuiEscapeTsStringLiteral(Value) + TEXT("'");
+}
+
+static bool SwuiIsExcludedNavigationPlaceholder(const FString& TagName)
+{
+	return TagName == TEXT("swui.menu")
+		|| TagName == TEXT("swui.navigation")
+		|| TagName == TEXT("swui.pointer");
+}
+
+struct FSwuiGeneratedNavInfo
+{
+	FString Identifier;
+	FString HandlerSuffix;
+	FString EventName;
+	FString Category;
+	bool bDefaultEvent = false;
+};
+
+struct FSwuiGeneratedPropertyInfo
+{
+	FString ObjectName;
+	FString Namespace;
+	FString FullKey;
+	FString PropName;
+	FString TSType;
+	FString Label;
+	FString ContractType;
+	FString DefaultValueLiteral;
+	FString MinVal;
+	FString MaxVal;
+	FString StepVal;
+	TArray<FString> EnumOptions;
+};
+
+struct FSwuiGeneratedEventInfo
+{
+	FString ObjectName;
+	FString Namespace;
+	FString FullKey;
+	FString DelegateName;
+	FString PayloadBody;
+};
+
+struct FSwuiGeneratedSourceEntry
+{
+	FString ObjectName;
+	FString Namespace;
+	TArray<FSwuiGeneratedPropertyInfo> Props;
+	TArray<FSwuiGeneratedEventInfo> Events;
+};
+
+static FString SwuiGetNavigationCategory(const FString& EventName, bool bDefaultEvent)
+{
+	if (!bDefaultEvent)
+	{
+		return TEXT("custom");
+	}
+
+	TArray<FString> Segments;
+	EventName.ParseIntoArray(Segments, TEXT("."), true);
+	if (Segments.Num() >= 2 && Segments[0].Equals(TEXT("swui"), ESearchCase::IgnoreCase))
+	{
+		return Segments[1].ToLower();
+	}
+
+	return TEXT("custom");
+}
+
+static bool SwuiTryGetEnumDefinition(const FProperty* Prop, const UEnum*& OutEnum)
+{
+	OutEnum = nullptr;
+
+	if (const FEnumProperty* EnumProp = CastField<const FEnumProperty>(Prop))
+	{
+		OutEnum = EnumProp->GetEnum();
+		return OutEnum != nullptr;
+	}
+
+	if (const FByteProperty* ByteProp = CastField<const FByteProperty>(Prop))
+	{
+		OutEnum = ByteProp->Enum;
+		return OutEnum != nullptr;
+	}
+
+	return false;
+}
+
+static FString SwuiReadFirstMetadataValue(const FProperty* Prop, std::initializer_list<const TCHAR*> Keys)
+{
+	for (const TCHAR* Key : Keys)
+	{
+		if (Prop->HasMetaData(Key))
+		{
+			const FString Value = Prop->GetMetaData(Key).TrimStartAndEnd();
+			if (!Value.IsEmpty())
+			{
+				return Value;
+			}
+		}
+	}
+
+	return FString();
+}
+
+static FString SwuiFormatNumericLiteral(double Value, bool bInteger)
+{
+	if (bInteger)
+	{
+		return FString::Printf(TEXT("%lld"), static_cast<long long>(Value));
+	}
+
+	FString Literal = FString::SanitizeFloat(Value);
+	if (!Literal.Contains(TEXT(".")) && !Literal.Contains(TEXT("e")) && !Literal.Contains(TEXT("E")))
+	{
+		Literal += TEXT(".0");
+	}
+
+	return Literal;
+}
+
+static void SwuiApplyNumericFallbacks(const FString& FieldName, bool bInteger, FString& InOutMin, FString& InOutMax, FString& InOutStep)
+{
+	const FString Name = FieldName.ToLower();
+
+	if (InOutStep.IsEmpty())
+	{
+		InOutStep = bInteger ? TEXT("1") : TEXT("0.1");
+	}
+
+	if (Name.Contains(TEXT("angle")) || Name.Contains(TEXT("yaw")))
+	{
+		if (InOutMin.IsEmpty()) InOutMin = TEXT("0");
+		if (InOutMax.IsEmpty()) InOutMax = TEXT("360");
+		if (InOutStep.IsEmpty() || InOutStep == TEXT("0.1")) InOutStep = TEXT("1");
+		return;
+	}
+
+	if (Name.Contains(TEXT("percent")) || Name.Contains(TEXT("percentage")))
+	{
+		if (InOutMin.IsEmpty()) InOutMin = TEXT("0");
+		if (InOutMax.IsEmpty()) InOutMax = TEXT("100");
+		if (InOutStep.IsEmpty() || InOutStep == TEXT("0.1")) InOutStep = TEXT("1");
+		return;
+	}
+
+	if (Name.Contains(TEXT("ammo")) || Name.Contains(TEXT("count")) || Name.Contains(TEXT("size")) || Name.Contains(TEXT("reserve")))
+	{
+		if (InOutMin.IsEmpty()) InOutMin = TEXT("0");
+		if (InOutMax.IsEmpty()) InOutMax = TEXT("999");
+		if (InOutStep.IsEmpty() || InOutStep == TEXT("0.1")) InOutStep = TEXT("1");
+	}
+}
+
+static void SwuiPopulateFieldMetadata(
+	const UObject* DefaultsObject,
+	const FProperty* Prop,
+	const FString& FieldName,
+	FString& OutType,
+	FString& OutDefaultValueLiteral,
+	FString& OutMinVal,
+	FString& OutMaxVal,
+	FString& OutStepVal,
+	TArray<FString>& OutEnumOptions)
+{
+	OutType.Reset();
+	OutDefaultValueLiteral.Reset();
+	OutMinVal.Reset();
+	OutMaxVal.Reset();
+	OutStepVal.Reset();
+	OutEnumOptions.Reset();
+
+	const UEnum* EnumDefinition = nullptr;
+	if (SwuiTryGetEnumDefinition(Prop, EnumDefinition) && EnumDefinition)
+	{
+		OutType = TEXT("enum");
+
+		int64 EnumValue = 0;
+		if (DefaultsObject)
+		{
+			if (const FEnumProperty* EnumProp = CastField<const FEnumProperty>(Prop))
+			{
+				const void* ValuePtr = EnumProp->ContainerPtrToValuePtr<void>(DefaultsObject);
+				EnumValue = EnumProp->GetUnderlyingProperty()->GetSignedIntPropertyValue(ValuePtr);
+			}
+			else if (const FByteProperty* ByteProp = CastField<const FByteProperty>(Prop))
+			{
+				const void* ValuePtr = ByteProp->ContainerPtrToValuePtr<void>(DefaultsObject);
+				EnumValue = ByteProp->GetSignedIntPropertyValue(ValuePtr);
+			}
+		}
+
+		OutDefaultValueLiteral = SwuiQuotePreviewString(EnumDefinition->GetNameStringByValue(EnumValue));
+
+		for (int32 Index = 0; Index < EnumDefinition->NumEnums(); ++Index)
+		{
+			if (EnumDefinition->HasMetaData(TEXT("Hidden"), Index))
+			{
+				continue;
+			}
+
+			OutEnumOptions.Add(SwuiQuotePreviewString(EnumDefinition->GetNameStringByIndex(Index)));
+		}
+
+		return;
+	}
+
+	if (const FBoolProperty* BoolProp = CastField<const FBoolProperty>(Prop))
+	{
+		OutType = TEXT("boolean");
+		const bool bDefaultValue = DefaultsObject
+			? BoolProp->GetPropertyValue_InContainer(DefaultsObject)
+			: false;
+		OutDefaultValueLiteral = bDefaultValue ? TEXT("true") : TEXT("false");
+		return;
+	}
+
+	if (const FStrProperty* StrProp = CastField<const FStrProperty>(Prop))
+	{
+		OutType = TEXT("string");
+		const FString DefaultValue = DefaultsObject
+			? StrProp->GetPropertyValue_InContainer(DefaultsObject)
+			: FString();
+		OutDefaultValueLiteral = SwuiQuotePreviewString(DefaultValue);
+		return;
+	}
+
+	if (const FNameProperty* NameProp = CastField<const FNameProperty>(Prop))
+	{
+		OutType = TEXT("string");
+		const FName DefaultValue = DefaultsObject
+			? NameProp->GetPropertyValue_InContainer(DefaultsObject)
+			: NAME_None;
+		OutDefaultValueLiteral = SwuiQuotePreviewString(DefaultValue.ToString());
+		return;
+	}
+
+	if (const FTextProperty* TextProp = CastField<const FTextProperty>(Prop))
+	{
+		OutType = TEXT("string");
+		const FText DefaultValue = DefaultsObject
+			? TextProp->GetPropertyValue_InContainer(DefaultsObject)
+			: FText::GetEmpty();
+		OutDefaultValueLiteral = SwuiQuotePreviewString(DefaultValue.ToString());
+		return;
+	}
+
+	if (const FNumericProperty* NumericProp = CastField<const FNumericProperty>(Prop))
+	{
+		const bool bInteger = NumericProp->IsInteger();
+		OutType = TEXT("number");
+		if (DefaultsObject)
+		{
+			const void* ValuePtr = NumericProp->ContainerPtrToValuePtr<void>(DefaultsObject);
+			OutDefaultValueLiteral = bInteger
+				? SwuiFormatNumericLiteral(static_cast<double>(NumericProp->GetSignedIntPropertyValue(ValuePtr)), true)
+				: SwuiFormatNumericLiteral(NumericProp->GetFloatingPointPropertyValue(ValuePtr), false);
+		}
+		else
+		{
+			OutDefaultValueLiteral = bInteger ? TEXT("0") : TEXT("0.0");
+		}
+
+		OutMinVal = SwuiReadFirstMetadataValue(Prop, { TEXT("ClampMin"), TEXT("UIMin") });
+		OutMaxVal = SwuiReadFirstMetadataValue(Prop, { TEXT("ClampMax"), TEXT("UIMax") });
+		OutStepVal = SwuiReadFirstMetadataValue(Prop, { TEXT("Delta"), TEXT("Multiple"), TEXT("Step") });
+		SwuiApplyNumericFallbacks(FieldName, bInteger, OutMinVal, OutMaxVal, OutStepVal);
+		return;
+	}
+
+	OutType = TEXT("unknown");
+	OutDefaultValueLiteral = TEXT("null");
+}
+
+static FString SwuiBuildPayloadFieldsBody(const UFunction* SignatureFunction, const FString& Indent)
+{
+	if (!SignatureFunction)
+	{
+		return FString();
+	}
+
+	FString PayloadBody;
+	for (TFieldIterator<const FProperty> It(SignatureFunction); It; ++It)
+	{
+		const FProperty* Param = *It;
+		if (!Param->HasAnyPropertyFlags(CPF_Parm) || Param->HasAnyPropertyFlags(CPF_ReturnParm))
+		{
+			continue;
+		}
+
+		FString FieldType;
+		FString DefaultValueLiteral;
+		FString MinVal;
+		FString MaxVal;
+		FString StepVal;
+		TArray<FString> EnumOptions;
+		const FString ParamName = Param->GetName();
+		SwuiPopulateFieldMetadata(nullptr, Param, ParamName, FieldType, DefaultValueLiteral, MinVal, MaxVal, StepVal, EnumOptions);
+
+		if (FieldType.IsEmpty() || FieldType == TEXT("unknown"))
+		{
+			continue;
+		}
+
+		PayloadBody += FString::Printf(TEXT("%s%s: {\n"), *Indent, *SwuiQuotePreviewString(ParamName));
+		PayloadBody += FString::Printf(TEXT("%s\tlabel: %s,\n"), *Indent, *SwuiQuotePreviewString(ParamName));
+		PayloadBody += FString::Printf(TEXT("%s\ttype: %s,\n"), *Indent, *SwuiQuotePreviewString(FieldType));
+		PayloadBody += FString::Printf(TEXT("%s\tdefaultValue: %s,\n"), *Indent, *DefaultValueLiteral);
+		if (!MinVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tmin: %s,\n"), *Indent, *MinVal);
+		if (!MaxVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tmax: %s,\n"), *Indent, *MaxVal);
+		if (!StepVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tstep: %s,\n"), *Indent, *StepVal);
+		if (FieldType == TEXT("enum") && EnumOptions.Num() > 0)
+		{
+			PayloadBody += FString::Printf(TEXT("%s\toptions: [%s],\n"), *Indent, *FString::Join(EnumOptions, TEXT(", ")));
+		}
+		PayloadBody += FString::Printf(TEXT("%s},\n"), *Indent);
+	}
+
+	return PayloadBody;
+}
+
+static FString SwuiBuildContractStateBody(const TArray<FSwuiGeneratedSourceEntry>& Sources)
+{
+	FString StateBody;
+	for (const FSwuiGeneratedSourceEntry& Source : Sources)
+	{
+		for (const FSwuiGeneratedPropertyInfo& Prop : Source.Props)
+		{
+			StateBody += FString::Printf(TEXT("\t\t[%s.%s]: {\n"), *Prop.ObjectName, *Prop.PropName);
+			StateBody += FString::Printf(TEXT("\t\t\tlabel: %s,\n"), *SwuiQuotePreviewString(Prop.Label));
+			StateBody += FString::Printf(TEXT("\t\t\tsource: %s,\n"), *SwuiQuotePreviewString(Prop.ObjectName));
+			StateBody += FString::Printf(TEXT("\t\t\tproperty: %s,\n"), *SwuiQuotePreviewString(Prop.PropName));
+			StateBody += FString::Printf(TEXT("\t\t\ttype: %s,\n"), *SwuiQuotePreviewString(Prop.ContractType));
+			StateBody += FString::Printf(TEXT("\t\t\tdefaultValue: %s,\n"), *Prop.DefaultValueLiteral);
+			if (!Prop.MinVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tmin: %s,\n"), *Prop.MinVal);
+			if (!Prop.MaxVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tmax: %s,\n"), *Prop.MaxVal);
+			if (!Prop.StepVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tstep: %s,\n"), *Prop.StepVal);
+			if (Prop.ContractType == TEXT("enum") && Prop.EnumOptions.Num() > 0)
+			{
+				StateBody += FString::Printf(TEXT("\t\t\toptions: [%s],\n"), *FString::Join(Prop.EnumOptions, TEXT(", ")));
+			}
+			StateBody += TEXT("\t\t},\n");
+		}
+	}
+
+	return StateBody;
+}
+
+static FString SwuiBuildContractEventsBody(const TArray<FSwuiGeneratedSourceEntry>& Sources)
+{
+	FString EventsBody;
+	for (const FSwuiGeneratedSourceEntry& Source : Sources)
+	{
+		for (const FSwuiGeneratedEventInfo& Event : Source.Events)
+		{
+			EventsBody += FString::Printf(TEXT("\t\t%s: {\n"), *SwuiQuotePreviewString(Event.FullKey));
+			EventsBody += FString::Printf(TEXT("\t\t\tlabel: %s,\n"), *SwuiQuotePreviewString(Event.DelegateName));
+			EventsBody += FString::Printf(TEXT("\t\t\tsource: %s,\n"), *SwuiQuotePreviewString(Event.ObjectName));
+			EventsBody += FString::Printf(TEXT("\t\t\tevent: %s,\n"), *SwuiQuotePreviewString(Event.DelegateName));
+			if (Event.PayloadBody.IsEmpty())
+			{
+				EventsBody += TEXT("\t\t\tpayload: {},\n");
+			}
+			else
+			{
+				EventsBody += TEXT("\t\t\tpayload: {\n");
+				EventsBody += Event.PayloadBody;
+				EventsBody += TEXT("\t\t\t},\n");
+			}
+			EventsBody += TEXT("\t\t},\n");
+		}
+	}
+
+	return EventsBody;
+}
+
+static TArray<FSwuiGeneratedNavInfo> SwuiCollectGeneratedNavigationEvents(const TArray<FSwuiNavigationEvent>& NavigationEvents)
+{
+	TMap<FString, FSwuiGeneratedNavInfo> EventsByName;
+
+	for (const FName& BuiltInTagName : FSwuiNavTags::GetAllBuiltInTagNames())
+	{
+		const FString EventName = BuiltInTagName.ToString();
+		if (EventName.IsEmpty() || SwuiIsExcludedNavigationPlaceholder(EventName))
+		{
+			continue;
+		}
+
+		EventsByName.Add(EventName, {
+			SwuiMakeNavigationConstantIdentifier(EventName),
+			SwuiMakeNavigationIdentifier(EventName),
+			EventName,
+			SwuiGetNavigationCategory(EventName, true),
+			true,
+		});
+	}
+
+	for (const FSwuiNavigationEvent& NavEvent : NavigationEvents)
+	{
+		if (!NavEvent.Event.IsValid() || !NavEvent.bForwardToJS)
+		{
+			continue;
+		}
+
+		const FString EventName = NavEvent.GetEffectiveJsEventName();
+		if (EventName.IsEmpty() || SwuiIsExcludedNavigationPlaceholder(EventName))
+		{
+			continue;
+		}
+
+		if (EventsByName.Contains(EventName))
+		{
+			continue;
+		}
+
+		EventsByName.Add(EventName, {
+			SwuiMakeNavigationConstantIdentifier(EventName),
+			SwuiMakeNavigationIdentifier(EventName),
+			EventName,
+			TEXT("custom"),
+			false,
+		});
+	}
+
+	TArray<FSwuiGeneratedNavInfo> Events;
+	Events.Reserve(EventsByName.Num());
+	EventsByName.GenerateValueArray(Events);
+
+	Events.Sort([](const FSwuiGeneratedNavInfo& A, const FSwuiGeneratedNavInfo& B)
+	{
+		return A.EventName < B.EventName;
+	});
+
+	TSet<FString> UsedIdentifiers;
+	for (FSwuiGeneratedNavInfo& Event : Events)
+	{
+		if (!UsedIdentifiers.Contains(Event.Identifier))
+		{
+			UsedIdentifiers.Add(Event.Identifier);
+			continue;
+		}
+
+		const FString BaseIdentifier = Event.Identifier;
+		const FString BaseHandlerSuffix = Event.HandlerSuffix;
+		int32 Suffix = 2;
+		while (UsedIdentifiers.Contains(Event.Identifier))
+		{
+			Event.Identifier = FString::Printf(TEXT("%s%d"), *BaseIdentifier, Suffix);
+			Event.HandlerSuffix = FString::Printf(TEXT("%s%d"), *BaseHandlerSuffix, Suffix);
+			++Suffix;
+		}
+
+		UsedIdentifiers.Add(Event.Identifier);
+	}
+
+	return Events;
+}
+
 bool FSwuiTSGenerator::Generate(USwui* Bridge)
 {
 	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return false;
 	if (Bridge->BindingSources.IsEmpty()) return false;
 
-	struct FPropInfo
-	{
-		FString ObjectName; // "BP_ThirdPersonCharacter"
-		FString Namespace;
-		FString FullKey;   // "namespace.PropName"
-		FString PropName;  // "Health"
-		FString TSType;    // "number"
-		FString Label;
-		FString Category;
-		FString MinVal;
-		FString MaxVal;
-	};
-
-	struct FEventInfo
-	{
-		FString ObjectName;   // "SwuiShootingComponent"
-		FString Namespace;
-		FString FullKey;      // "namespace.OnFired"
-		FString DelegateName; // "OnFired"
-	};
-
-	// One entry per source class — tracks object name + its props + its events.
-	struct FSourceEntry
-	{
-		FString ObjectName;
-		FString Namespace;
-		TArray<FPropInfo>  Props;
-		TArray<FEventInfo> Events;
-	};
-
-	TArray<FSourceEntry> Sources;
+	TArray<FSwuiGeneratedSourceEntry> Sources;
 	TArray<FString>      Namespaces;
 
 	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
@@ -130,9 +583,10 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 		const FString Namespace  = SwuiComputeNamespace(SourceClass);
 		const FString ObjectName = SwuiComputeObjectName(SourceClass);
+		const UObject* DefaultsObject = SourceClass->GetDefaultObject();
 		Namespaces.AddUnique(Namespace);
 
-		FSourceEntry Entry;
+		FSwuiGeneratedSourceEntry Entry;
 		Entry.ObjectName = ObjectName;
 		Entry.Namespace  = Namespace;
 
@@ -144,35 +598,48 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 			const FString TSType = SwuiGetTSType(Prop);
 			if (TSType.IsEmpty()) continue;
 
-			auto GetMeta = [&](const TCHAR* Key) -> FString
-			{
-				return Prop->HasMetaData(Key) ? Prop->GetMetaData(Key) : FString();
-			};
-
-			FPropInfo Info;
+			FSwuiGeneratedPropertyInfo Info;
 			Info.ObjectName = ObjectName;
 			Info.Namespace  = Namespace;
 			Info.PropName   = PropFName.ToString();
 			Info.FullKey    = Namespace + TEXT(".") + Info.PropName;
 			Info.TSType     = TSType;
-			Info.Label      = GetMeta(TEXT("DisplayName"));
+			Info.Label      = Prop->HasMetaData(TEXT("DisplayName")) ? Prop->GetMetaData(TEXT("DisplayName")) : FString();
 			if (Info.Label.IsEmpty()) Info.Label = Info.PropName;
-			Info.Category   = GetMeta(TEXT("Category"));
-			Info.MinVal     = GetMeta(TEXT("ClampMin"));
-			if (Info.MinVal.IsEmpty()) Info.MinVal = GetMeta(TEXT("UIMin"));
-			Info.MaxVal     = GetMeta(TEXT("ClampMax"));
-			if (Info.MaxVal.IsEmpty()) Info.MaxVal = GetMeta(TEXT("UIMax"));
+			SwuiPopulateFieldMetadata(
+				DefaultsObject,
+				Prop,
+				Info.PropName,
+				Info.ContractType,
+				Info.DefaultValueLiteral,
+				Info.MinVal,
+				Info.MaxVal,
+				Info.StepVal,
+				Info.EnumOptions);
 
 			Entry.Props.Add(MoveTemp(Info));
 		}
 
 		for (const FName& DelegateFName : Source.Delegates)
 		{
-			FEventInfo EInfo;
+			FSwuiGeneratedEventInfo EInfo;
 			EInfo.ObjectName    = ObjectName;
 			EInfo.Namespace     = Namespace;
 			EInfo.DelegateName  = DelegateFName.ToString();
 			EInfo.FullKey       = Namespace + TEXT(".") + EInfo.DelegateName;
+
+			const FProperty* DelegateProp = SourceClass->FindPropertyByName(DelegateFName);
+			const UFunction* SignatureFunction = nullptr;
+			if (const FMulticastDelegateProperty* MulticastDelegateProp = CastField<const FMulticastDelegateProperty>(DelegateProp))
+			{
+				SignatureFunction = MulticastDelegateProp->SignatureFunction;
+			}
+			else if (const FDelegateProperty* SingleDelegateProp = CastField<const FDelegateProperty>(DelegateProp))
+			{
+				SignatureFunction = SingleDelegateProp->SignatureFunction;
+			}
+
+			EInfo.PayloadBody = SwuiBuildPayloadFieldsBody(SignatureFunction, TEXT("\t\t\t\t"));
 			Entry.Events.Add(MoveTemp(EInfo));
 		}
 
@@ -190,19 +657,19 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 	// ── One const object per source class ────────────────────────────────────
 	FString ObjectsBody;
-	for (const FSourceEntry& Src : Sources)
+	for (const FSwuiGeneratedSourceEntry& Src : Sources)
 	{
 		ObjectsBody += FString::Printf(TEXT("export const %s = {\n"), *Src.ObjectName);
 
 		// Key string entries
-		for (const FPropInfo& P : Src.Props)
+		for (const FSwuiGeneratedPropertyInfo& P : Src.Props)
 			ObjectsBody += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *P.PropName, *P.FullKey);
 
 		if (!Src.Props.IsEmpty() && (!Src.Props.IsEmpty() || !Src.Events.IsEmpty()))
 			ObjectsBody += TEXT("\n");
 
 		// State subscription helpers: onHealth(fn)
-		for (const FPropInfo& P : Src.Props)
+		for (const FSwuiGeneratedPropertyInfo& P : Src.Props)
 		{
 			ObjectsBody += FString::Printf(
 				TEXT("\ton%s(fn: (v: %s) => void): () => void {\n")
@@ -212,7 +679,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		}
 
 		// Event helpers: OnFired(fn) — UE name as-is, no extra prefix
-		for (const FEventInfo& E : Src.Events)
+		for (const FSwuiGeneratedEventInfo& E : Src.Events)
 		{
 			ObjectsBody += FString::Printf(
 				TEXT("\t%s(fn: () => void): () => void {\n")
@@ -246,6 +713,18 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"};\n"
 	);
 
+	const FString ContractBlock = FString::Printf(TEXT(
+		"export const SwuiContract = {\n"
+		"\tstate: {\n"
+		"%s"
+		"\t},\n"
+		"\tevents: {\n"
+		"%s"
+		"\t},\n"
+		"} as const;\n"),
+		*SwuiBuildContractStateBody(Sources),
+		*SwuiBuildContractEventsBody(Sources));
+
 	FString Output = FString::Printf(TEXT(
 		"// %s.generated.ts\n"
 		"// AUTO-GENERATED by SimpleWebUI \u2014 do not edit manually.\n"
@@ -257,11 +736,13 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"%s"
 		"\n"
 		"%s"
+		"%s"
 	),
 		*IName,
 		*NsList,
 		*RuntimeBlock,
-		*ObjectsBody
+		*ObjectsBody,
+		*ContractBlock
 	);
 
 	const FString OutDir  = FPaths::ProjectContentDir() / TEXT("UI/generated");
@@ -295,76 +776,49 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 		return false;
 	}
 
-	struct FNavInfo
-	{
-		FString Identifier;
-		FString EventName;
-	};
-
-	TArray<FNavInfo> Events;
-	TSet<FString> UsedIdentifiers;
-
-	for (const FSwuiNavigationEvent& NavEvent : NavigationEvents)
-	{
-		if (!NavEvent.Event.IsValid())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("SWUI: Skipping navigation event with invalid GameplayTag while generating bindings for '%s'."), *Bridge->InterfaceName);
-			continue;
-		}
-
-		if (!NavEvent.bForwardToJS)
-		{
-			continue;
-		}
-
-		const FString EventName = NavEvent.GetEffectiveJsEventName();
-		if (EventName.IsEmpty())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("SWUI: Skipping navigation event '%s' with empty JS event name while generating bindings for '%s'."), *NavEvent.Event.ToString(), *Bridge->InterfaceName);
-			continue;
-		}
-
-		FString Identifier = SwuiMakeNavigationIdentifier(EventName);
-		if (UsedIdentifiers.Contains(Identifier))
-		{
-			const FString BaseIdentifier = Identifier;
-			int32 Suffix = 2;
-			while (UsedIdentifiers.Contains(Identifier))
-			{
-				Identifier = FString::Printf(TEXT("%s%d"), *BaseIdentifier, Suffix++);
-			}
-		}
-
-		UsedIdentifiers.Add(Identifier);
-		Events.Add({ Identifier, EventName });
-	}
-
 	const FString InterfaceName = Bridge->InterfaceName;
 	const FString ObjectName = TEXT("SwuiNavigationEvents");
-
-	Events.Sort([](const FNavInfo& A, const FNavInfo& B)
-	{
-		return A.Identifier < B.Identifier;
-	});
+	const TArray<FSwuiGeneratedNavInfo> Events = SwuiCollectGeneratedNavigationEvents(NavigationEvents);
 
 	FString ObjectBody = FString::Printf(TEXT("export const %s = {\n"), *ObjectName);
-	for (const FNavInfo& Event : Events)
-		ObjectBody += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *Event.Identifier, *Event.EventName);
+	for (const FSwuiGeneratedNavInfo& Event : Events)
+		ObjectBody += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *Event.Identifier, *SwuiEscapeTsStringLiteral(Event.EventName));
 
 	if (Events.Num() > 0)
 		ObjectBody += TEXT("\n");
 
-	for (const FNavInfo& Event : Events)
+	for (const FSwuiGeneratedNavInfo& Event : Events)
 	{
 		ObjectBody += FString::Printf(
 			TEXT("\ton%s(fn: (detail: unknown) => void): () => void {\n")
 			TEXT("\t\treturn Swui.onEvent(%s.%s, fn);\n")
 			TEXT("\t},\n"),
-			*Event.Identifier,
+			*Event.HandlerSuffix,
 			*ObjectName,
 			*Event.Identifier);
 	}
 	ObjectBody += TEXT("};\n\n");
+
+	FString ContractBody = TEXT("export const SwuiNavigationContract = {\n\tnavigation: {\n");
+	for (const FSwuiGeneratedNavInfo& Event : Events)
+	{
+		ContractBody += FString::Printf(
+			TEXT("\t\t[%s.%s]: {\n")
+			TEXT("\t\t\tlabel: %s,\n")
+			TEXT("\t\t\ttag: %s.%s,\n")
+			TEXT("\t\t\tcategory: %s,\n")
+			TEXT("\t\t\tdefaultEvent: %s,\n")
+			TEXT("\t\t},\n"),
+			*ObjectName,
+			*Event.Identifier,
+			*SwuiQuotePreviewString(Event.Identifier),
+			*ObjectName,
+			*Event.Identifier,
+			*SwuiQuotePreviewString(Event.Category),
+			Event.bDefaultEvent ? TEXT("true") : TEXT("false"));
+	}
+	ContractBody += TEXT("\t},\n} as const;\n\n");
+	ObjectBody += ContractBody;
 	ObjectBody += FString::Printf(TEXT("export default %s;\n"), *ObjectName);
 
 	const FString Header = FString::Printf(
@@ -392,169 +846,5 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 	}
 
 	UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write navigation bindings '%s'."), *OutFile);
-	return false;
-}
-
-bool FSwuiTSGenerator::GeneratePreview(USwui* Bridge, const TArray<FSwuiNavigationEvent>& NavigationEvents)
-{
-	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return false;
-	if (Bridge->BindingSources.IsEmpty()) return false;
-
-	// ── Helpers ───────────────────────────────────────────────────────────────
-
-	auto QuoteStr = [](const FString& S) -> FString
-	{
-		return TEXT("'") + S + TEXT("'");
-	};
-
-	// ── State section ─────────────────────────────────────────────────────────
-
-	FString StateBody;
-
-	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
-	{
-		UClass* SourceClass = Source.SourceClass;
-		if (!SourceClass) continue;
-
-		const FString Namespace = SwuiComputeNamespace(SourceClass);
-
-		for (const FName& PropFName : Source.Properties)
-		{
-			FProperty* Prop = SourceClass->FindPropertyByName(PropFName);
-			if (!Prop) continue;
-
-			const FString TSType = SwuiGetTSType(Prop);
-			if (TSType.IsEmpty()) continue;
-
-			const FString PropName = PropFName.ToString();
-			const FString FullKey  = Namespace + TEXT(".") + PropName;
-
-			auto GetMeta = [&](const TCHAR* Key) -> FString
-			{
-				return Prop->HasMetaData(Key) ? Prop->GetMetaData(Key) : FString();
-			};
-
-			FString ClampMin = GetMeta(TEXT("ClampMin"));
-			if (ClampMin.IsEmpty()) ClampMin = GetMeta(TEXT("UIMin"));
-			FString ClampMax = GetMeta(TEXT("ClampMax"));
-			if (ClampMax.IsEmpty()) ClampMax = GetMeta(TEXT("UIMax"));
-
-			StateBody += FString::Printf(TEXT("\t\t%s: {\n"), *QuoteStr(FullKey));
-			StateBody += FString::Printf(TEXT("\t\t\ttype: %s,\n"), *QuoteStr(TSType));
-
-			// Default value
-			if (TSType == TEXT("number"))
-			{
-				StateBody += TEXT("\t\t\tdefaultValue: 0,\n");
-				if (!ClampMin.IsEmpty())
-					StateBody += FString::Printf(TEXT("\t\t\tmin: %s,\n"), *ClampMin);
-				if (!ClampMax.IsEmpty())
-					StateBody += FString::Printf(TEXT("\t\t\tmax: %s,\n"), *ClampMax);
-				StateBody += TEXT("\t\t\tstep: 1,\n");
-			}
-			else if (TSType == TEXT("boolean"))
-			{
-				StateBody += TEXT("\t\t\tdefaultValue: false,\n");
-			}
-			else // string
-			{
-				StateBody += TEXT("\t\t\tdefaultValue: '',\n");
-			}
-
-			StateBody += FString::Printf(TEXT("\t\t\tlabel: %s,\n"), *QuoteStr(PropName));
-			StateBody += TEXT("\t\t},\n");
-		}
-	}
-
-	// ── Events section ────────────────────────────────────────────────────────
-
-	FString EventsBody;
-
-	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
-	{
-		UClass* SourceClass = Source.SourceClass;
-		if (!SourceClass) continue;
-
-		const FString Namespace = SwuiComputeNamespace(SourceClass);
-
-		for (const FName& DelegateFName : Source.Delegates)
-		{
-			const FString DelegateName = DelegateFName.ToString();
-			const FString FullKey      = Namespace + TEXT(".") + DelegateName;
-
-			EventsBody += FString::Printf(TEXT("\t\t%s: {\n"), *QuoteStr(FullKey));
-			EventsBody += FString::Printf(TEXT("\t\t\tlabel: %s,\n"), *QuoteStr(DelegateName));
-			EventsBody += TEXT("\t\t\tpayload: {},\n");
-			EventsBody += TEXT("\t\t},\n");
-		}
-	}
-
-	// ── Navigation section ────────────────────────────────────────────────────
-
-	FString NavBody;
-
-	for (const FSwuiNavigationEvent& NavEvent : NavigationEvents)
-	{
-		if (!NavEvent.Event.IsValid() || !NavEvent.bForwardToJS)
-			continue;
-
-		const FString EventName = NavEvent.GetEffectiveJsEventName();
-		if (EventName.IsEmpty()) continue;
-
-		const FString Identifier = SwuiMakeNavigationIdentifier(EventName);
-
-		NavBody += FString::Printf(TEXT("\t\t%s: {\n"), *QuoteStr(Identifier));
-		NavBody += FString::Printf(TEXT("\t\t\ttag: %s,\n"), *QuoteStr(EventName));
-		NavBody += FString::Printf(TEXT("\t\t\tlabel: %s,\n"), *QuoteStr(Identifier));
-		NavBody += TEXT("\t\t\tpayload: {},\n");
-		NavBody += TEXT("\t\t},\n");
-	}
-
-	// ── Assemble file ─────────────────────────────────────────────────────────
-
-	const FString& IName = Bridge->InterfaceName;
-
-	FString Output = FString::Printf(TEXT(
-		"// %s.preview.generated.ts\n"
-		"// AUTO-GENERATED by SimpleWebUI \u2014 do not edit manually.\n"
-		"// Re-generate via: Tools > SimpleWebUI > Refresh JS Bindings\n"
-		"\n"
-		"import type { PreviewSchema } from '../src/swui-preview/types';\n"
-		"\n"
-		"export const %sPreviewSchema = {\n"
-		"\tstate: {\n"
-		"%s"
-		"\t},\n"
-		"\n"
-		"\tevents: {\n"
-		"%s"
-		"\t},\n"
-		"\n"
-		"\tnavigation: {\n"
-		"%s"
-		"\t},\n"
-		"} as const satisfies PreviewSchema;\n"
-	),
-		*IName,
-		*IName,
-		*StateBody,
-		*EventsBody,
-		*NavBody
-	);
-
-	const FString OutDir  = FPaths::ProjectContentDir() / TEXT("UI/generated");
-	const FString OutFile = OutDir / IName + TEXT(".preview.generated.ts");
-
-	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-	if (!PlatformFile.DirectoryExists(*OutDir))
-		PlatformFile.CreateDirectoryTree(*OutDir);
-
-	if (FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-	{
-		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated preview schema '%s'"), *OutFile);
-		return true;
-	}
-
-	UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write preview schema '%s'"), *OutFile);
 	return false;
 }

@@ -873,8 +873,6 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 				if (Swui)
 				{
 					bOK = FSwuiTSGenerator::GenerateNavigation(Swui, NavPtr->NavigationEvents);
-					// Keep preview schema in sync with updated nav events.
-					FSwuiTSGenerator::GeneratePreview(Swui, NavPtr->NavigationEvents);
 				}
 				else
 				{

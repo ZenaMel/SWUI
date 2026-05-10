@@ -36,10 +36,4 @@ public:
 	// Generates Content/UI/generated/<InterfaceName>.navigation.generated.ts
 	// from the navigation component's configured JS-forwarded events.
 	static bool GenerateNavigation(USwui* Swui, const TArray<FSwuiNavigationEvent>& NavigationEvents);
-
-	// Generates Content/UI/generated/<InterfaceName>.preview.generated.ts:
-	// preview schema metadata for the browser dev-panel (state controls, event
-	// triggers, navigation triggers). Pass the same NavigationEvents list used
-	// by GenerateNavigation so nav entries are included.
-	static bool GeneratePreview(USwui* Swui, const TArray<FSwuiNavigationEvent>& NavigationEvents);
 };
