@@ -10,6 +10,12 @@
 	"DocsURL": "https://github.com/SimpleWebUI",
 	"EnabledByDefault": true,
 	"CanContainContent": true,
+	"Plugins": [
+  {
+    "Name": "GameplayTagsEditor",
+    "Enabled": true
+  }
+]
 	"Modules": [
 		{
 			"Name": "SwuiLoader",

@@ -3,12 +3,21 @@
 #include "BlueprintActionDatabaseRegistrar.h"
 #include "BlueprintGameplayTagLibrary.h"
 #include "BlueprintNodeSpawner.h"
+#include "EdGraph/EdGraphNodeUtils.h"
 #include "EdGraphSchema_K2.h"
+#include "Engine/Blueprint.h"
+#include "Engine/ComponentDelegateBinding.h"
+#include "Engine/DynamicBlueprintBinding.h"
 #include "K2Node_CallFunction.h"
-#include "K2Node_ComponentBoundEvent.h"
 #include "K2Node_IfThenElse.h"
+#include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "KismetCompiler.h"
+#include "Logging/MessageLog.h"
+#include "Templates/Casts.h"
+#include "UObject/Class.h"
+#include "UObject/Field.h"
+#include "UObject/UnrealType.h"
 
 #include "SwuiNavigation.h"
 
@@ -82,11 +91,31 @@ namespace SwuiNavigationEventNode
 	}
 }
 
+bool UK2Node_SwuiNavigationEvent::Modify(bool bAlwaysMarkDirty)
+{
+	CachedNodeTitle.MarkDirty();
+	return Super::Modify(bAlwaysMarkDirty);
+}
+
+void UK2Node_SwuiNavigationEvent::InitializeDelegateSignature()
+{
+	if (FMulticastDelegateProperty* DelegateProperty = GetTargetDelegateProperty())
+	{
+		EventReference.SetFromField<UFunction>(DelegateProperty->SignatureFunction, false);
+		bOverrideFunction = false;
+		bInternalEvent = true;
+
+		if (CustomFunctionName.IsNone())
+		{
+			CustomFunctionName = BuildCustomFunctionName();
+		}
+	}
+}
+
 void UK2Node_SwuiNavigationEvent::AllocateDefaultPins()
 {
-	CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_Exec, SwuiNavigationEventNode::ExecPinName);
-	CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_Struct, FGameplayTag::StaticStruct(), SwuiNavigationEventNode::EventPinName);
-	CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_String, SwuiNavigationEventNode::PayloadPinName);
+	InitializeDelegateSignature();
+	Super::AllocateDefaultPins();
 
 	if (UEdGraphPin* EventPin = FindPin(SwuiNavigationEventNode::EventPinName))
 	{
@@ -97,8 +126,13 @@ void UK2Node_SwuiNavigationEvent::AllocateDefaultPins()
 	{
 		PayloadPin->PinFriendlyName = LOCTEXT("PayloadPinLabel", "Payload");
 	}
+}
 
-	Super::AllocateDefaultPins();
+void UK2Node_SwuiNavigationEvent::ReconstructNode()
+{
+	InitializeDelegateSignature();
+	CachedNodeTitle.MarkDirty();
+	Super::ReconstructNode();
 }
 
 FText UK2Node_SwuiNavigationEvent::GetNodeTitle(ENodeTitleType::Type TitleType) const
@@ -128,6 +162,121 @@ FText UK2Node_SwuiNavigationEvent::GetMenuCategory() const
 	return LOCTEXT("Category", "SimpleWebUI|Navigation");
 }
 
+UClass* UK2Node_SwuiNavigationEvent::GetDynamicBindingClass() const
+{
+	return UComponentDelegateBinding::StaticClass();
+}
+
+void UK2Node_SwuiNavigationEvent::RegisterDynamicBinding(UDynamicBlueprintBinding* BindingObject) const
+{
+	UComponentDelegateBinding* ComponentBindingObject = Cast<UComponentDelegateBinding>(BindingObject);
+	if (!ComponentBindingObject)
+	{
+		FMessageLog("Blueprint").Error(LOCTEXT("RegisterDynamicBindingFailed", "SWUI navigation event failed to register dynamic binding because the binding object was invalid."));
+		return;
+	}
+
+	if (ComponentPropertyName.IsNone())
+	{
+		FMessageLog("Blueprint").Error(LOCTEXT("RegisterDynamicBindingMissingComponent", "SWUI navigation event failed to register dynamic binding because ComponentPropertyName is missing."));
+		return;
+	}
+
+	if (!NavigationEventTag.IsValid())
+	{
+		FMessageLog("Blueprint").Error(LOCTEXT("RegisterDynamicBindingMissingTag", "SWUI navigation event failed to register dynamic binding because NavigationEventTag is invalid."));
+		return;
+	}
+
+	if (!GetTargetDelegateProperty())
+	{
+		FMessageLog("Blueprint").Error(LOCTEXT("RegisterDynamicBindingMissingDelegate", "SWUI navigation event failed to register dynamic binding because OnNavigationEvent could not be resolved."));
+		return;
+	}
+
+	FBlueprintComponentDelegateBinding Binding;
+	Binding.ComponentPropertyName = ComponentPropertyName;
+	Binding.DelegatePropertyName = GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnNavigationEvent);
+	Binding.FunctionNameToBind = CustomFunctionName;
+
+	ComponentBindingObject->ComponentDelegateBindings.Add(Binding);
+}
+
+void UK2Node_SwuiNavigationEvent::HandleVariableRenamed(UBlueprint* InBlueprint, UClass* InVariableClass, UEdGraph* InGraph, const FName& InOldVarName, const FName& InNewVarName)
+{
+	if (InVariableClass && InBlueprint && InBlueprint->GeneratedClass && InVariableClass->IsChildOf(InBlueprint->GeneratedClass) && InOldVarName == ComponentPropertyName)
+	{
+		Modify();
+		ComponentPropertyName = InNewVarName;
+	}
+}
+
+bool UK2Node_SwuiNavigationEvent::HasValidBindingData(FText* OutError) const
+{
+	auto SetError = [OutError](const FText& Message)
+	{
+		if (OutError)
+		{
+			*OutError = Message;
+		}
+		return false;
+	};
+
+	if (ComponentPropertyName.IsNone())
+	{
+		return SetError(LOCTEXT("MissingComponentProperty", "Missing SWUI navigation component property"));
+	}
+
+	if (!NavigationEventTag.IsValid())
+	{
+		return SetError(LOCTEXT("MissingNavigationTag", "Missing valid NavigationEventTag"));
+	}
+
+	if (!GetTargetDelegateProperty())
+	{
+		return SetError(LOCTEXT("MissingNavigationDelegate", "Could not resolve USwuiNavigation::OnNavigationEvent"));
+	}
+
+	const UBlueprint* Blueprint = GetBlueprint();
+	if (!Blueprint)
+	{
+		return SetError(LOCTEXT("MissingBlueprint", "Could not resolve owning Blueprint"));
+	}
+
+	const FObjectProperty* ComponentProperty = nullptr;
+	if (Blueprint->SkeletonGeneratedClass)
+	{
+		ComponentProperty = FindFProperty<FObjectProperty>(Blueprint->SkeletonGeneratedClass, ComponentPropertyName);
+	}
+	if (!ComponentProperty && Blueprint->GeneratedClass)
+	{
+		ComponentProperty = FindFProperty<FObjectProperty>(Blueprint->GeneratedClass, ComponentPropertyName);
+	}
+
+	if (!ComponentProperty || !ComponentProperty->PropertyClass || !ComponentProperty->PropertyClass->IsChildOf(USwuiNavigation::StaticClass()))
+	{
+		return SetError(LOCTEXT("MissingBoundComponent", "Missing matching SWUI navigation component property"));
+	}
+
+	if (CustomFunctionName.IsNone())
+	{
+		return SetError(LOCTEXT("MissingBindingFunction", "Could not generate a function name for dynamic binding registration"));
+	}
+
+	return true;
+}
+
+void UK2Node_SwuiNavigationEvent::ValidateNodeDuringCompilation(FCompilerResultsLog& MessageLog) const
+{
+	FText ErrorText;
+	if (!HasValidBindingData(&ErrorText))
+	{
+		MessageLog.Error(*FString::Printf(TEXT("%s for @@"), *ErrorText.ToString()), this);
+	}
+
+	Super::ValidateNodeDuringCompilation(MessageLog);
+}
+
 void UK2Node_SwuiNavigationEvent::GetMenuActions(FBlueprintActionDatabaseRegistrar& ActionRegistrar) const
 {
 	UClass* Key = GetClass();
@@ -139,48 +288,27 @@ void UK2Node_SwuiNavigationEvent::GetMenuActions(FBlueprintActionDatabaseRegistr
 	}
 }
 
+FMulticastDelegateProperty* UK2Node_SwuiNavigationEvent::GetTargetDelegateProperty() const
+{
+	return FindFProperty<FMulticastDelegateProperty>(USwuiNavigation::StaticClass(), GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnNavigationEvent));
+}
+
+FName UK2Node_SwuiNavigationEvent::BuildCustomFunctionName() const
+{
+	const UBlueprint* Blueprint = GetBlueprint();
+	const FString BlueprintName = Blueprint ? Blueprint->GetName() : TEXT("SwuiBlueprint");
+	const FName DelegateName = GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnNavigationEvent);
+	return FName(*FString::Printf(TEXT("BndEvt__%s_%s_%s"), *BlueprintName, *GetName(), *DelegateName.ToString()));
+}
+
 void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerContext, UEdGraph* SourceGraph)
 {
 	Super::ExpandNode(CompilerContext, SourceGraph);
 
-	if (ComponentPropertyName.IsNone())
+	FText ErrorText;
+	if (!HasValidBindingData(&ErrorText))
 	{
-		CompilerContext.MessageLog.Error(TEXT("@@ must reference a valid SWUI navigation component property."), this);
-		BreakAllNodeLinks();
-		return;
-	}
-
-	if (!NavigationEventTag.IsValid())
-	{
-		CompilerContext.MessageLog.Error(TEXT("@@ must have a valid NavigationEventTag."), this);
-		BreakAllNodeLinks();
-		return;
-	}
-
-	UBlueprint* Blueprint = GetBlueprint();
-	if (!Blueprint)
-	{
-		CompilerContext.MessageLog.Error(TEXT("@@ could not resolve its owning Blueprint."), this);
-		BreakAllNodeLinks();
-		return;
-	}
-
-	FObjectProperty* ComponentProperty = nullptr;
-	if (Blueprint->SkeletonGeneratedClass)
-	{
-		ComponentProperty = FindFProperty<FObjectProperty>(Blueprint->SkeletonGeneratedClass, ComponentPropertyName);
-	}
-	if (!ComponentProperty && Blueprint->GeneratedClass)
-	{
-		ComponentProperty = FindFProperty<FObjectProperty>(Blueprint->GeneratedClass, ComponentPropertyName);
-	}
-
-	FMulticastDelegateProperty* DelegateProperty = FindFProperty<FMulticastDelegateProperty>(
-		USwuiNavigation::StaticClass(),
-		GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnNavigationEvent));
-	if (!ComponentProperty || !DelegateProperty)
-	{
-		CompilerContext.MessageLog.Error(TEXT("@@ could not resolve OnNavigationEvent binding metadata."), this);
+		CompilerContext.MessageLog.Error(*FString::Printf(TEXT("%s for @@"), *ErrorText.ToString()), this);
 		BreakAllNodeLinks();
 		return;
 	}
@@ -208,10 +336,6 @@ void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerCon
 
 	const UEdGraphSchema_K2* Schema = CompilerContext.GetSchema();
 
-	UK2Node_ComponentBoundEvent* BoundEventNode = CompilerContext.SpawnIntermediateNode<UK2Node_ComponentBoundEvent>(this, SourceGraph);
-	BoundEventNode->InitializeComponentBoundEventParams(ComponentProperty, DelegateProperty);
-	BoundEventNode->AllocateDefaultPins();
-
 	UK2Node_CallFunction* LiteralNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(this, SourceGraph);
 	LiteralNode->SetFromFunction(LiteralFunction);
 	LiteralNode->AllocateDefaultPins();
@@ -227,21 +351,12 @@ void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerCon
 	UK2Node_IfThenElse* BranchNode = CompilerContext.SpawnIntermediateNode<UK2Node_IfThenElse>(this, SourceGraph);
 	BranchNode->AllocateDefaultPins();
 
-	UEdGraphPin* BoundThenPin = BoundEventNode->FindPinChecked(UEdGraphSchema_K2::PN_Then);
-	UEdGraphPin* BoundEventPin = BoundEventNode->FindPinChecked(SwuiNavigationEventNode::EventPinName);
-	UEdGraphPin* BoundPayloadPin = BoundEventNode->FindPinChecked(SwuiNavigationEventNode::PayloadPinName);
-
-	Schema->TryCreateConnection(BoundThenPin, BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
-	Schema->TryCreateConnection(BoundEventPin, EqualNode->FindPinChecked(TEXT("A")));
+	CompilerContext.MovePinLinksToIntermediate(*ThenPin, *BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Then));
+	Schema->TryCreateConnection(ThenPin, BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+	Schema->TryCreateConnection(EventPin, EqualNode->FindPinChecked(TEXT("A")));
 	Schema->TryCreateConnection(LiteralNode->GetReturnValuePin(), EqualNode->FindPinChecked(TEXT("B")));
 	Schema->TryCreateConnection(EqualNode->GetReturnValuePin(), BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Condition));
-
-	CompilerContext.MovePinLinksToIntermediate(*ThenPin, *BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Then));
-	CompilerContext.MovePinLinksToIntermediate(*EventPin, *BoundEventPin);
-	CompilerContext.MovePinLinksToIntermediate(*PayloadPin, *BoundPayloadPin);
 	BranchNode->FindPinChecked(UEdGraphSchema_K2::PN_Else)->BreakAllPinLinks();
-
-	BreakAllNodeLinks();
 }
 
 #undef LOCTEXT_NAMESPACE
