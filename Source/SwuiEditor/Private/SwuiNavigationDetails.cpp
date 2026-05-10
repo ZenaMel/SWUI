@@ -1,24 +1,50 @@
 #include "SwuiNavigationDetails.h"
+#include "K2Node_SwuiNavigationEvent.h"
 #include "SwuiNavigation.h"
 #include "SwuiTSGenerator.h"
 #include "Swui.h"
 
+#include "BlueprintEditor.h"
+#include "BlueprintEditorModule.h"
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
 #include "DetailWidgetRow.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
+#include "EdGraph/EdGraphNode.h"
+#include "Engine/Blueprint.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "GameplayTagContainer.h"
 #include "IDetailGroup.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/ComponentEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "Misc/MessageDialog.h"
 #include "PropertyCustomizationHelpers.h"
 #include "GameplayTagsManager.h"
-#include "GameplayTagContainer.h"
 #include "GameplayTagsEditorModule.h"
-#include "Framework/Notifications/NotificationManager.h"
+#include "ScopedTransaction.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "ToolMenus.h"
+#include "UObject/UnrealType.h"
+#include "UObject/WeakObjectPtr.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/SBoxPanel.h"
-#include "Misc/MessageDialog.h"
+#include "EdGraph/EdGraphSchema.h"
+#include "EdGraph/EdGraphPin.h"
+
+#include "EdGraph/EdGraphNodeUtils.h"
+
+#include "EdGraph/EdGraphNode.h"
+
+#include "EdGraphSchema_K2_Actions.h"
 
 #define LOCTEXT_NAMESPACE "SwuiNavigationDetails"
 
@@ -32,6 +58,248 @@ TSharedRef<IDetailCustomization> FSwuiNavigationDetails::MakeInstance()
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+static void ShowNavigationEventNotification(const FText& Message, bool bSuccess)
+{
+	FNotificationInfo Info(Message);
+	Info.bFireAndForget = true;
+	Info.FadeInDuration = 0.2f;
+	Info.FadeOutDuration = 0.5f;
+	Info.ExpireDuration = 3.f;
+	Info.Image = FAppStyle::GetBrush(bSuccess
+		? TEXT("NotificationList.SuccessImage")
+		: TEXT("NotificationList.FailImage"));
+	FSlateNotificationManager::Get().AddNotification(Info);
+}
+
+static bool IsExcludedCustomNamespaceTag(const FGameplayTag& Tag)
+{
+	const FName TagName = Tag.GetTagName();
+	return TagName == TEXT("swui.menu")
+		|| TagName == TEXT("swui.navigation")
+		|| TagName == TEXT("swui.pointer");
+}
+
+static FString HumanizeTagSegment(const FString& Segment)
+{
+	FString Result;
+	Result.Reserve(Segment.Len() * 2);
+
+	for (int32 Index = 0; Index < Segment.Len(); ++Index)
+	{
+		const TCHAR Char = Segment[Index];
+		const bool bIsSeparator = (Char == TEXT('_')) || (Char == TEXT('-'));
+		const bool bInsertSpace = Index > 0
+			&& !bIsSeparator
+			&& FChar::IsUpper(Char)
+			&& FChar::IsLower(Segment[Index - 1]);
+
+		if (bIsSeparator)
+		{
+			if (!Result.IsEmpty() && Result[Result.Len() - 1] != TEXT(' '))
+			{
+				Result.AppendChar(TEXT(' '));
+			}
+			continue;
+		}
+
+		if (bInsertSpace && Result[Result.Len() - 1] != TEXT(' '))
+		{
+			Result.AppendChar(TEXT(' '));
+		}
+
+		Result.AppendChar(Index == 0 ? FChar::ToUpper(Char) : Char);
+	}
+
+	return Result.TrimStartAndEnd();
+}
+
+static FText MakeFriendlyNavigationEventLabel(const FGameplayTag& Tag)
+{
+	TArray<FString> Segments;
+	Tag.GetTagName().ToString().ParseIntoArray(Segments, TEXT("."), true);
+
+	if (Segments.Num() > 0 && Segments[0].Equals(TEXT("swui"), ESearchCase::IgnoreCase))
+	{
+		Segments.RemoveAt(0);
+	}
+
+	FString Label = TEXT("On");
+	for (const FString& Segment : Segments)
+	{
+		const FString Humanized = HumanizeTagSegment(Segment);
+		if (!Humanized.IsEmpty())
+		{
+			Label += TEXT(" ") + Humanized;
+		}
+	}
+
+	return FText::FromString(Label);
+}
+
+static UBlueprint* FindOwningBlueprint(USwuiNavigation* Nav)
+{
+	if (!Nav)
+	{
+		return nullptr;
+	}
+
+	if (AActor* Owner = Nav->GetOwner())
+	{
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(Owner->GetClass()->ClassGeneratedBy))
+		{
+			return Blueprint;
+		}
+	}
+
+	return Nav->GetTypedOuter<UBlueprint>();
+}
+
+static bool ResolveBlueprintGraphContext(
+	USwuiNavigation* Nav,
+	UBlueprint*& OutBlueprint,
+	TSharedPtr<IBlueprintEditor>& OutBlueprintEditor,
+	TSharedPtr<FBlueprintEditor>& OutConcreteBlueprintEditor,
+	UEdGraph*& OutTargetGraph)
+{
+	OutBlueprint = FindOwningBlueprint(Nav);
+	if (!OutBlueprint)
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("OpenBlueprintGraphToAddEvent", "Open a Blueprint graph to add this navigation event."),
+			false);
+		return false;
+	}
+
+	OutBlueprintEditor = FKismetEditorUtilities::GetIBlueprintEditorForObject(OutBlueprint, false);
+	if (!OutBlueprintEditor.IsValid())
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("OpenBlueprintGraphToAddEvent", "Open a Blueprint graph to add this navigation event."),
+			false);
+		return false;
+	}
+
+	OutConcreteBlueprintEditor = StaticCastSharedPtr<FBlueprintEditor>(OutBlueprintEditor);
+
+	UEdGraph* FocusedGraph = OutBlueprintEditor->GetFocusedGraph();
+	if (FocusedGraph && FBlueprintEditorUtils::FindBlueprintForGraph(FocusedGraph) == OutBlueprint && OutBlueprint->UbergraphPages.Contains(FocusedGraph))
+	{
+		OutTargetGraph = FocusedGraph;
+		return true;
+	}
+
+	OutTargetGraph = FBlueprintEditorUtils::FindEventGraph(OutBlueprint);
+	if (!OutTargetGraph)
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("NoActiveBlueprintGraph", "No active Blueprint graph found."),
+			false);
+		return false;
+	}
+
+	return true;
+}
+
+static FObjectProperty* FindNavigationComponentProperty(UBlueprint* Blueprint, USwuiNavigation* Nav)
+{
+	if (!Blueprint || !Nav)
+	{
+		return nullptr;
+	}
+
+	const FName VariableName = FComponentEditorUtils::FindVariableNameGivenComponentInstance(Nav);
+	if (VariableName.IsNone())
+	{
+		return nullptr;
+	}
+
+	if (Blueprint->SkeletonGeneratedClass)
+	{
+		if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Blueprint->SkeletonGeneratedClass, VariableName))
+		{
+			return Property;
+		}
+	}
+
+	if (Blueprint->GeneratedClass)
+	{
+		if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Blueprint->GeneratedClass, VariableName))
+		{
+			return Property;
+		}
+	}
+
+	return nullptr;
+}
+
+static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGameplayTag& Tag)
+{
+	UBlueprint* Blueprint = nullptr;
+	TSharedPtr<IBlueprintEditor> BlueprintEditor;
+	TSharedPtr<FBlueprintEditor> ConcreteBlueprintEditor;
+	UEdGraph* TargetGraph = nullptr;
+
+	if (!ResolveBlueprintGraphContext(Nav, Blueprint, BlueprintEditor, ConcreteBlueprintEditor, TargetGraph))
+	{
+		return false;
+	}
+
+	FObjectProperty* ComponentProperty = FindNavigationComponentProperty(Blueprint, Nav);
+	if (!ComponentProperty)
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("CreateSwuiNavigationNodeFailed", "Could not create SWUI navigation event node."),
+			false);
+		return false;
+	}
+
+	BlueprintEditor->OpenGraphAndBringToFront(TargetGraph, true);
+
+	FVector2D NodePosition = TargetGraph->GetGoodPlaceForNewNode();
+	if (ConcreteBlueprintEditor.IsValid() && BlueprintEditor->GetFocusedGraph() == TargetGraph)
+	{
+		float ZoomAmount = 1.f;
+		ConcreteBlueprintEditor->GetViewLocation(NodePosition, ZoomAmount);
+		NodePosition += FVector2D(96.f, 96.f);
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT("AddSwuiNavigationEventNodeTransaction", "Add SWUI Navigation Event"));
+	Blueprint->Modify();
+	TargetGraph->Modify();
+
+	UK2Node_SwuiNavigationEvent* NewNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_SwuiNavigationEvent>(
+		TargetGraph,
+		NodePosition,
+		EK2NewNodeFlags::SelectNewNode,
+		[ComponentProperty, Tag](UK2Node_SwuiNavigationEvent* NewInstance)
+		{
+			NewInstance->ComponentPropertyName = ComponentProperty->GetFName();
+			NewInstance->NavigationEventTag = Tag;
+		});
+
+	if (!NewNode)
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("CreateSwuiNavigationNodeFailed", "Could not create SWUI navigation event node."),
+			false);
+		return false;
+	}
+
+	BlueprintEditor->AddToSelection(NewNode);
+	if (ConcreteBlueprintEditor.IsValid())
+	{
+		ConcreteBlueprintEditor->JumpToNode(NewNode, false);
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	ShowNavigationEventNotification(
+		FText::Format(
+			LOCTEXT("AddedBlueprintEventNode", "Added BP event for {0}"),
+			FText::FromString(Tag.GetTagName().ToString())),
+		true);
+	return true;
+}
 
 /** Gather all registered Gameplay Tags that start with "swui." */
 static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag>& OutCustom)
@@ -48,9 +316,17 @@ static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag
 		if (!Name.StartsWith(TEXT("swui."))) continue;
 
 		if (BuiltIn.Contains(Tag.GetTagName()))
+		{
 			OutDefault.Add(Tag);
-		else
+		}
+		else if (!IsExcludedCustomNamespaceTag(Tag))
+		{
 			OutCustom.Add(Tag);
+		}
+		else
+		{
+			continue;
+		}
 	}
 
 	OutDefault.Sort([](const FGameplayTag& A, const FGameplayTag& B)
@@ -159,7 +435,7 @@ static void AddTagRows(
 		}
 		else
 		{
-			// Custom tags: checkbox + Add BP Event + delete.
+			// Custom tags: checkbox + add BP event + delete.
 			auto ValueBox = SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				[
@@ -179,20 +455,19 @@ static void AddTagRows(
 					})
 				];
 
-			// "Add BP Event" button
+			// Compact add button.
 			ValueBox->AddSlot()
 				.AutoWidth()
 				.Padding(8.f, 0.f, 0.f, 0.f)
 				.VAlign(VAlign_Center)
 				[
 					SNew(SButton)
-					.Text(LOCTEXT("AddBPEvent", "Add BP Event"))
-					.ToolTipText(LOCTEXT("AddBPEventTip", "Add a Blueprint Event node for this navigation event."))
-					.OnClicked_Lambda([Nav, Tag, Builder]()
+					.Text(LOCTEXT("AddBPEventCompact", "+"))
+					.ToolTipText(LOCTEXT("AddBPEventTip", "Add BP Event"))
+					.ContentPadding(FMargin(8.f, 0.f))
+					.OnClicked_Lambda([Nav, Tag]()
 					{
-						if (!HasNavigationEvent(Nav, Tag))
-							AddNavigationEvent(Nav, Tag);
-						if (Builder) Builder->ForceRefreshDetails();
+						AddBlueprintNavigationEventNode(Nav, Tag);
 						return FReply::Handled();
 					})
 				];
