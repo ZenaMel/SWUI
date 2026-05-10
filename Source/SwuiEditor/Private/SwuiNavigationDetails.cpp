@@ -15,6 +15,8 @@
 #include "Engine/Blueprint.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "GameplayTagContainer.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SCS_Node.h"
 #include "IDetailGroup.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/ComponentEditorUtils.h"
@@ -23,6 +25,7 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "K2Node_ComponentBoundEvent.h"
 #include "Misc/MessageDialog.h"
+#include "Modules/ModuleManager.h"
 #include "PropertyCustomizationHelpers.h"
 #include "GameplayTagsManager.h"
 #include "GameplayTagsEditorModule.h"
@@ -144,15 +147,157 @@ static UBlueprint* FindOwningBlueprint(USwuiNavigation* Nav)
 		return nullptr;
 	}
 
+	auto ResolveBlueprintFromObject = [](const UObject* Object) -> UBlueprint*
+	{
+		for (const UObject* Current = Object; Current; Current = Current->GetOuter())
+		{
+			if (UBlueprint* Blueprint = const_cast<UBlueprint*>(Cast<UBlueprint>(Current)))
+			{
+				return Blueprint;
+			}
+
+			if (const UBlueprintGeneratedClass* GeneratedClass = Cast<UBlueprintGeneratedClass>(Current))
+			{
+				if (UBlueprint* Blueprint = Cast<UBlueprint>(GeneratedClass->ClassGeneratedBy))
+				{
+					return Blueprint;
+				}
+			}
+
+			if (const AActor* Actor = Cast<AActor>(Current))
+			{
+				if (UBlueprint* Blueprint = Cast<UBlueprint>(Actor->GetClass()->ClassGeneratedBy))
+				{
+					return Blueprint;
+				}
+			}
+		}
+
+		if (const AActor* Actor = Cast<AActor>(Object))
+		{
+			if (UBlueprint* Blueprint = Cast<UBlueprint>(Actor->GetClass()->ClassGeneratedBy))
+			{
+				return Blueprint;
+			}
+		}
+
+		if (const UActorComponent* Component = Cast<UActorComponent>(Object))
+		{
+			if (const AActor* Owner = Component->GetOwner())
+			{
+				if (UBlueprint* Blueprint = Cast<UBlueprint>(Owner->GetClass()->ClassGeneratedBy))
+				{
+					return Blueprint;
+				}
+			}
+		}
+
+		return nullptr;
+	};
+
+	if (UBlueprint* Blueprint = ResolveBlueprintFromObject(Nav))
+	{
+		return Blueprint;
+	}
+
+	if (UObject* Archetype = Nav->GetArchetype())
+	{
+		if (UBlueprint* Blueprint = ResolveBlueprintFromObject(Archetype))
+		{
+			return Blueprint;
+		}
+	}
+
 	if (AActor* Owner = Nav->GetOwner())
 	{
-		if (UBlueprint* Blueprint = Cast<UBlueprint>(Owner->GetClass()->ClassGeneratedBy))
+		if (UBlueprint* Blueprint = ResolveBlueprintFromObject(Owner))
 		{
 			return Blueprint;
 		}
 	}
 
 	return Nav->GetTypedOuter<UBlueprint>();
+}
+
+static TSharedPtr<IBlueprintEditor> FindOwningBlueprintEditor(UBlueprint* Blueprint, USwuiNavigation* Nav)
+{
+	auto MatchesBlueprint = [Blueprint](const TSharedPtr<IBlueprintEditor>& Candidate) -> bool
+	{
+		TSharedPtr<FBlueprintEditor> ConcreteEditor = StaticCastSharedPtr<FBlueprintEditor>(Candidate);
+		return ConcreteEditor.IsValid() && ConcreteEditor->GetBlueprintObj() == Blueprint;
+	};
+
+	if (TSharedPtr<IBlueprintEditor> EditorFromObject = FKismetEditorUtilities::GetIBlueprintEditorForObject(Nav, false))
+	{
+		if (MatchesBlueprint(EditorFromObject))
+		{
+			return EditorFromObject;
+		}
+	}
+
+	if (TSharedPtr<IBlueprintEditor> EditorFromBlueprint = FKismetEditorUtilities::GetIBlueprintEditorForObject(Blueprint, false))
+	{
+		if (MatchesBlueprint(EditorFromBlueprint))
+		{
+			return EditorFromBlueprint;
+		}
+	}
+
+	if (FModuleManager::Get().IsModuleLoaded(TEXT("Kismet")))
+	{
+		FBlueprintEditorModule& BlueprintEditorModule = FModuleManager::GetModuleChecked<FBlueprintEditorModule>(TEXT("Kismet"));
+		for (const TSharedRef<IBlueprintEditor>& Candidate : BlueprintEditorModule.GetBlueprintEditors())
+		{
+			if (MatchesBlueprint(Candidate))
+			{
+				return Candidate;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+static UEdGraph* FindUsableBlueprintGraph(UBlueprint* Blueprint, const TSharedPtr<IBlueprintEditor>& BlueprintEditor)
+{
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	if (BlueprintEditor.IsValid())
+	{
+		if (UEdGraph* FocusedGraph = BlueprintEditor->GetFocusedGraph())
+		{
+			if (UEdGraph* TopLevelGraph = FBlueprintEditorUtils::GetTopLevelGraph(FocusedGraph))
+			{
+				if (FBlueprintEditorUtils::FindBlueprintForGraph(TopLevelGraph) == Blueprint && Blueprint->UbergraphPages.Contains(TopLevelGraph))
+				{
+					return TopLevelGraph;
+				}
+			}
+		}
+	}
+
+	if (UEdGraph* LastEditedGraph = Blueprint->GetLastEditedUberGraph())
+	{
+		if (FBlueprintEditorUtils::FindBlueprintForGraph(LastEditedGraph) == Blueprint)
+		{
+			return LastEditedGraph;
+		}
+	}
+
+	if (UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint))
+	{
+		return EventGraph;
+	}
+
+	if (Blueprint->UbergraphPages.Num() > 0)
+	{
+		return Blueprint->UbergraphPages[0];
+	}
+
+	return nullptr;
 }
 
 static bool ResolveBlueprintGraphContext(
@@ -166,34 +311,18 @@ static bool ResolveBlueprintGraphContext(
 	if (!OutBlueprint)
 	{
 		ShowNavigationEventNotification(
-			LOCTEXT("OpenBlueprintGraphToAddEvent", "Open a Blueprint graph to add this navigation event."),
+			LOCTEXT("NoOwningBlueprintForSwuiNavigation", "Could not find the Blueprint that owns this SwuiNavigation component."),
 			false);
 		return false;
 	}
 
-	OutBlueprintEditor = FKismetEditorUtilities::GetIBlueprintEditorForObject(OutBlueprint, false);
-	if (!OutBlueprintEditor.IsValid())
-	{
-		ShowNavigationEventNotification(
-			LOCTEXT("OpenBlueprintGraphToAddEvent", "Open a Blueprint graph to add this navigation event."),
-			false);
-		return false;
-	}
-
+	OutBlueprintEditor = FindOwningBlueprintEditor(OutBlueprint, Nav);
 	OutConcreteBlueprintEditor = StaticCastSharedPtr<FBlueprintEditor>(OutBlueprintEditor);
-
-	UEdGraph* FocusedGraph = OutBlueprintEditor->GetFocusedGraph();
-	if (FocusedGraph && FBlueprintEditorUtils::FindBlueprintForGraph(FocusedGraph) == OutBlueprint && OutBlueprint->UbergraphPages.Contains(FocusedGraph))
-	{
-		OutTargetGraph = FocusedGraph;
-		return true;
-	}
-
-	OutTargetGraph = FBlueprintEditorUtils::FindEventGraph(OutBlueprint);
+	OutTargetGraph = FindUsableBlueprintGraph(OutBlueprint, OutBlueprintEditor);
 	if (!OutTargetGraph)
 	{
 		ShowNavigationEventNotification(
-			LOCTEXT("NoActiveBlueprintGraph", "No active Blueprint graph found."),
+			LOCTEXT("NoUsableBlueprintGraph", "No usable Blueprint graph found."),
 			false);
 		return false;
 	}
@@ -201,36 +330,123 @@ static bool ResolveBlueprintGraphContext(
 	return true;
 }
 
-static FObjectProperty* FindNavigationComponentProperty(UBlueprint* Blueprint, USwuiNavigation* Nav)
+
+static bool ResolveNavigationComponentVariableName(UBlueprint* Blueprint, const USwuiNavigation* Nav, FName& OutVariableName)
 {
+	OutVariableName = NAME_None;
 	if (!Blueprint || !Nav)
+		return false;
+
+	UE_LOG(LogTemp, Warning, TEXT("[SWUI] ResolveNavigationComponentVariableName: Blueprint=%s Nav=%s"),
+		*Blueprint->GetName(), *Nav->GetName());
+
+	// Print outer chain
 	{
-		return nullptr;
+		FString OuterChain;
+		const UObject* Obj = Nav;
+		while (Obj)
+		{
+			OuterChain += Obj->GetName();
+			Obj = Obj->GetOuter();
+			if (Obj) OuterChain += TEXT(" <- ");
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[SWUI] Nav outer chain: %s"), *OuterChain);
 	}
 
-	const FName VariableName = FComponentEditorUtils::FindVariableNameGivenComponentInstance(Nav);
-	if (VariableName.IsNone())
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript.Get();
+	if (SCS)
 	{
-		return nullptr;
+		const TArray<USCS_Node*>& Nodes = SCS->GetAllNodes();
+		FString NodeNames;
+		for (USCS_Node* Node : Nodes)
+		{
+			if (Node)
+			{
+				NodeNames += Node->GetVariableName().ToString() + TEXT(", ");
+			}
+		}
+		UE_LOG(LogTemp, Warning, TEXT("[SWUI] SCS Node names: %s"), *NodeNames);
+
+		// 1. Exact template pointer match
+		for (USCS_Node* Node : Nodes)
+		{
+			if (!Node || !Node->ComponentTemplate)
+				continue;
+			if (Node->ComponentTemplate == Nav)
+			{
+				OutVariableName = Node->GetVariableName();
+				UE_LOG(LogTemp, Warning, TEXT("[SWUI] SCS exact match: %s"), *OutVariableName.ToString());
+				return !OutVariableName.IsNone();
+			}
+		}
+		// 2. Fallback: class match
+		for (USCS_Node* Node : Nodes)
+		{
+			if (!Node || !Node->ComponentTemplate)
+				continue;
+			if (Node->ComponentTemplate->GetClass() == USwuiNavigation::StaticClass() ||
+				Node->ComponentTemplate->IsA(USwuiNavigation::StaticClass()))
+			{
+				OutVariableName = Node->GetVariableName();
+				UE_LOG(LogTemp, Warning, TEXT("[SWUI] SCS class match: %s"), *OutVariableName.ToString());
+				return !OutVariableName.IsNone();
+			}
+		}
 	}
 
+	// 3. Fallback: search Blueprint generated/skeleton class for FObjectProperty of USwuiNavigation
+	auto FindNavProperty = [](UStruct* Struct) -> FName
+	{
+		if (!Struct) return NAME_None;
+		for (TFieldIterator<FObjectProperty> It(Struct); It; ++It)
+		{
+			FObjectProperty* Prop = *It;
+			if (Prop && Prop->PropertyClass && Prop->PropertyClass->IsChildOf(USwuiNavigation::StaticClass()))
+			{
+				return Prop->GetFName();
+			}
+		}
+		return NAME_None;
+	};
 	if (Blueprint->SkeletonGeneratedClass)
 	{
-		if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Blueprint->SkeletonGeneratedClass, VariableName))
+		FName FallbackName = FindNavProperty(Blueprint->SkeletonGeneratedClass);
+		if (!FallbackName.IsNone())
 		{
-			return Property;
+			OutVariableName = FallbackName;
+			UE_LOG(LogTemp, Warning, TEXT("[SWUI] SkeletonGeneratedClass fallback: %s"), *OutVariableName.ToString());
+			return true;
 		}
 	}
-
 	if (Blueprint->GeneratedClass)
 	{
-		if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Blueprint->GeneratedClass, VariableName))
+		FName FallbackName = FindNavProperty(Blueprint->GeneratedClass);
+		if (!FallbackName.IsNone())
 		{
-			return Property;
+			OutVariableName = FallbackName;
+			UE_LOG(LogTemp, Warning, TEXT("[SWUI] GeneratedClass fallback: %s"), *OutVariableName.ToString());
+			return true;
 		}
 	}
 
-	return nullptr;
+	// 4. Last fallback: use Nav->GetFName() if it resolves in Blueprint/SCS
+	FName NavName = Nav->GetFName();
+	if (SCS)
+	{
+		const TArray<USCS_Node*>& Nodes = SCS->GetAllNodes();
+		for (USCS_Node* Node : Nodes)
+		{
+			if (Node && Node->GetVariableName() == NavName)
+			{
+				OutVariableName = NavName;
+				UE_LOG(LogTemp, Warning, TEXT("[SWUI] Fallback: Nav->GetFName() matches SCS node: %s"), *OutVariableName.ToString());
+				return true;
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[SWUI] Could not resolve SwuiNavigation component variable name."));
+	return false;
 }
 
 static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGameplayTag& Tag)
@@ -245,11 +461,11 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 		return false;
 	}
 
-	FObjectProperty* ComponentProperty = FindNavigationComponentProperty(Blueprint, Nav);
-	if (!ComponentProperty)
+	FName ComponentVariableName;
+	if (!ResolveNavigationComponentVariableName(Blueprint, Nav, ComponentVariableName))
 	{
 		ShowNavigationEventNotification(
-			LOCTEXT("CreateSwuiNavigationNodeFailed", "Could not create SWUI navigation event node."),
+			LOCTEXT("ResolveSwuiNavigationComponentFailed", "Could not resolve SwuiNavigation component variable in Blueprint."),
 			false);
 		return false;
 	}
@@ -272,9 +488,9 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 		TargetGraph,
 		NodePosition,
 		EK2NewNodeFlags::SelectNewNode,
-		[ComponentProperty, Tag](UK2Node_SwuiNavigationEvent* NewInstance)
+		[ComponentVariableName, Tag](UK2Node_SwuiNavigationEvent* NewInstance)
 		{
-			NewInstance->ComponentPropertyName = ComponentProperty->GetFName();
+			NewInstance->ComponentPropertyName = ComponentVariableName;
 			NewInstance->NavigationEventTag = Tag;
 		});
 
@@ -290,6 +506,10 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 	if (ConcreteBlueprintEditor.IsValid())
 	{
 		ConcreteBlueprintEditor->JumpToNode(NewNode, false);
+	}
+	else
+	{
+		FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(NewNode, false);
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
@@ -540,6 +760,16 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 		"SWUI|Navigation",
 		LOCTEXT("NavCat", "Navigation Events"),
 		ECategoryPriority::Important);
+
+	Cat.AddCustomRow(LOCTEXT("DefaultEventsNoteRow", "Default Events Note"))
+	.WholeRowContent()
+	[
+		SNew(STextBlock)
+		.Text(LOCTEXT("DefaultEventsNote",
+			"Default Events already have native BlueprintAssignable entries in Unreal's normal Events panel. The + button is only for Custom Events."))
+		.Font(IDetailLayoutBuilder::GetDetailFont())
+		.AutoWrapText(true)
+	];
 
 	// ---- Refresh Navigation Events JS Bindings (top of section) ----
 	Cat.AddCustomRow(LOCTEXT("RefreshNavRow", "Refresh"))
