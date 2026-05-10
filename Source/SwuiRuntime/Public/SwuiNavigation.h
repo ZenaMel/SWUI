@@ -173,6 +173,10 @@ public:
 		meta=(ToolTip="Routes a named SWUI navigation event with a JSON payload."))
 	void SendNavigationEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload);
 
+	// Called by the browser bridge for JS-originated tag events.
+	// Uses native routing but does not forward the event back to JS.
+	void ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload);
+
 	// ---- Convenience Navigation Wrappers ----
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
@@ -396,7 +400,8 @@ private:
 
 	// Core dispatch: Blueprint first, then JS if unconsumed + enabled.
 	void DispatchEvent(FGameplayTag Event, const FString& JsonPayload,
-		TFunction<bool()> BlueprintHandler);
+		TFunction<bool()> BlueprintHandler,
+		bool bAllowJsForwarding = true);
 
 	// Finds the FSwuiNavigationEvent config for a tag, or nullptr.
 	const FSwuiNavigationEvent* FindEventConfig(FGameplayTag Event) const;

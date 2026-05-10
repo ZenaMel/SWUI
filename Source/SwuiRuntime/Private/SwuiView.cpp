@@ -1,10 +1,18 @@
 #include "SwuiView.h"
 #include "RenderHandler.h"
 #include "ISwuiRuntime.h"
+#include "SwuiNavigation.h"
 #include "SwuiManager.h"
 #include "SwuiCVars.h"
 #include "SwuiCVarHelpers.h"
+#include "Components/ActorComponent.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "GameplayTagsManager.h"
 #include "Misc/Crc.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 #if PLATFORM_WINDOWS
 #include "Windows/AllowWindowsPlatformTypes.h"
@@ -266,7 +274,7 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 	ISwuiRenderTarget* CpuTarget = (ResolvedRenderingMode == ESwuiRenderingMode::CpuCompatible) ? static_cast<ISwuiRenderTarget*>(this) : nullptr;
 	ISwuiAcceleratedRenderTarget* GpuTarget = (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated) ? static_cast<ISwuiAcceleratedRenderTarget*>(this) : nullptr;
 	RenderHandler* Renderer = new RenderHandler(Width, Height, CpuTarget, GpuTarget, ResolvedRenderingMode);
-	CefRefPtr<BrowserClient> Client = new BrowserClient(Renderer);
+	CefRefPtr<BrowserClient> Client = new BrowserClient(Renderer, this);
 
 	CefRefPtr<CefBrowser> Browser = CefBrowserHost::CreateBrowserSync(
 		Info,
@@ -411,6 +419,86 @@ void USwuiView::ExecuteJavaScript(const FString& Script)
 		CefString CodeStr = *Script;
 		CefData->Browser->GetMainFrame()->ExecuteJavaScript(CodeStr, "", 0);
 	}
+}
+
+AActor* USwuiView::ResolveOwningActor() const
+{
+	if (OwningActor.IsValid())
+	{
+		return OwningActor.Get();
+	}
+
+	if (const UActorComponent* OwnerComponent = GetTypedOuter<UActorComponent>())
+	{
+		return OwnerComponent->GetOwner();
+	}
+
+	return GetTypedOuter<AActor>();
+}
+
+bool USwuiView::HandleIncomingMessage(const FString& MessageJson)
+{
+	TSharedPtr<FJsonObject> MessageObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(MessageJson);
+ 
+	if (!FJsonSerializer::Deserialize(Reader, MessageObject) || !MessageObject.IsValid())
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Failed to parse browser message JSON: %s"), *MessageJson);
+		return false;
+	}
+
+	FString MessageType;
+	if (!MessageObject->TryGetStringField(TEXT("type"), MessageType))
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Browser message missing 'type' field."));
+		return false;
+	}
+
+	if (MessageType != TEXT("navigation"))
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Unsupported browser message type '%s'."), *MessageType);
+		return false;
+	}
+
+	FString TagName;
+	if (!MessageObject->TryGetStringField(TEXT("tag"), TagName) || TagName.IsEmpty())
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Navigation message missing 'tag' field."));
+		return false;
+	}
+
+	const FGameplayTag EventTag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagName), false);
+	if (!EventTag.IsValid())
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Ignoring unknown navigation tag '%s'."), *TagName);
+		return false;
+	}
+
+	FString PayloadJson = TEXT("{}");
+	if (const TSharedPtr<FJsonValue>* PayloadValue = MessageObject->Values.Find(TEXT("payload")))
+	{
+		PayloadJson.Reset();
+		const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&PayloadJson);
+		FJsonSerializer::Serialize((*PayloadValue).ToSharedRef(), FString(), Writer);
+	}
+
+	AActor* OwnerActor = ResolveOwningActor();
+	if (!OwnerActor)
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Browser message received without an owning actor."));
+		return false;
+	}
+
+	USwuiNavigation* Navigation = OwnerActor->FindComponentByClass<USwuiNavigation>();
+	if (!Navigation)
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Actor '%s' has no USwuiNavigation component to handle '%s'."), *OwnerActor->GetName(), *TagName);
+		return false;
+	}
+
+	Navigation->ReceiveNavigationEventFromJs(EventTag, PayloadJson);
+	return true;
 }
 
 void USwuiView::NotifyHudStateFlushed()

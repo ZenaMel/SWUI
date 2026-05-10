@@ -91,7 +91,7 @@ void USwuiSubsystem::DisablePlugin()
 }
 
 void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceName,
-	bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
+	AActor* OwnerActor, bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
 	UMaterialInterface* BaseMaterial, FName TextureParamName,
 	const FSwuiInstanceSettings& InstanceSettings)
 {
@@ -138,6 +138,7 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	View->bIsTransparent = true;
 	View->BaseMaterial  = BaseMaterial;
 	View->TextureParameterName = TextureParamName;
+	View->SetOwningActor(OwnerActor);
 	View->Init(InstanceSettings);
 
 	Widget = CreateWidget<UUserWidget>(World, USwuiWidget::StaticClass());

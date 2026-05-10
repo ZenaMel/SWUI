@@ -143,7 +143,7 @@ void USwui::InitializeSwuiView()
 	InstSettings.bLogSwuiPaintStats                   = DirtyUploadSettings.bLogSwuiPaintStats;
 	InstSettings.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
 
-	Sub->InitRenderer(DefaultURI, InterfaceName, bIsHUD,
+	Sub->InitRenderer(DefaultURI, InterfaceName, GetOwner(), bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
 }
 

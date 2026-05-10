@@ -2,7 +2,9 @@
 
 #include "CEFInclude.h"
 
-class SWUIRUNTIME_API SwuiManager : public CefApp
+class CefMessageRouterRendererSide;
+
+class SWUIRUNTIME_API SwuiManager : public CefApp, public CefRenderProcessHandler
 {
 public:
 
@@ -16,7 +18,21 @@ public:
 
 	virtual void OnBeforeCommandLineProcessing(const CefString& ProcessType,
 			CefRefPtr< CefCommandLine > CommandLine) override;
+	virtual CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override;
+	virtual void OnContextCreated(CefRefPtr<CefBrowser> Browser,
+		CefRefPtr<CefFrame> Frame,
+		CefRefPtr<CefV8Context> Context) override;
+	virtual void OnContextReleased(CefRefPtr<CefBrowser> Browser,
+		CefRefPtr<CefFrame> Frame,
+		CefRefPtr<CefV8Context> Context) override;
+	virtual bool OnProcessMessageReceived(CefRefPtr<CefBrowser> Browser,
+		CefRefPtr<CefFrame> Frame,
+		CefProcessId SourceProcess,
+		CefRefPtr<CefProcessMessage> Message) override;
 
 	IMPLEMENT_REFCOUNTING(SwuiManager);
+
+private:
+	CefRefPtr<CefMessageRouterRendererSide> MessageRouter;
 };
 

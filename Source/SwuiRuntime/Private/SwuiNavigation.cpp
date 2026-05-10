@@ -261,7 +261,8 @@ void USwuiNavigation::ForwardToJs(const FString& JsEventName, const FString& Det
 // ---------------------------------------------------------------------------
 
 void USwuiNavigation::DispatchEvent(FGameplayTag Event, const FString& JsonPayload,
-	TFunction<bool()> BlueprintHandler)
+	TFunction<bool()> BlueprintHandler,
+	bool bAllowJsForwarding)
 {
 	const FSwuiNavigationEvent* Config = FindEventConfig(Event);
 	const FString TagName = Event.GetTagName().ToString();
@@ -283,7 +284,7 @@ void USwuiNavigation::DispatchEvent(FGameplayTag Event, const FString& JsonPaylo
 	}
 
 	// JS forwarding.
-	if (!bConsumed && (!Config || Config->bForwardToJS))
+	if (bAllowJsForwarding && !bConsumed && (!Config || Config->bForwardToJS))
 	{
 		const FString JsName = Config ? Config->GetEffectiveJsEventName() : TagName;
 		const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;
@@ -306,6 +307,161 @@ void USwuiNavigation::SendNavigationEventWithPayload(FGameplayTag Event, const F
 	{
 		return HandleNavigationEvent(Event, JsonPayload);
 	});
+}
+
+void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
+{
+	const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;
+	const FSwuiNavTags& Tags = FSwuiNavTags::Get();
+
+	if (Event == Tags.Up)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnNavigate.Broadcast(ESwuiNavDirection::Up);
+			return HandleNavigate(ESwuiNavDirection::Up);
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.Down)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnNavigate.Broadcast(ESwuiNavDirection::Down);
+			return HandleNavigate(ESwuiNavDirection::Down);
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.Left)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnNavigate.Broadcast(ESwuiNavDirection::Left);
+			return HandleNavigate(ESwuiNavDirection::Left);
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.Right)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnNavigate.Broadcast(ESwuiNavDirection::Right);
+			return HandleNavigate(ESwuiNavDirection::Right);
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.Confirm)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnConfirm.Broadcast();
+			return HandleConfirm();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.Cancel)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnCancel.Broadcast();
+			return HandleCancel();
+		}, false);
+		if (bCloseOnEscape)
+		{
+			RestoreGameInput();
+		}
+		return;
+	}
+
+	if (Event == Tags.NextTab)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnNextTab.Broadcast();
+			return HandleNextTab();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.PreviousTab)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnPreviousTab.Broadcast();
+			return HandlePreviousTab();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuOpen)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuOpen.Broadcast();
+			return HandleMenuOpen();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuClose)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuClose.Broadcast();
+			return HandleMenuClose();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuBack)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuBack.Broadcast();
+			return HandleMenuBack();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuContinue)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuContinue.Broadcast();
+			return HandleMenuContinue();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuSettings)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuSettings.Broadcast();
+			return HandleMenuSettings();
+		}, false);
+		return;
+	}
+
+	if (Event == Tags.MenuQuit)
+	{
+		DispatchEvent(Event, Detail, [this]()
+		{
+			OnMenuQuit.Broadcast();
+			return HandleMenuQuit();
+		}, false);
+		return;
+	}
+
+	DispatchEvent(Event, Detail, [this, Event, &Detail]()
+	{
+		return HandleNavigationEvent(Event, Detail);
+	}, false);
 }
 
 // ---------------------------------------------------------------------------

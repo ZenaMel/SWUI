@@ -1,6 +1,78 @@
 #include "RenderHandler.h"
 #include "ISwuiRuntime.h"
+#include "SwuiView.h"
 #include "Interfaces/IPluginManager.h"
+#include "Async/Async.h"
+#include "include/wrapper/cef_message_router.h"
+
+class FSwuiBrowserQueryHandler final : public CefMessageRouterBrowserSide::Handler
+{
+public:
+	explicit FSwuiBrowserQueryHandler(USwuiView* InOwningView)
+		: OwningView(InOwningView)
+	{
+	}
+
+	bool OnQuery(CefRefPtr<CefBrowser> Browser,
+		CefRefPtr<CefFrame> Frame,
+		int64 QueryId,
+		const CefString& Request,
+		bool Persistent,
+		CefRefPtr<Callback> Callback) override
+	{
+		UNREFERENCED_PARAMETER(Browser);
+		UNREFERENCED_PARAMETER(Frame);
+		UNREFERENCED_PARAMETER(QueryId);
+		UNREFERENCED_PARAMETER(Persistent);
+
+		const FString RequestJson = FString(Request.ToWString().c_str());
+		Callback->Success("ok");
+
+		TWeakObjectPtr<USwuiView> WeakView = OwningView;
+		AsyncTask(ENamedThreads::GameThread, [WeakView, RequestJson]()
+		{
+			if (WeakView.IsValid())
+			{
+				WeakView->HandleIncomingMessage(RequestJson);
+			}
+		});
+		return true;
+	}
+
+private:
+	TWeakObjectPtr<USwuiView> OwningView;
+};
+
+BrowserClient::BrowserClient(RenderHandler* InRenderHandler, USwuiView* InOwningView)
+	: RenderHandlerRef(InRenderHandler)
+	, QueryHandler(MakeUnique<FSwuiBrowserQueryHandler>(InOwningView))
+	, BrowserId(0)
+	, bIsClosing(false)
+	, OwningView(InOwningView)
+{
+	const CefMessageRouterConfig RouterConfig;
+	MessageRouter = CefMessageRouterBrowserSide::Create(RouterConfig);
+	if (MessageRouter && QueryHandler)
+	{
+		MessageRouter->AddHandler(QueryHandler.Get(), false);
+	}
+}
+
+BrowserClient::~BrowserClient()
+{
+	ReleaseQueryHandler();
+}
+
+void BrowserClient::ReleaseQueryHandler()
+{
+	if (MessageRouter && QueryHandler)
+	{
+		MessageRouter->RemoveHandler(QueryHandler.Get());
+	}
+
+	QueryHandler.Reset();
+	MessageRouter = nullptr;
+}
 
 RenderHandler::RenderHandler(int32 Width, int32 Height, ISwuiRenderTarget* InRenderTarget,
 	ISwuiAcceleratedRenderTarget* InAcceleratedTarget,
@@ -80,10 +152,62 @@ void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> Browser)
 
 void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> Browser)
 {
+	if (MessageRouter)
+	{
+		MessageRouter->OnBeforeClose(Browser);
+	}
+	ReleaseQueryHandler();
+
 	if (BrowserId == Browser->GetIdentifier())
 	{
 		BrowserRef = nullptr;
 	}
+}
+
+bool BrowserClient::OnBeforeBrowse(CefRefPtr<CefBrowser> Browser,
+	CefRefPtr<CefFrame> Frame,
+	CefRefPtr<CefRequest> Request,
+	bool UserGesture,
+	bool IsRedirect)
+{
+	UNREFERENCED_PARAMETER(Request);
+	UNREFERENCED_PARAMETER(UserGesture);
+	UNREFERENCED_PARAMETER(IsRedirect);
+
+	if (MessageRouter)
+	{
+		MessageRouter->OnBeforeBrowse(Browser, Frame);
+	}
+
+	return false;
+}
+
+void BrowserClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser> Browser,
+	TerminationStatus Status,
+	int ErrorCode,
+	const CefString& ErrorString)
+{
+	UNREFERENCED_PARAMETER(Status);
+	UNREFERENCED_PARAMETER(ErrorCode);
+	UNREFERENCED_PARAMETER(ErrorString);
+
+	if (MessageRouter)
+	{
+		MessageRouter->OnRenderProcessTerminated(Browser);
+	}
+}
+
+bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> Browser,
+	CefRefPtr<CefFrame> Frame,
+	CefProcessId SourceProcess,
+	CefRefPtr<CefProcessMessage> Message)
+{
+	if (MessageRouter && MessageRouter->OnProcessMessageReceived(Browser, Frame, SourceProcess, Message))
+	{
+		return true;
+	}
+
+	return false;
 }
 
 bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser> Browser, cef_log_severity_t Level, const CefString& Message, const CefString& Source, int Line)

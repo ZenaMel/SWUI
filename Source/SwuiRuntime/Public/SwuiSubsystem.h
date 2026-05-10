@@ -51,7 +51,7 @@ public:
 	// ---- Renderer ----
 	// Called by USwui component on BeginPlay.
 	void InitRenderer(const FString& URI, const FString& InterfaceName,
-		bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
+		AActor* OwnerActor, bool bIsHUD, int32 Width, int32 Height, int32 ZOrder,
 		UMaterialInterface* BaseMaterial, FName TextureParamName,
 		const FSwuiInstanceSettings& InstanceSettings = FSwuiInstanceSettings{});
 

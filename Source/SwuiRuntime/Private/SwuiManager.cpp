@@ -1,8 +1,11 @@
 #include "SwuiManager.h"
 #include "SwuiSettings.h"
+#include "include/wrapper/cef_message_router.h"
 
 SwuiManager::SwuiManager()
 {
+	const CefMessageRouterConfig RouterConfig;
+	MessageRouter = CefMessageRouterRendererSide::Create(RouterConfig);
 }
 
 void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
@@ -69,6 +72,44 @@ void SwuiManager::OnBeforeCommandLineProcessing(const CefString& process_type,
 void SwuiManager::DoSwuiMessageLoop()
 {
 	CefDoMessageLoopWork();
+}
+
+CefRefPtr<CefRenderProcessHandler> SwuiManager::GetRenderProcessHandler()
+{
+	return this;
+}
+
+void SwuiManager::OnContextCreated(CefRefPtr<CefBrowser> Browser,
+	CefRefPtr<CefFrame> Frame,
+	CefRefPtr<CefV8Context> Context)
+{
+	if (MessageRouter)
+	{
+		MessageRouter->OnContextCreated(Browser, Frame, Context);
+	}
+}
+
+void SwuiManager::OnContextReleased(CefRefPtr<CefBrowser> Browser,
+	CefRefPtr<CefFrame> Frame,
+	CefRefPtr<CefV8Context> Context)
+{
+	if (MessageRouter)
+	{
+		MessageRouter->OnContextReleased(Browser, Frame, Context);
+	}
+}
+
+bool SwuiManager::OnProcessMessageReceived(CefRefPtr<CefBrowser> Browser,
+	CefRefPtr<CefFrame> Frame,
+	CefProcessId SourceProcess,
+	CefRefPtr<CefProcessMessage> Message)
+{
+	if (MessageRouter)
+	{
+		return MessageRouter->OnProcessMessageReceived(Browser, Frame, SourceProcess, Message);
+	}
+
+	return false;
 }
 
 CefSettings SwuiManager::Settings;

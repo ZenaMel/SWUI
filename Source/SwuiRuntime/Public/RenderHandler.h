@@ -2,6 +2,11 @@
 
 #include "CEFInclude.h"
 #include "SwuiTypes.h"
+#include "Templates\UniquePtr.h"
+
+class CefMessageRouterBrowserSide;
+class USwuiView;
+class FSwuiBrowserQueryHandler;
 
 // ---------------------------------------------------------------------------
 // RenderHandler — CEF CefRenderHandler implementation.
@@ -44,17 +49,20 @@ class RenderHandler : public CefRenderHandler
 		IMPLEMENT_REFCOUNTING(RenderHandler);
 };
 
-class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDownloadHandler, public CefDisplayHandler
+class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDownloadHandler, public CefDisplayHandler, public CefRequestHandler
 {
 	private:
 		CefRefPtr<RenderHandler> RenderHandlerRef;
+		CefRefPtr<CefMessageRouterBrowserSide> MessageRouter;
+		TUniquePtr<FSwuiBrowserQueryHandler> QueryHandler;
 
 		CefRefPtr<CefBrowser> BrowserRef;
 		int BrowserId;
 		bool bIsClosing;
+		USwuiView* OwningView;
 
 	public:
-		BrowserClient(RenderHandler* InRenderHandler) : RenderHandlerRef(InRenderHandler) { };
+		BrowserClient(RenderHandler* InRenderHandler, USwuiView* InOwningView);
 
 		virtual CefRefPtr<CefRenderHandler> GetRenderHandler()
 		{
@@ -81,6 +89,11 @@ class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDow
 			return this;
 		}
 
+		virtual CefRefPtr<CefRequestHandler> GetRequestHandler() override
+		{
+			return this;
+		}
+
 		virtual void OnUncaughtException(CefRefPtr<CefBrowser> Browser,
 			CefRefPtr<CefFrame> Frame,
 			CefRefPtr<CefV8Context> Context,
@@ -102,7 +115,7 @@ class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDow
 			CefRefPtr<CefFrame> Frame,
 			const CefString& TargetUrl,
 			const CefString& TargetFrameName,
-			WindowOpenDisposition TargetDisposition,
+			CefLifeSpanHandler::WindowOpenDisposition TargetDisposition,
 			bool UserGesture,
 			const CefPopupFeatures& PopupFeatures,
 			CefWindowInfo& WindowInfo,
@@ -115,6 +128,19 @@ class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDow
 
 		void OnAfterCreated(CefRefPtr<CefBrowser> Browser) override;
 		void OnBeforeClose(CefRefPtr<CefBrowser> Browser) override;
+		bool OnBeforeBrowse(CefRefPtr<CefBrowser> Browser,
+			CefRefPtr<CefFrame> Frame,
+			CefRefPtr<CefRequest> Request,
+			bool UserGesture,
+			bool IsRedirect) override;
+		void OnRenderProcessTerminated(CefRefPtr<CefBrowser> Browser,
+			TerminationStatus Status,
+			int ErrorCode,
+			const CefString& ErrorString) override;
+		bool OnProcessMessageReceived(CefRefPtr<CefBrowser> Browser,
+			CefRefPtr<CefFrame> Frame,
+			CefProcessId SourceProcess,
+			CefRefPtr<CefProcessMessage> Message) override;
 
 		virtual bool OnConsoleMessage(CefRefPtr<CefBrowser> Browser,
 				cef_log_severity_t Level,
@@ -130,4 +156,8 @@ class BrowserClient : public CefClient, public CefLifeSpanHandler, public CefDow
 
 	public:
 		IMPLEMENT_REFCOUNTING(BrowserClient);
+
+	private:
+		void ReleaseQueryHandler();
+		~BrowserClient() override;
 };

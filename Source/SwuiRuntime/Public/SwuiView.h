@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Templates/SharedPointer.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 #include "UObject/Object.h"
 #include "SwuiTypes.h"
 #include "HAL/CriticalSection.h"
@@ -8,6 +10,7 @@
 #include "SwuiView.generated.h"
 
 struct FSwuiViewCefData;
+class AActor;
 
 UCLASS(ClassGroup=Swui, Blueprintable)
 class SWUIRUNTIME_API USwuiView : public UObject, public ISwuiRenderTarget, public ISwuiAcceleratedRenderTarget
@@ -45,6 +48,8 @@ public:
 
 	// Internal — called by the backend adapter, not directly from Blueprint.
 	void ExecuteJavaScript(const FString& Script);
+	void SetOwningActor(AActor* InOwningActor) { OwningActor = InOwningActor; }
+	bool HandleIncomingMessage(const FString& MessageJson);
 
 	UFUNCTION(BlueprintCallable, Category="SwuiRuntime")
 	UTexture2D* GetTexture() const;
@@ -78,6 +83,8 @@ public:
 
 private:
 	// --- Browser frame pacer ---
+	AActor* ResolveOwningActor() const;
+	TWeakObjectPtr<AActor> OwningActor;
 	double LastBrowserFrameTime = 0.0;
 	double LastDirtyTime = 0.0;
 	bool bBrowserAnimating = false;
