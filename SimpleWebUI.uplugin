@@ -15,7 +15,7 @@
     "Name": "GameplayTagsEditor",
     "Enabled": true
   }
-]
+],
 	"Modules": [
 		{
 			"Name": "SwuiLoader",

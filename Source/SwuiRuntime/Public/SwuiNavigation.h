@@ -166,12 +166,12 @@ public:
 	/** Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled. */
 	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
 		meta=(ToolTip="Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled."))
-	void SendNavigationEvent(FGameplayTag Event);
+	void SendNavigationEvent(UPARAM(meta=(Categories="swui")) FGameplayTag Event);
 
 	/** Routes a named SWUI navigation event with a JSON payload. */
 	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
 		meta=(ToolTip="Routes a named SWUI navigation event with a JSON payload."))
-	void SendNavigationEventWithPayload(FGameplayTag Event, const FString& JsonPayload);
+	void SendNavigationEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload);
 
 	// ---- Convenience Navigation Wrappers ----
 
