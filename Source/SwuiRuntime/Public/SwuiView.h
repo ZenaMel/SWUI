@@ -76,6 +76,7 @@ public:
 	bool IsExternalBeginFrameActive() const { return bExternalBeginFrameActive; }
 	bool HasPaintAfterExternalBeginFrame() const { return bPaintArrivedAfterExternalBeginFrame; }
 	bool HasFreshOnPaintDataPending() const;
+	void RequestFullTextureUploadNextFrame();
 
 	// Per-instance settings forwarded from USwui component at Init() time.
 	// Kept public so USwuiSubsystem can read isolation flags (e.g. bPauseBrowserUpdates).
@@ -134,6 +135,10 @@ private:
 	uint64                         DrainedFreshPaintGeneration = 0;
 	double                         PendingFreshPaintArrivalTime = 0.0;
 
+	// Game-thread paint generation counter, incremented when TickDeferredUpload
+	// drains a fresh batch of CEF paint. Used to gate forced full uploads.
+	uint64                         PaintGeneration = 0;
+
 	// -----------------------------------------------------------------------
 	// Tile diff state — game thread only, no mutex needed.
 	// -----------------------------------------------------------------------
@@ -147,6 +152,10 @@ private:
 	int32          LastSnapH      = 0;
 	bool           bSeenFirstPaint = false;
 	bool           bNeedsFullBaselineUpload = true;
+	int32          SuppressCenterCriticalRectFrames = 0;
+	uint64         ForcedUploadRequestedAtPaintGeneration = 0;
+	int32          PendingFreshFullUploads = 0;
+	bool           bAwaitingFreshPaintForForcedUpload = false;
 
 	// -----------------------------------------------------------------------
 	// Aggregate stats — game thread only, reset every second in TickDeferredUpload.

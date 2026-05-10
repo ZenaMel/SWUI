@@ -649,6 +649,18 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 	return bFlushed;
 }
 
+void USwuiSubsystem::RequestHudVisualRefresh(float DurationSeconds, bool bForceFullUpload)
+{
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI VISUAL REFRESH] RequestHudVisualRefresh  duration=%.3f  forceFullUpload=%d"),
+		DurationSeconds, bForceFullUpload ? 1 : 0);
+	bForceBrowserFrameThisTick = true;
+	MarkHudAnimationActive(DurationSeconds);
+	if (bForceFullUpload && View)
+	{
+		View->RequestFullTextureUploadNextFrame();
+	}
+}
+
 void USwuiSubsystem::QueueHudEventScript(const FString& Script)
 {
 	if (!Script.IsEmpty())

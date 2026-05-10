@@ -98,6 +98,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Instance"))
 	void ObserveSource(UObject* Instance, bool bWarnOnMiss = true);
 
+	// ---- Visual Refresh API ----
+
+	/** Requests a short HUD visual refresh burst: forces a browser frame, marks
+	 *  animation active for the given duration, and optionally requests a full
+	 *  texture upload on the next frame. */
+	void RequestHudVisualRefresh(float DurationSeconds = 0.30f, bool bForceFullUpload = true);
+
 	// ---- Public API ----
 
 	void ObserveProperty(UObject* Source, const FString& Namespace, const FName& PropertyName);

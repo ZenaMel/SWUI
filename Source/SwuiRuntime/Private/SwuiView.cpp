@@ -528,6 +528,23 @@ bool USwuiView::HasFreshOnPaintDataPending() const
 		PendingFreshPaintGeneration > DrainedFreshPaintGeneration;
 }
 
+void USwuiView::RequestFullTextureUploadNextFrame()
+{
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] RequestFullTextureUploadNextFrame  paintGen=%llu"),
+		PaintGeneration);
+
+	bNeedsFullBaselineUpload = true;
+	bAwaitingFreshPaintForForcedUpload = true;
+	ForcedUploadRequestedAtPaintGeneration = PaintGeneration;
+	PendingFreshFullUploads = 3;
+	SuppressCenterCriticalRectFrames = 4;
+	if (ActiveDirtyTileMask.Num() > 0)
+	{
+		ActiveDirtyTileMask.Init(false, ActiveDirtyTileMask.Num());
+		DirtyTileScanCursor = 0;
+	}
+}
+
 bool USwuiView::FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame)
 {
 	const int32 CurrentHudLockstepCVar = CVarSwuiHudLockstep.GetValueOnGameThread();
@@ -884,6 +901,7 @@ void USwuiView::TickDeferredUpload()
 			if (bDrainedFreshPaintThisTick)
 			{
 				DrainedFreshPaintGeneration = LocalFreshPaintGeneration;
+				++PaintGeneration;
 			}
 
 			PendingCefPaints        = 0;
@@ -971,6 +989,20 @@ void USwuiView::TickDeferredUpload()
 			bNeedsFullBaselineUpload = true;
 		}
 
+		// Fresh-paint gate: if awaiting fresh paint for forced full upload, wait
+		// until CEF has delivered new pixels before uploading from the backing buffer.
+		if (bAwaitingFreshPaintForForcedUpload)
+		{
+			const bool bFreshPaintArrived = PaintGeneration > ForcedUploadRequestedAtPaintGeneration;
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Awaiting fresh paint  paintGen=%llu  requestedAt=%llu  arrived=%d"),
+				PaintGeneration, ForcedUploadRequestedAtPaintGeneration, bFreshPaintArrived ? 1 : 0);
+			if (!bFreshPaintArrived)
+			{
+				return;
+			}
+			bAwaitingFreshPaintForForcedUpload = false;
+		}
+
 		// Baseline upload: ensure whole texture is valid once before incremental mode.
 		if (bNeedsFullBaselineUpload && !InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
 		{
@@ -1002,10 +1034,21 @@ void USwuiView::TickDeferredUpload()
 					Stat_HashMsSum,
 					Stat_HashMsMax,
 					Stat_HashSamples);
-				bNeedsFullBaselineUpload = false;
 				ActiveDirtyTileMask.Init(false, ActiveDirtyTileMask.Num());
 				DirtyTileScanCursor = 0;
 				bDidBaselineThisTick = true;
+
+				if (PendingFreshFullUploads > 0)
+				{
+					--PendingFreshFullUploads;
+					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Full upload executed  remaining=%d  fullSurface=%dx%d"),
+						PendingFreshFullUploads, SnapW, SnapH);
+					bNeedsFullBaselineUpload = (PendingFreshFullUploads > 0);
+				}
+				else
+				{
+					bNeedsFullBaselineUpload = false;
+				}
 
 				const bool bSkipUpload = CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0
 					|| InstanceSettings.bSkipTextureUpload || InstanceSettings.bNoTextureUpload;
@@ -1084,8 +1127,13 @@ void USwuiView::TickDeferredUpload()
 			int32 UsedNormalBytes = 0;
 			FIntRect CenterRect;
 			bool bHasCenterRect = false;
+			const bool bForceFullUploadMode =
+				bAwaitingFreshPaintForForcedUpload ||
+				bNeedsFullBaselineUpload ||
+				PendingFreshFullUploads > 0 ||
+				SuppressCenterCriticalRectFrames > 0;
 
-			if (bCenterEnabled)
+			if (bCenterEnabled && !bForceFullUploadMode)
 			{
 				CenterRect = SwuiClampRect(
 					FIntRect(
@@ -1145,7 +1193,7 @@ void USwuiView::TickDeferredUpload()
 
 			TArray<FIntRect, TInlineAllocator<256>> Candidates;
 
-			if (bHasCenterRect)
+			if (bHasCenterRect && !bForceFullUploadMode)
 			{
 				Candidates.Add(CenterRect);
 			}
@@ -1308,6 +1356,11 @@ void USwuiView::TickDeferredUpload()
 			Stat_DeferredUploadMsSum,
 			Stat_DeferredUploadMsMax,
 			Stat_DeferredUploadSamples);
+	}
+
+	if (SuppressCenterCriticalRectFrames > 0)
+	{
+		--SuppressCenterCriticalRectFrames;
 	}
 
 	// -----------------------------------------------------------------------

@@ -338,17 +338,29 @@ void USwuiNavigation::SendNavigationEventWithPayload(FGameplayTag Event, const F
 	});
 }
 
-void USwuiNavigation::EmitEvent(FGameplayTag Event)
+void USwuiNavigation::RefreshHudFrame(bool bForceFullFrameRefresh)
 {
-	EmitEventWithPayload(Event, TEXT("{}"));
+	if (!bForceFullFrameRefresh) return;
+	UWorld* World = GetWorld();
+	if (!World) return;
+	UGameInstance* GI = World->GetGameInstance();
+	if (!GI) return;
+	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
+	if (Sub) Sub->RequestHudVisualRefresh(0.30f, true);
 }
 
-void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& JsonPayload)
+void USwuiNavigation::EmitEvent(FGameplayTag Event, bool bForceFullFrameRefresh)
+{
+	EmitEventWithPayload(Event, TEXT("{}"), bForceFullFrameRefresh);
+}
+
+void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& JsonPayload, bool bForceFullFrameRefresh)
 {
 	DispatchEvent(Event, JsonPayload, [this, Event, &JsonPayload]()
 	{
 		return HandleNavigationEvent(Event, JsonPayload);
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
 void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
@@ -510,7 +522,7 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 // Convenience Navigation Wrappers
 // ---------------------------------------------------------------------------
 
-void USwuiNavigation::Navigate(ESwuiNavDirection Direction)
+void USwuiNavigation::Navigate(ESwuiNavDirection Direction, bool bForceFullFrameRefresh)
 {
 	const TCHAR* DirStr = DirectionToString(Direction);
 	const FString Detail = FString::Printf(TEXT("{\"direction\":\"%s\"}"), DirStr);
@@ -532,18 +544,20 @@ void USwuiNavigation::Navigate(ESwuiNavDirection Direction)
 		OnNavigate.Broadcast(Direction);
 		return HandleNavigate(Direction);
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::Confirm()
+void USwuiNavigation::Confirm(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().Confirm, TEXT("{}"), [this]()
 	{
 		OnConfirm.Broadcast();
 		return HandleConfirm();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::Cancel()
+void USwuiNavigation::Cancel(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().Cancel, TEXT("{}"), [this]()
 	{
@@ -555,82 +569,91 @@ void USwuiNavigation::Cancel()
 	{
 		RestoreGameInput();
 	}
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::NextTab()
+void USwuiNavigation::NextTab(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().NextTab, TEXT("{}"), [this]()
 	{
 		OnNextTab.Broadcast();
 		return HandleNextTab();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::PreviousTab()
+void USwuiNavigation::PreviousTab(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().PreviousTab, TEXT("{}"), [this]()
 	{
 		OnPreviousTab.Broadcast();
 		return HandlePreviousTab();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
 // ---------------------------------------------------------------------------
 // Menu Convenience Wrappers
 // ---------------------------------------------------------------------------
 
-void USwuiNavigation::MenuOpen()
+void USwuiNavigation::MenuOpen(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuOpen, TEXT("{}"), [this]()
 	{
 		OnMenuOpen.Broadcast();
 		return HandleMenuOpen();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::MenuClose()
+void USwuiNavigation::MenuClose(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuClose, TEXT("{}"), [this]()
 	{
 		OnMenuClose.Broadcast();
 		return HandleMenuClose();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::MenuBack()
+void USwuiNavigation::MenuBack(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuBack, TEXT("{}"), [this]()
 	{
 		OnMenuBack.Broadcast();
 		return HandleMenuBack();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::MenuContinue()
+void USwuiNavigation::MenuContinue(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuContinue, TEXT("{}"), [this]()
 	{
 		OnMenuContinue.Broadcast();
 		return HandleMenuContinue();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::MenuSettings()
+void USwuiNavigation::MenuSettings(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuSettings, TEXT("{}"), [this]()
 	{
 		OnMenuSettings.Broadcast();
 		return HandleMenuSettings();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
-void USwuiNavigation::MenuQuit()
+void USwuiNavigation::MenuQuit(bool bForceFullFrameRefresh)
 {
 	DispatchEvent(FSwuiNavTags::Get().MenuQuit, TEXT("{}"), [this]()
 	{
 		OnMenuQuit.Broadcast();
 		return HandleMenuQuit();
 	});
+	RefreshHudFrame(bForceFullFrameRefresh);
 }
 
 // ---------------------------------------------------------------------------

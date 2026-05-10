@@ -175,13 +175,17 @@ public:
 
 	/** Emits a SWUI event via GameplayTag through the unified event pipeline. */
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Emits a SWUI event via GameplayTag through the unified event pipeline."))
-	void EmitEvent(UPARAM(meta=(Categories="swui")) FGameplayTag Event);
+		meta=(ToolTip="Emits a SWUI event via GameplayTag through the unified event pipeline.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void EmitEvent(UPARAM(meta=(Categories="swui")) FGameplayTag Event,
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = false);
 
 	/** Emits a SWUI event with a JSON-formatted string payload through the unified event pipeline. */
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Emits a SWUI event with a JSON-formatted string payload through the unified event pipeline."))
-	void EmitEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload);
+		meta=(ToolTip="Emits a SWUI event with a JSON-formatted string payload through the unified event pipeline.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void EmitEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload,
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = false);
 
 	// Called by the browser bridge for JS-originated tag events.
 	// Uses native routing but does not forward the event back to JS.
@@ -190,50 +194,72 @@ public:
 	// ---- Convenience Navigation Wrappers ----
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send directional navigation event."))
-	void Navigate(ESwuiNavDirection Direction);
+		meta=(ToolTip="Send directional navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void Navigate(ESwuiNavDirection Direction,
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send confirm navigation event."))
-	void Confirm();
+		meta=(ToolTip="Send confirm navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void Confirm(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send cancel navigation event."))
-	void Cancel();
+		meta=(ToolTip="Send cancel navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void Cancel(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send next-tab navigation event."))
-	void NextTab();
+		meta=(ToolTip="Send next-tab navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void NextTab(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send previous-tab navigation event."))
-	void PreviousTab();
+		meta=(ToolTip="Send previous-tab navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void PreviousTab(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	// ---- Menu Convenience Wrappers ----
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-open navigation event."))
-	void MenuOpen();
+		meta=(ToolTip="Send menu-open navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuOpen(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-close navigation event."))
-	void MenuClose();
+		meta=(ToolTip="Send menu-close navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuClose(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-back navigation event."))
-	void MenuBack();
+		meta=(ToolTip="Send menu-back navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuBack(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-continue navigation event."))
-	void MenuContinue();
+		meta=(ToolTip="Send menu-continue navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuContinue(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-settings navigation event."))
-	void MenuSettings();
+		meta=(ToolTip="Send menu-settings navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuSettings(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
-		meta=(ToolTip="Send menu-quit navigation event."))
-	void MenuQuit();
+		meta=(ToolTip="Send menu-quit navigation event.",
+			AdvancedDisplay="bForceFullFrameRefresh"))
+	void MenuQuit(
+		UPARAM(DisplayName="Force Full HUD Refresh") bool bForceFullFrameRefresh = true);
 
 	// ---- High-Level Pointer Convenience Wrappers ----
 
@@ -405,6 +431,9 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	// Requests a visual refresh burst on the subsystem if the flag is set.
+	void RefreshHudFrame(bool bForceFullFrameRefresh);
+
 	// JS forwarding — sends CustomEvent to the browser via the subsystem.
 	void ForwardToJs(const FString& JsEventName, const FString& DetailJson);
 
