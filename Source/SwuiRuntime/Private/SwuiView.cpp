@@ -2,6 +2,15 @@
 #include "RenderHandler.h"
 #include "ISwuiRuntime.h"
 #include "SwuiNavigation.h"
+
+// ---------------------------------------------------------------------------
+// SWUI JS→UE Native Message Bus (Navigation Only)
+//
+// Receives JSON messages from JS/React HUD via CEF/cefQuery:
+//   { "type": "navigation", "tag": "swui.menu.close", "payload": {}, "source": "js" }
+// Only routes type="navigation" for now. Tag is mapped to FGameplayTag.
+// Blueprint API and React HUD usage remain unchanged.
+// ---------------------------------------------------------------------------
 #include "SwuiManager.h"
 #include "SwuiCVars.h"
 #include "SwuiCVarHelpers.h"
@@ -441,67 +450,73 @@ AActor* USwuiView::ResolveOwningActor() const
 
 bool USwuiView::HandleIncomingMessage(const FString& MessageJson)
 {
-	TSharedPtr<FJsonObject> MessageObject;
-	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(MessageJson);
- 
-	if (!FJsonSerializer::Deserialize(Reader, MessageObject) || !MessageObject.IsValid())
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Failed to parse browser message JSON: %s"), *MessageJson);
-		return false;
-	}
+       UE_LOG(LogSwuiRuntime, Verbose, TEXT("[SWUI JS BUS] raw=%s"), *MessageJson);
 
-	FString MessageType;
-	if (!MessageObject->TryGetStringField(TEXT("type"), MessageType))
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Browser message missing 'type' field."));
-		return false;
-	}
+       TSharedPtr<FJsonObject> MessageObject;
+       const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(MessageJson);
 
-	if (MessageType != TEXT("navigation"))
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Unsupported browser message type '%s'."), *MessageType);
-		return false;
-	}
+       if (!FJsonSerializer::Deserialize(Reader, MessageObject) || !MessageObject.IsValid())
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS BUS] Failed to parse JSON: %s"), *MessageJson);
+	       return false;
+       }
 
-	FString TagName;
-	if (!MessageObject->TryGetStringField(TEXT("tag"), TagName) || TagName.IsEmpty())
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Navigation message missing 'tag' field."));
-		return false;
-	}
+       FString MessageType;
+       if (!MessageObject->TryGetStringField(TEXT("type"), MessageType))
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS BUS] Missing 'type' field."));
+	       return false;
+       }
 
-	const FGameplayTag EventTag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagName), false);
-	if (!EventTag.IsValid())
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Ignoring unknown navigation tag '%s'."), *TagName);
-		return false;
-	}
+       UE_LOG(LogSwuiRuntime, Verbose, TEXT("[SWUI JS BUS] type=%s"), *MessageType);
 
-	FString PayloadJson = TEXT("{}");
-	if (const TSharedPtr<FJsonValue>* PayloadValue = MessageObject->Values.Find(TEXT("payload")))
-	{
-		PayloadJson.Reset();
-		const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
-			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&PayloadJson);
-		FJsonSerializer::Serialize((*PayloadValue).ToSharedRef(), FString(), Writer);
-	}
+       if (MessageType != TEXT("navigation"))
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS BUS] Unsupported message type '%s'."), *MessageType);
+	       return false;
+       }
 
-	AActor* OwnerActor = ResolveOwningActor();
-	if (!OwnerActor)
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Browser message received without an owning actor."));
-		return false;
-	}
+       FString TagName;
+       if (!MessageObject->TryGetStringField(TEXT("tag"), TagName) || TagName.IsEmpty())
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS->UE NAV] Navigation message missing 'tag' field."));
+	       return false;
+       }
 
-	USwuiNavigation* Navigation = OwnerActor->FindComponentByClass<USwuiNavigation>();
-	if (!Navigation)
-	{
-		UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: Actor '%s' has no USwuiNavigation component to handle '%s'."), *OwnerActor->GetName(), *TagName);
-		return false;
-	}
+       const FGameplayTag EventTag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagName), false);
+       if (!EventTag.IsValid())
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS->UE NAV] Ignoring unknown navigation tag '%s'."), *TagName);
+	       return false;
+       }
 
-	Navigation->ReceiveNavigationEventFromJs(EventTag, PayloadJson);
-	return true;
+       FString PayloadJson = TEXT("{}");
+       if (const TSharedPtr<FJsonValue>* PayloadValue = MessageObject->Values.Find(TEXT("payload")))
+       {
+	       PayloadJson.Reset();
+	       const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+		       TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&PayloadJson);
+	       FJsonSerializer::Serialize((*PayloadValue).ToSharedRef(), FString(), Writer);
+       }
+
+       UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS->UE NAV] tag=%s payload=%s"), *TagName, *PayloadJson);
+
+       AActor* OwnerActor = ResolveOwningActor();
+       if (!OwnerActor)
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS->UE NAV] Message received without an owning actor."));
+	       return false;
+       }
+
+       USwuiNavigation* Navigation = OwnerActor->FindComponentByClass<USwuiNavigation>();
+       if (!Navigation)
+       {
+	       UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI JS->UE NAV] Actor '%s' has no USwuiNavigation component to handle '%s'."), *OwnerActor->GetName(), *TagName);
+	       return false;
+       }
+
+       Navigation->ReceiveNavigationEventFromJs(EventTag, PayloadJson);
+       return true;
 }
 
 void USwuiView::NotifyHudStateFlushed()
@@ -804,8 +819,11 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			DirtyRatio >= 0.35f ||
 			RegionCount >= 32 ||
 			(float)MaxRectArea >= (float)SurfaceArea * 0.50f;
+		// Suppress automatic FullTransition while interactive UI is active
+		// to avoid full-surface copies on hover/click during menus.
 		if (bLargeTransition && RenderActivityMode != ESwuiRenderActivityMode::FullTransition
-			&& PendingFullCefPaintCopies == 0 && !bAwaitingFreshPaintForForcedUpload)
+			&& PendingFullCefPaintCopies == 0 && !bAwaitingFreshPaintForForcedUpload
+			&& !bUiInteractionActive)
 		{
 			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
 				DirtyRatio, RegionCount, MaxRectArea);

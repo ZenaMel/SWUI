@@ -405,6 +405,15 @@ void USwuiNavigation::DispatchEvent(FGameplayTag Event, const FString& JsonPaylo
 	OnNavigationEvent.Broadcast(Event, FString());
 	OnNavigationEventWithPayload.Broadcast(Event, JsonPayload);
 
+	if (bAllowJsForwarding)
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI UE->JS NAV] DispatchEvent tag=%s payload=%s forwardToJs=1"), *TagName, *JsonPayload);
+	}
+	else
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS->UE NAV] DispatchEvent tag=%s payload=%s forwardToJs=0"), *TagName, *JsonPayload);
+	}
+
 	// Blueprint handler — returns true if consumed.
 	bool bConsumed = false;
 	if (!Config || Config->bBlueprintCallback)
@@ -465,6 +474,7 @@ void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& Js
 
 void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
 {
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS->UE NAV] ReceiveNavigationEventFromJs tag=%s payload=%s"), *Event.GetTagName().ToString(), *JsonPayload);
 	const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;
 	const FSwuiNavTags& Tags = FSwuiNavTags::Get();
 

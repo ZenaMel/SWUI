@@ -1,3 +1,38 @@
+// ── Debug Overlay ─────────────────────────────────────────────────────────
+
+let _swuiDebugOverlay: HTMLDivElement | null = null;
+let _swuiDebugOverlayTimeout: number | undefined;
+
+function showSwuiDebugOverlay(tag: string, transport: string) {
+  if (!_swuiDebugOverlay) {
+    _swuiDebugOverlay = document.createElement('div');
+    _swuiDebugOverlay.id = 'swui-debug-overlay';
+    Object.assign(_swuiDebugOverlay.style, {
+      position: 'fixed',
+      top: '12px',
+      right: '12px',
+      zIndex: 99999,
+      background: 'rgba(0,0,0,0.85)',
+      color: '#fff',
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      padding: '8px 16px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+      pointerEvents: 'none',
+      transition: 'opacity 0.3s',
+      opacity: '1',
+      maxWidth: '90vw',
+    });
+    document.body.appendChild(_swuiDebugOverlay);
+  }
+  _swuiDebugOverlay.textContent = `[SWUI NAV] tag: ${tag}  transport: ${transport}`;
+  _swuiDebugOverlay.style.opacity = '1';
+  if (_swuiDebugOverlayTimeout) window.clearTimeout(_swuiDebugOverlayTimeout);
+  _swuiDebugOverlayTimeout = window.setTimeout(() => {
+    if (_swuiDebugOverlay) _swuiDebugOverlay.style.opacity = '0.25';
+  }, 2000);
+}
 /**
  * swui.ts — SimpleWebUI client runtime
  *
@@ -31,6 +66,23 @@
  *   Swui.onTextInput(fn)           — text character input
  */
 
+// ---------------------------------------------------------------------------
+// SWUI JS→UE Native Message Bus (Navigation Only)
+//
+// Outbound messages from JS/React HUD to Unreal Engine use:
+//   Swui.emitNavigationEvent(tag, payload?)
+// which wraps:
+//   Swui.postMessage({ type: "navigation", tag, payload: payload ?? {}, source: "js" })
+//
+// Transport:
+//   - Uses window.cefQuery if available (preferred for CEF/Unreal)
+//   - Falls back to window.__SWUI__?.postMessage if available
+//   - Otherwise, safely no-ops (never throws)
+//
+// Only type="navigation" is routed to UE for now. Tag is mapped to FGameplayTag.
+// Blueprint API and React HUD usage remain unchanged.
+// ---------------------------------------------------------------------------
+
 // ── Internal types ──────────────────────────────────────────────────────────
 
 export type Unsubscribe = () => void;
@@ -41,6 +93,14 @@ type SwuiOutgoingMessage = {
   payload?: unknown;
 };
 
+type SwuiNativeMessage = {
+  type: string;
+  payload?: unknown;
+  tag?: string;
+  event?: string;
+  id?: string;
+  source?: 'js';
+};
 interface SwuiChromeWebview {
   postMessage: (message: unknown) => void;
 }
@@ -64,6 +124,111 @@ interface SwuiWindowExtensions {
   chrome?: {
     webview?: SwuiChromeWebview;
   };
+}
+
+declare global {
+  interface Window {
+    cefQuery?: (args: SwuiCefQueryRequest) => void;
+    __SWUI__?: SwuiRuntime & { postMessage?: (message: string) => void };
+    [key: string]: unknown;
+  }
+}
+
+function shouldLogSwuiClientDebug(): boolean {
+  try {
+    const dev = (typeof (globalThis as any).process !== 'undefined' && (globalThis as any).process?.env?.NODE_ENV === 'development');
+    const metaDev = (typeof (globalThis as any).importMeta !== 'undefined') ? (globalThis as any).importMeta?.env?.DEV : false;
+    const winFlag = typeof window !== 'undefined' && (window as any).__SWUI_DEBUG_NAV__;
+    return Boolean(dev || metaDev || winFlag);
+  } catch {
+    return Boolean(typeof window !== 'undefined' && (window as any).__SWUI_DEBUG_NAV__);
+  }
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify({
+      type: 'error',
+      payload: { message: 'Failed to serialize SWUI native message' },
+      source: 'js',
+    });
+  }
+}
+
+function sendSwuiUrlBridge(raw: string, tag: string, debug: boolean): void {
+  const encoded = encodeURIComponent(raw);
+  const url = `swui://bus?payload=${encoded}&t=${Date.now()}`;
+
+  let iframe = document.getElementById('__swui_native_bridge_iframe') as HTMLIFrameElement | null;
+
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = '__swui_native_bridge_iframe';
+    iframe.style.display = 'none';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.documentElement.appendChild(iframe);
+  }
+
+  iframe.src = url;
+
+  if ((window as any).__SWUI_DEBUG_NAV__) {
+    showSwuiDebugOverlay(tag, 'urlBridge');
+  }
+}
+
+function postMessage(message: SwuiNativeMessage): void {
+  if (typeof window === 'undefined') return;
+
+  const raw = safeStringify(message);
+  const debug = shouldLogSwuiClientDebug();
+
+  try {
+    let transport = 'none';
+    const msgTag = (message as any).tag || '';
+    if (typeof window.cefQuery === 'function') {
+      transport = 'cefQuery';
+      if (debug) console.log('[SWUI CLIENT] postMessage transport=cefQuery', message);
+      window.cefQuery({
+        request: raw,
+        onSuccess: () => { },
+        onFailure: (code: number, err: string) => {
+          if (debug) console.warn('[SWUI CLIENT] cefQuery failed', code, err, message);
+        },
+      });
+      if ((window as any).__SWUI_DEBUG_NAV__ && message.type === 'navigation') {
+        showSwuiDebugOverlay(msgTag, transport);
+      }
+      return;
+    }
+
+    if (typeof window.__SWUI__?.postMessage === 'function') {
+      transport = '__SWUI__.postMessage';
+      if (debug) console.log('[SWUI CLIENT] postMessage transport=__SWUI__.postMessage', message);
+      try { (window.__SWUI__ as any).postMessage(raw); } catch (e) { if (debug) console.warn('[SWUI CLIENT] __SWUI__.postMessage failed', e); }
+      if ((window as any).__SWUI_DEBUG_NAV__ && message.type === 'navigation') {
+        showSwuiDebugOverlay(msgTag, transport);
+      }
+      return;
+    }
+
+    const webview = (window as any).chrome?.webview;
+    if (webview && typeof webview.postMessage === 'function') {
+      transport = 'chrome.webview.postMessage';
+      if (debug) console.log('[SWUI CLIENT] postMessage transport=chrome.webview.postMessage', message);
+      try { webview.postMessage(raw); } catch (e) { if (debug) console.warn('[SWUI CLIENT] chrome.webview.postMessage failed', e); }
+      if ((window as any).__SWUI_DEBUG_NAV__ && message.type === 'navigation') {
+        showSwuiDebugOverlay(msgTag, transport);
+      }
+      return;
+    }
+
+    if (debug) console.log('[SWUI CLIENT] postMessage transport=urlBridge', message);
+    sendSwuiUrlBridge(raw, msgTag, debug);
+  } catch (error) {
+    console.error('[SWUI CLIENT] postMessage failed', error, message);
+  }
 }
 
 // ── Subscriber map ──────────────────────────────────────────────────────────
@@ -142,45 +307,9 @@ function getAll(): Record<string, unknown> {
   return _getRuntime()?.state ?? {};
 }
 
-function emitToUnreal(message: SwuiOutgoingMessage): void {
-  const runtime = _getRuntime();
-
-  try {
-    if (runtime?.emitToUnreal) {
-      runtime.emitToUnreal(message);
-      return;
-    }
-
-    if (runtime?.postMessage) {
-      runtime.postMessage(message);
-      return;
-    }
-
-    const webview = _getWindow().chrome?.webview;
-    if (webview?.postMessage) {
-      webview.postMessage(message);
-      return;
-    }
-
-    const cefQuery = _getWindow().cefQuery;
-    if (cefQuery) {
-      cefQuery({ request: JSON.stringify(message) });
-      return;
-    }
-  } catch (error) {
-    _warnOutboundSendFailure(message, error);
-    return;
-  }
-
-  _warnMissingOutboundBridge(message);
-}
-
-function emitNavigationEvent(tagName: string, payload?: unknown): void {
-  emitToUnreal({
-    type: "navigation",
-    tag: tagName,
-    payload,
-  });
+function emitNavigationEvent(tagName: string, payload: unknown = {}): void {
+  if (shouldLogSwuiClientDebug()) console.log('[SWUI CLIENT] emitNavigationEvent tag=', tagName, 'payload=', payload);
+  postMessage({ type: 'navigation', tag: tagName, payload, source: 'js' });
 }
 
 // ── Navigation types ────────────────────────────────────────────────────────
@@ -314,6 +443,7 @@ const Swui = {
   on, get, getAll,
   // Navigation — subscribe
   onEvent, onNavigate, onConfirm, onCancel, onNextTab, onPreviousTab,
+  postMessage,
   emitNavigationEvent,
   // Pointer
   onPointerMove, onPointerPress, onPointerRelease, onPointerWheel,
@@ -321,3 +451,4 @@ const Swui = {
   onKeyDown, onKeyUp, onTextInput,
 };
 export default Swui;
+export { postMessage, emitNavigationEvent };

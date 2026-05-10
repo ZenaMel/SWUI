@@ -5,6 +5,52 @@
 #include "Async/Async.h"
 #include "include/wrapper/cef_message_router.h"
 
+namespace
+{
+	int32 SwuiHexValue(const TCHAR C)
+	{
+		if (C >= TEXT('0') && C <= TEXT('9')) return C - TEXT('0');
+		if (C >= TEXT('a') && C <= TEXT('f')) return 10 + (C - TEXT('a'));
+		if (C >= TEXT('A') && C <= TEXT('F')) return 10 + (C - TEXT('A'));
+		return -1;
+	}
+
+	FString SwuiUrlDecodeUtf8(const FString& Encoded)
+	{
+		TArray<ANSICHAR> Bytes;
+		Bytes.Reserve(Encoded.Len() + 1);
+
+		for (int32 I = 0; I < Encoded.Len(); ++I)
+		{
+			const TCHAR C = Encoded[I];
+
+			if (C == TEXT('%') && I + 2 < Encoded.Len())
+			{
+				const int32 Hi = SwuiHexValue(Encoded[I + 1]);
+				const int32 Lo = SwuiHexValue(Encoded[I + 2]);
+
+				if (Hi >= 0 && Lo >= 0)
+				{
+					Bytes.Add(static_cast<ANSICHAR>((Hi << 4) | Lo));
+					I += 2;
+					continue;
+				}
+			}
+
+			if (C == TEXT('+'))
+			{
+				Bytes.Add(' ');
+				continue;
+			}
+
+			Bytes.Add(static_cast<ANSICHAR>(C));
+		}
+
+		Bytes.Add('\0');
+		return FString(UTF8_TO_TCHAR(Bytes.GetData()));
+	}
+}
+
 class FSwuiBrowserQueryHandler final : public CefMessageRouterBrowserSide::Handler
 {
 public:
@@ -26,6 +72,8 @@ public:
 		UNREFERENCED_PARAMETER(Persistent);
 
 		const FString RequestJson = FString(Request.ToWString().c_str());
+
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS BUS] cefQuery received raw=%s"), *RequestJson);
 		Callback->Success("ok");
 
 		TWeakObjectPtr<USwuiView> WeakView = OwningView;
@@ -170,9 +218,52 @@ bool BrowserClient::OnBeforeBrowse(CefRefPtr<CefBrowser> Browser,
 	bool UserGesture,
 	bool IsRedirect)
 {
-	UNREFERENCED_PARAMETER(Request);
 	UNREFERENCED_PARAMETER(UserGesture);
 	UNREFERENCED_PARAMETER(IsRedirect);
+
+	// ── SWUI URL Bridge (JS->UE fallback) ──────────────────────────────────
+	// Intercept swui://bus?payload=... URL navigation used as a fallback
+	// transport when window.cefQuery is unavailable.
+	{
+		const CefString CefUrl = Request->GetURL();
+		const FString UrlString(CefUrl.ToWString().c_str());
+
+		if (UrlString.StartsWith(TEXT("swui://bus")))
+		{
+			// Extract payload query parameter using FString.
+			FString PayloadEncoded;
+
+			const FString PayloadMarker = TEXT("payload=");
+			const int32 PayloadStart = UrlString.Find(PayloadMarker);
+
+			if (PayloadStart != INDEX_NONE)
+			{
+				const int32 ValueStart = PayloadStart + PayloadMarker.Len();
+
+				FString QueryValue = UrlString.Mid(ValueStart);
+
+				int32 AmpIndex = INDEX_NONE;
+				if (QueryValue.FindChar(TEXT('&'), AmpIndex))
+				{
+					QueryValue = QueryValue.Left(AmpIndex);
+				}
+
+				PayloadEncoded = QueryValue;
+			}
+
+			// URL-decode the extracted payload.
+			const FString RawJson = SwuiUrlDecodeUtf8(PayloadEncoded);
+
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS BUS] urlBridge received raw=%s"), *RawJson);
+
+			if (OwningView)
+			{
+				OwningView->HandleIncomingMessage(RawJson);
+			}
+
+			return true; // Cancel navigation — do not load the swui://bus URL.
+		}
+	}
 
 	if (MessageRouter)
 	{
