@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Containers/Array.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 
 class USwui;
+struct FSwuiNavigationEvent;
 
 // Maps a UE FProperty type to its TypeScript equivalent.
 // Returns an empty string for types we don't support syncing.
@@ -30,4 +32,8 @@ public:
 	// Generates Content/UI/generated/<InterfaceName>.generated.ts from the
 	// component's ExposedProperties list. Safe to call from any editor context.
 	static bool Generate(USwui* Swui);
+
+	// Generates Content/UI/generated/<InterfaceName>.navigation.generated.ts
+	// from the navigation component's configured JS-forwarded events.
+	static bool GenerateNavigation(USwui* Swui, const TArray<FSwuiNavigationEvent>& NavigationEvents);
 };

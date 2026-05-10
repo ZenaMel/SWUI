@@ -11,12 +11,17 @@
  *   Swui.getAll()      — full state snapshot.
  *
  * Navigation API (dot-separated event names match Gameplay Tags):
- *   Swui.onEvent(tagName, fn)      — any dot-named event (e.g. "swui.navigation.confirm")
- *   Swui.onNavigate(fn)            — directional navigation
- *   Swui.onConfirm(fn)             — confirm action
- *   Swui.onCancel(fn)              — cancel action
- *   Swui.onNextTab(fn)             — next tab
- *   Swui.onPreviousTab(fn)         — previous tab
+ *   Inbound:
+ *     Swui.onEvent("swui.menu.open", fn)
+ *     SwuiNavigationEvents.onMenuOpen(fn)
+ *     Swui.onNavigate(fn)
+ *     Swui.onConfirm(fn)
+ *     Swui.onCancel(fn)
+ *     Swui.onNextTab(fn)
+ *     Swui.onPreviousTab(fn)
+ *   Outbound:
+ *     Swui.emitNavigationEvent("swui.menu.close")
+ *     Swui.emitNavigationEvent("swui.menu.quit")
  *   Swui.onPointerMove(fn)         — pointer movement
  *   Swui.onPointerPress(fn)        — pointer button pressed
  *   Swui.onPointerRelease(fn)      — pointer button released
@@ -30,18 +35,62 @@
 
 export type Unsubscribe = () => void;
 
+type SwuiOutgoingMessage = {
+  type: "navigation";
+  tag: string;
+  payload?: unknown;
+};
+
+interface SwuiChromeWebview {
+  postMessage: (message: unknown) => void;
+}
+
+interface SwuiCefQueryRequest {
+  request: string;
+  onSuccess?: (response: string) => void;
+  onFailure?: (errorCode: number, errorMessage: string) => void;
+}
+
 interface SwuiRuntime {
   state:    Record<string, unknown>;
   _notify?: (key: string, value: unknown) => void;
+  emitToUnreal?: (message: SwuiOutgoingMessage) => void;
+  postMessage?: (message: SwuiOutgoingMessage) => void;
+}
+
+interface SwuiWindowExtensions {
+  __SWUI__?: SwuiRuntime;
+  cefQuery?: (request: SwuiCefQueryRequest) => void;
+  chrome?: {
+    webview?: SwuiChromeWebview;
+  };
 }
 
 // ── Subscriber map ──────────────────────────────────────────────────────────
 
 const _subs: Record<string, Array<(v: unknown) => void>> = {};
 let _patched = false;
+let _warnedMissingOutboundBridge = false;
+let _warnedOutboundSendFailure = false;
+
+function _getWindow(): SwuiWindowExtensions {
+  return window as unknown as SwuiWindowExtensions;
+}
 
 function _getRuntime(): SwuiRuntime | undefined {
-  return (window as unknown as Record<string, unknown>).__SWUI__ as SwuiRuntime | undefined;
+  return _getWindow().__SWUI__;
+}
+
+function _warnMissingOutboundBridge(message: SwuiOutgoingMessage): void {
+  if (_warnedMissingOutboundBridge) return;
+  _warnedMissingOutboundBridge = true;
+  console.warn("[SWUI] No outbound native bridge is available; dropped message.", message);
+}
+
+function _warnOutboundSendFailure(message: SwuiOutgoingMessage, error: unknown): void {
+  if (_warnedOutboundSendFailure) return;
+  _warnedOutboundSendFailure = true;
+  console.warn("[SWUI] Failed to send outbound message to Unreal.", message, error);
 }
 
 function _patch(): void {
@@ -91,6 +140,47 @@ function get<T = unknown>(key: string): T | undefined {
 /** Full state snapshot. */
 function getAll(): Record<string, unknown> {
   return _getRuntime()?.state ?? {};
+}
+
+function emitToUnreal(message: SwuiOutgoingMessage): void {
+  const runtime = _getRuntime();
+
+  try {
+    if (runtime?.emitToUnreal) {
+      runtime.emitToUnreal(message);
+      return;
+    }
+
+    if (runtime?.postMessage) {
+      runtime.postMessage(message);
+      return;
+    }
+
+    const webview = _getWindow().chrome?.webview;
+    if (webview?.postMessage) {
+      webview.postMessage(message);
+      return;
+    }
+
+    const cefQuery = _getWindow().cefQuery;
+    if (cefQuery) {
+      cefQuery({ request: JSON.stringify(message) });
+      return;
+    }
+  } catch (error) {
+    _warnOutboundSendFailure(message, error);
+    return;
+  }
+
+  _warnMissingOutboundBridge(message);
+}
+
+function emitNavigationEvent(tagName: string, payload?: unknown): void {
+  emitToUnreal({
+    type: "navigation",
+    tag: tagName,
+    payload,
+  });
 }
 
 // ── Navigation types ────────────────────────────────────────────────────────
@@ -224,6 +314,7 @@ const Swui = {
   on, get, getAll,
   // Navigation — subscribe
   onEvent, onNavigate, onConfirm, onCancel, onNextTab, onPreviousTab,
+  emitNavigationEvent,
   // Pointer
   onPointerMove, onPointerPress, onPointerRelease, onPointerWheel,
   // Keyboard

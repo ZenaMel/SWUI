@@ -831,7 +831,13 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			{
 				USwui* Swui = NavPtr->GetTargetSwui();
 				if (Swui)
-					bOK = FSwuiTSGenerator::Generate(Swui);
+				{
+					bOK = FSwuiTSGenerator::GenerateNavigation(Swui, NavPtr->NavigationEvents);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Error, TEXT("SWUI: Navigation JS bindings generation failed because SwuiNavigation has no target USwui."));
+				}
 			}
 
 			FNotificationInfo Info(bOK
