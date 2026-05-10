@@ -483,12 +483,4 @@ private:
 
 	/** Whether pointer forwarding is currently active (set by SetMenuInputActive). */
 	bool bMenuInputActive = false;
-
-	/** Last known cursor position sent to CEF (avoids redundant move events). */
-	FVector2D LastSentMousePosition = FVector2D(-1.f, -1.f);
-
-	/** Previous-frame mouse-button states for detecting press/release transitions. */
-	bool bPrevLeftDown   = false;
-	bool bPrevRightDown  = false;
-	bool bPrevMiddleDown = false;
 };

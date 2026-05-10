@@ -5,6 +5,9 @@
 #include "SwuiManager.h"
 #include "SwuiCVars.h"
 #include "SwuiCVarHelpers.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SViewport.h"
+#include "InputCoreTypes.h"
 #include "Components/ActorComponent.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -1933,21 +1936,72 @@ void USwuiView::SetPointerInputEnabled(bool bEnabled)
 		bEnabled ? TEXT("true") : TEXT("false"));
 }
 
-void USwuiView::ForwardMouseMoveToBrowser(FVector2D ScreenPosition)
+bool USwuiView::HasBrowserHost() const
 {
-	if (!bPointerInputEnabled) return;
-	if (!CefData || !CefData->Browser) return;
+	return CefData && CefData->Browser && CefData->Browser->GetHost() != nullptr;
+}
+
+bool USwuiView::ScreenToBrowserPixel(const FVector2D& ScreenPos, int32& OutX, int32& OutY) const
+{
+	if (Width <= 0 || Height <= 0)
+	{
+		return false;
+	}
+
+	// Primary path: Slate viewport geometry conversion.
+	if (FSlateApplication::IsInitialized())
+	{
+		TSharedPtr<SViewport> ViewportWidget = FSlateApplication::Get().GetGameViewport();
+
+		if (ViewportWidget.IsValid())
+		{
+			const FGeometry& Geometry = ViewportWidget->GetCachedGeometry();
+			const FVector2D LocalPos = Geometry.AbsoluteToLocal(ScreenPos);
+			const FVector2D LocalSize = Geometry.GetLocalSize();
+
+			if (LocalSize.X > 0.0f && LocalSize.Y > 0.0f &&
+				LocalPos.X >= 0.0f && LocalPos.Y >= 0.0f &&
+				LocalPos.X <= LocalSize.X && LocalPos.Y <= LocalSize.Y)
+			{
+				const float ScaleX = static_cast<float>(Width) / LocalSize.X;
+				const float ScaleY = static_cast<float>(Height) / LocalSize.Y;
+
+				OutX = FMath::Clamp(FMath::RoundToInt(LocalPos.X * ScaleX), 0, Width - 1);
+				OutY = FMath::Clamp(FMath::RoundToInt(LocalPos.Y * ScaleY), 0, Height - 1);
+				return true;
+			}
+
+			return false;
+		}
+	}
+
+	// Fallback: direct screen-space to pixel (valid when viewport fills the entire window).
+	if (ScreenPos.X < 0.0f || ScreenPos.Y < 0.0f ||
+		ScreenPos.X >= static_cast<float>(Width) ||
+		ScreenPos.Y >= static_cast<float>(Height))
+	{
+		return false;
+	}
+
+	OutX = FMath::Clamp(FMath::RoundToInt(ScreenPos.X), 0, Width - 1);
+	OutY = FMath::Clamp(FMath::RoundToInt(ScreenPos.Y), 0, Height - 1);
+	return true;
+}
+
+bool USwuiView::ForwardMouseMoveToBrowser(const FVector2D& ScreenPosition)
+{
+	if (!bPointerInputEnabled) return false;
+	if (!CefData || !CefData->Browser) return false;
 
 	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
-	if (!Host) return;
+	if (!Host) return false;
 
-	FVector2D BrowserPos = ScreenPosition;
-	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
-	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
+	int32 BX = 0, BY = 0;
+	if (!ScreenToBrowserPixel(ScreenPosition, BX, BY)) return false;
 
 	CefMouseEvent Event;
-	Event.x = static_cast<int>(BrowserPos.X);
-	Event.y = static_cast<int>(BrowserPos.Y);
+	Event.x = BX;
+	Event.y = BY;
 	Event.modifiers = 0;
 
 	Host->SendMouseMoveEvent(Event, false);
@@ -1955,70 +2009,73 @@ void USwuiView::ForwardMouseMoveToBrowser(FVector2D ScreenPosition)
 	if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0)
 	{
 		UE_LOG(LogSwuiRuntime, Verbose, TEXT("[SwuiPointer] MouseMove: (%.0f, %.0f) -> browser (%d, %d)"),
-			ScreenPosition.X, ScreenPosition.Y, Event.x, Event.y);
-	}
-}
-
-void USwuiView::ForwardMouseButtonToBrowser(FVector2D ScreenPosition, int32 CefButtonType, bool bDown)
-{
-	if (!bPointerInputEnabled) return;
-	if (!CefData || !CefData->Browser) return;
-
-	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
-	if (!Host) return;
-
-	FVector2D BrowserPos = ScreenPosition;
-	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
-	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
-
-	CefMouseEvent Event;
-	Event.x = static_cast<int>(BrowserPos.X);
-	Event.y = static_cast<int>(BrowserPos.Y);
-	Event.modifiers = 0;
-
-	cef_mouse_button_type_t CefButton = MBT_LEFT;
-	switch (CefButtonType)
-	{
-	case 1: CefButton = MBT_MIDDLE; break;
-	case 2: CefButton = MBT_RIGHT;  break;
-	default: CefButton = MBT_LEFT;   break;
+			ScreenPosition.X, ScreenPosition.Y, BX, BY);
 	}
 
-	Host->SendMouseClickEvent(Event, CefButton, !bDown, 1);
-
-	const TCHAR* Action = bDown ? TEXT("Down") : TEXT("Up");
-	const TCHAR* Btn    = CefButtonType == 0 ? TEXT("Left")
-		: CefButtonType == 1 ? TEXT("Middle") : TEXT("Right");
-	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] MouseButton %s %s at (%.0f, %.0f)"),
-		Btn, Action, ScreenPosition.X, ScreenPosition.Y);
+	return true;
 }
 
-void USwuiView::ForwardMouseWheelToBrowser(FVector2D ScreenPosition, float DeltaY)
+static cef_mouse_button_type_t SwuiMapKeyToCefButton(FKey Button)
 {
-	if (!bPointerInputEnabled) return;
-	if (!CefData || !CefData->Browser) return;
+	if (Button == EKeys::LeftMouseButton)   return MBT_LEFT;
+	if (Button == EKeys::RightMouseButton)  return MBT_RIGHT;
+	if (Button == EKeys::MiddleMouseButton) return MBT_MIDDLE;
+	return MBT_LEFT;
+}
+
+bool USwuiView::ForwardMouseButtonToBrowser(const FVector2D& ScreenPosition, FKey Button, bool bMouseUp, int32 ClickCount)
+{
+	if (!bPointerInputEnabled) return false;
+	if (!CefData || !CefData->Browser) return false;
 
 	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
-	if (!Host) return;
+	if (!Host) return false;
 
-	FVector2D BrowserPos = ScreenPosition;
-	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
-	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
+	int32 BX = 0, BY = 0;
+	if (!ScreenToBrowserPixel(ScreenPosition, BX, BY)) return false;
 
-	// CEF expects wheel deltas in physical pixels (typically 120 per notch on Windows).
-	// UE's accumulated wheel axis value is also ~120 per notch, so pass directly.
+	cef_mouse_button_type_t CefButton = SwuiMapKeyToCefButton(Button);
+
 	CefMouseEvent Event;
-	Event.x = static_cast<int>(BrowserPos.X);
-	Event.y = static_cast<int>(BrowserPos.Y);
+	Event.x = BX;
+	Event.y = BY;
 	Event.modifiers = 0;
 
-	const int32 DeltaX = 0;
-	const int32 DeltaYInt = static_cast<int32>(DeltaY);
+	Host->SendMouseClickEvent(Event, CefButton, bMouseUp, ClickCount);
 
-	Host->SendMouseWheelEvent(Event, DeltaX, DeltaYInt);
+	const TCHAR* Action = bMouseUp ? TEXT("Up") : TEXT("Down");
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] MouseButton %s %s  clickCount=%d  (%d, %d)"),
+		*Button.ToString(), Action, ClickCount, BX, BY);
 
-	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] Wheel: deltaY=%d at (%.0f, %.0f)"),
-		DeltaYInt, ScreenPosition.X, ScreenPosition.Y);
+	return true;
+}
+
+bool USwuiView::ForwardMouseWheelToBrowser(const FVector2D& ScreenPosition, float DeltaX, float DeltaY)
+{
+	if (!bPointerInputEnabled) return false;
+	if (!CefData || !CefData->Browser) return false;
+
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return false;
+
+	int32 BX = 0, BY = 0;
+	if (!ScreenToBrowserPixel(ScreenPosition, BX, BY)) return false;
+
+	// CEF expects wheel deltas in physical pixels (typically ~120 per notch on Windows).
+	const int32 CefDeltaX = FMath::RoundToInt(DeltaX * 120.0f);
+	const int32 CefDeltaY = FMath::RoundToInt(DeltaY * 120.0f);
+
+	CefMouseEvent Event;
+	Event.x = BX;
+	Event.y = BY;
+	Event.modifiers = 0;
+
+	Host->SendMouseWheelEvent(Event, CefDeltaX, CefDeltaY);
+
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] Wheel: delta=(%d, %d)  (%d, %d)"),
+		CefDeltaX, CefDeltaY, BX, BY);
+
+	return true;
 }
 
 void USwuiView::SetBrowserInputFocus(bool bFocused)

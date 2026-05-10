@@ -10,6 +10,7 @@
 
 class USwuiView;
 class UUserWidget;
+class FSwuiInputPreprocessor;
 
 // ---- Internal registry entries ----
 
@@ -122,9 +123,12 @@ public:
 
 	void SetPointerInputEnabled(bool bEnabled);
 	void SetBrowserInputFocus(bool bFocused);
-	void ForwardMouseMoveToView(FVector2D ScreenPosition);
-	void ForwardMouseButtonToView(FVector2D ScreenPosition, int32 CefButtonType, bool bDown);
-	void ForwardMouseWheelToView(FVector2D ScreenPosition, float DeltaY);
+
+	// ---- Slate Input Preprocessor Helpers ----
+
+	USwuiView* GetActiveView() const { return View; }
+	bool IsInputDebugLoggingEnabled() const { return bInputDebugLogging; }
+	void SetInputDebugLoggingEnabled(bool bEnabled) { bInputDebugLogging = bEnabled; }
 
 	// ---- Public API ----
 
@@ -173,4 +177,10 @@ private:
 
 	/** Last time SetUiInteractionActive was called with true, or pointer activity was detected. */
 	double LastUiInteractionTime = 0.0;
+
+	/** Slate input preprocessor for raw pointer forwarding to CEF. */
+	TSharedPtr<FSwuiInputPreprocessor> InputPreprocessor;
+
+	/** Cached input debug logging state from USwuiNavigation. */
+	bool bInputDebugLogging = false;
 };

@@ -3,9 +3,11 @@
 #include "SwuiSettings.h"
 #include "Swui.h"
 #include "SwuiView.h"
+#include "SwuiInputPreprocessor.h"
 #include "SwuiCVars.h"
 #include "SwuiCVarHelpers.h"
 #include "ISwuiRuntime.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
@@ -72,10 +74,24 @@ bool USwuiSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 void USwuiSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+
+	InputPreprocessor = MakeShared<FSwuiInputPreprocessor>(this);
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().RegisterInputPreProcessor(InputPreprocessor);
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPreprocessor] Registered Slate input preprocessor."));
+	}
 }
 
 void USwuiSubsystem::Deinitialize()
 {
+	if (FSlateApplication::IsInitialized() && InputPreprocessor.IsValid())
+	{
+		FSlateApplication::Get().UnregisterInputPreProcessor(InputPreprocessor);
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPreprocessor] Unregistered Slate input preprocessor."));
+	}
+	InputPreprocessor.Reset();
+
 	ShutdownRenderer();
 	ObservedProperties.Empty();
 	ObservedDelegates.Empty();
@@ -237,21 +253,6 @@ void USwuiSubsystem::SetPointerInputEnabled(bool bEnabled)
 void USwuiSubsystem::SetBrowserInputFocus(bool bFocused)
 {
 	if (View) View->SetBrowserInputFocus(bFocused);
-}
-
-void USwuiSubsystem::ForwardMouseMoveToView(FVector2D ScreenPosition)
-{
-	if (View) View->ForwardMouseMoveToBrowser(ScreenPosition);
-}
-
-void USwuiSubsystem::ForwardMouseButtonToView(FVector2D ScreenPosition, int32 CefButtonType, bool bDown)
-{
-	if (View) View->ForwardMouseButtonToBrowser(ScreenPosition, CefButtonType, bDown);
-}
-
-void USwuiSubsystem::ForwardMouseWheelToView(FVector2D ScreenPosition, float DeltaY)
-{
-	if (View) View->ForwardMouseWheelToBrowser(ScreenPosition, DeltaY);
 }
 
 // ---- Observe API ----

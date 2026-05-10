@@ -11,6 +11,7 @@
 
 struct FSwuiViewCefData;
 class AActor;
+struct FKey;
 
 UCLASS(ClassGroup=Swui, Blueprintable)
 class SWUIRUNTIME_API USwuiView : public UObject, public ISwuiRenderTarget, public ISwuiAcceleratedRenderTarget
@@ -90,15 +91,28 @@ public:
 	/** Whether pointer input forwarding is currently active. */
 	bool IsPointerInputEnabled() const { return bPointerInputEnabled; }
 
-	/** Forward a mouse-move event to the CEF browser at the given viewport coordinates. */
-	void ForwardMouseMoveToBrowser(FVector2D ScreenPosition);
+	/** Returns whether the CEF browser host is available for forwarding. */
+	bool HasBrowserHost() const;
+
+	/** Convert a Slate screen-space position to CEF browser pixel coordinates.
+	 *  Returns false when the position is outside the SWUI browser area. */
+	bool ScreenToBrowserPixel(const FVector2D& ScreenPos, int32& OutX, int32& OutY) const;
+
+	/** Forward a mouse-move event to the CEF browser.
+	 *  Returns true if the event was forwarded. */
+	bool ForwardMouseMoveToBrowser(const FVector2D& ScreenPosition);
 
 	/** Forward a mouse-button (down/up) event to CEF.
-	 *  CefButtonType: 0=Left, 1=Middle, 2=Right. */
-	void ForwardMouseButtonToBrowser(FVector2D ScreenPosition, int32 CefButtonType, bool bDown);
+	 *  @param Button      Unreal FKey (LeftMouseButton, RightMouseButton, MiddleMouseButton)
+	 *  @param bMouseUp    true = mouse up, false = mouse down
+	 *  @param ClickCount  1 = single, 2 = double
+	 *  Returns true if the event was forwarded. */
+	bool ForwardMouseButtonToBrowser(const FVector2D& ScreenPosition, FKey Button, bool bMouseUp, int32 ClickCount = 1);
 
-	/** Forward a mouse-wheel event to CEF. */
-	void ForwardMouseWheelToBrowser(FVector2D ScreenPosition, float DeltaY);
+	/** Forward a mouse-wheel event to CEF.
+	 *  @param DeltaX, DeltaY  Unreal wheel delta values (e.g. from FPointerEvent::GetWheelDelta)
+	 *  Returns true if the event was forwarded. */
+	bool ForwardMouseWheelToBrowser(const FVector2D& ScreenPosition, float DeltaX, float DeltaY);
 
 	/** Set/unset CEF browser keyboard/mouse focus. */
 	void SetBrowserInputFocus(bool bFocused);
