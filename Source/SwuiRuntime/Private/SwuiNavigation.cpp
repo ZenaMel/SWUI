@@ -338,6 +338,19 @@ void USwuiNavigation::SendNavigationEventWithPayload(FGameplayTag Event, const F
 	});
 }
 
+void USwuiNavigation::EmitEvent(FGameplayTag Event)
+{
+	EmitEventWithPayload(Event, TEXT("{}"));
+}
+
+void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& JsonPayload)
+{
+	DispatchEvent(Event, JsonPayload, [this, Event, &JsonPayload]()
+	{
+		return HandleNavigationEvent(Event, JsonPayload);
+	});
+}
+
 void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
 {
 	const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;

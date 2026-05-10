@@ -164,14 +164,24 @@ public:
 	// ---- Core Navigation API ----
 
 	/** Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled. */
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Routes a named SWUI navigation event through Blueprint callbacks and then to JS when forwarding is enabled."))
 	void SendNavigationEvent(UPARAM(meta=(Categories="swui")) FGameplayTag Event);
 
 	/** Routes a named SWUI navigation event with a JSON payload. */
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Routes a named SWUI navigation event with a JSON payload."))
 	void SendNavigationEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload);
+
+	/** Emits a SWUI event via GameplayTag through the unified event pipeline. */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
+		meta=(ToolTip="Emits a SWUI event via GameplayTag through the unified event pipeline."))
+	void EmitEvent(UPARAM(meta=(Categories="swui")) FGameplayTag Event);
+
+	/** Emits a SWUI event with a JSON-formatted string payload through the unified event pipeline. */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
+		meta=(ToolTip="Emits a SWUI event with a JSON-formatted string payload through the unified event pipeline."))
+	void EmitEventWithPayload(UPARAM(meta=(Categories="swui")) FGameplayTag Event, const FString& JsonPayload);
 
 	// Called by the browser bridge for JS-originated tag events.
 	// Uses native routing but does not forward the event back to JS.
@@ -179,49 +189,49 @@ public:
 
 	// ---- Convenience Navigation Wrappers ----
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send directional navigation event."))
 	void Navigate(ESwuiNavDirection Direction);
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send confirm navigation event."))
 	void Confirm();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send cancel navigation event."))
 	void Cancel();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send next-tab navigation event."))
 	void NextTab();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send previous-tab navigation event."))
 	void PreviousTab();
 
 	// ---- Menu Convenience Wrappers ----
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-open navigation event."))
 	void MenuOpen();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-close navigation event."))
 	void MenuClose();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-back navigation event."))
 	void MenuBack();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-continue navigation event."))
 	void MenuContinue();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-settings navigation event."))
 	void MenuSettings();
 
-	UFUNCTION(BlueprintCallable, Category="SWUI|Navigation",
+	UFUNCTION(BlueprintCallable, Category="SWUI|Event Emitters",
 		meta=(ToolTip="Send menu-quit navigation event."))
 	void MenuQuit();
 
@@ -286,65 +296,65 @@ public:
 	// ---- Blueprint Events (side effects: sounds, animations, state) ----
 
 	/** Fired for every navigation event. */
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiNavigationEventDelegate OnNavigationEvent;
 
 	/** Fired for every navigation event with payload. */
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiNavigationEventDelegate OnNavigationEventWithPayload;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnNavigate OnNavigate;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnConfirm;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnCancel;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnNextTab;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnPreviousTab;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuOpen;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuClose;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuBack;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuContinue;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuSettings;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnSimpleAction OnMenuQuit;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnPointerMove OnPointerMove;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnPointerButton OnPointerPress;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnPointerButton OnPointerRelease;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnPointerWheel OnPointerWheel;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnKeyAction OnKeyDown;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnKeyAction OnKeyUp;
 
-	UPROPERTY(BlueprintAssignable, Category="SWUI|Navigation|Events")
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnTextInput OnTextInput;
 
 	// ---- Handled/Consumed Handlers ----

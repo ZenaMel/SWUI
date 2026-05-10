@@ -850,7 +850,7 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 	[
 		SNew(STextBlock)
 		.Text(LOCTEXT("DefaultEventsNote",
-			"Default Events already have native BlueprintAssignable entries in Unreal's normal Events panel. The + button is only for Custom Events."))
+			"These are GameplayTag event channels that SWUI can emit, receive, forward to JS, and expose as Blueprint listeners."))
 		.Font(IDetailLayoutBuilder::GetDetailFont())
 		.AutoWrapText(true)
 	];
@@ -901,14 +901,14 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 	// ---- Default Events group ----
 	IDetailGroup& DefaultGroup = Cat.AddGroup(
 		TEXT("SwuiDefaultEvents"),
-		LOCTEXT("DefaultEventsHeader", "Default Events"),
+		LOCTEXT("DefaultEventsHeader", "Default SWUI Events"),
 		/*bForAdvanced=*/false, /*bStartExpanded=*/true);
 	AddTagRows(DefaultGroup, DefaultTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/false);
 
 	// ---- Custom Events group ----
 	IDetailGroup& CustomGroup = Cat.AddGroup(
 		TEXT("SwuiCustomEvents"),
-		LOCTEXT("CustomEventsHeader", "Custom Events"),
+		LOCTEXT("CustomEventsHeader", "Custom SWUI Events"),
 		/*bForAdvanced=*/false, /*bStartExpanded=*/true);
 
 	// ---- Add New row (at top of Custom Events) ----

@@ -15,16 +15,16 @@ struct SWUIRUNTIME_API FSwuiBindingSource
 	GENERATED_BODY()
 
 	// The class to show a property checklist for.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Binding")
 	TSubclassOf<UObject> SourceClass;
 
 	// Properties checked in the Details panel for this class.
 	// Emitted into the generated TypeScript state interface as namespaced keys.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Binding")
 	TArray<FName> Properties;
 
 	// Multicast delegates checked in the Details panel for this class.
 	// Emitted as document.addEventListener helpers in the generated TypeScript.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Binding")
 	TArray<FName> Delegates;
 };

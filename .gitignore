@@ -2,3 +2,6 @@
 Intermediate/*
 Binaries/*
 ThirdParty/cef/Win/*
+Build/*
+Saved/*
+DerivedDataCache/*
