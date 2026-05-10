@@ -1,4 +1,4 @@
-using UnrealBuildTool;
+﻿using UnrealBuildTool;
 
 public class SwuiEditor : ModuleRules
 {
@@ -16,6 +16,7 @@ public class SwuiEditor : ModuleRules
 			"LevelEditor",
 			"ToolMenus",
 			"SwuiRuntime",
+			"SwuiUncookedOnly",
 			// Custom K2 nodes
 			"BlueprintGraph",
 			"KismetCompiler",

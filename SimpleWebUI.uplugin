@@ -24,6 +24,11 @@
 			"BlacklistPlatforms": [ "Android", "IOS" ]
 		},
 		{
+			"Name": "SwuiUncookedOnly",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "PreDefault"
+		},
+		{
 			"Name": "SwuiEditor",
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit",

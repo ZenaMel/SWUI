@@ -23,9 +23,22 @@ function Close-ProjectEditor {
 function Build-Project {
     Write-Host "`nBuilding ADAEditor..." -ForegroundColor Cyan
 
-    & $BuildBat ADAEditor Win64 Development -Project="$Project" -WaitMutex
+    $Args = @(
+        "ADAEditor",
+        "Win64",
+        "Development",
+        "-Project=`"$Project`"",
+        "-WaitMutex"
+    )
 
-    return [int]$LASTEXITCODE
+    $Proc = Start-Process `
+        -FilePath $BuildBat `
+        -ArgumentList $Args `
+        -Wait `
+        -PassThru `
+        -NoNewWindow
+
+    return $Proc.ExitCode
 }
 
 function Start-ProjectEditor {
@@ -37,7 +50,7 @@ while ($true) {
     while ($true) {
         Close-ProjectEditor
 
-        $ExitCode = [int](Build-Project | Select-Object -Last 1)
+        $ExitCode = Build-Project
 
         if ($ExitCode -eq 0) {
             Start-ProjectEditor

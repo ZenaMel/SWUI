@@ -9,7 +9,7 @@
  * Compiles down to the real component-bound delegate event plus an exact tag check.
  */
 UCLASS()
-class UK2Node_SwuiNavigationEvent : public UK2Node
+class SWUIUNCOOKEDONLY_API UK2Node_SwuiNavigationEvent : public UK2Node
 {
 	GENERATED_BODY()
 
