@@ -470,6 +470,50 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 		return false;
 	}
 
+	TArray<UK2Node_SwuiNavigationEvent*> ExistingNodes;
+	FBlueprintEditorUtils::GetAllNodesOfClass(Blueprint, ExistingNodes);
+	for (UK2Node_SwuiNavigationEvent* ExistingNode : ExistingNodes)
+	{
+		if (!ExistingNode)
+		{
+			continue;
+		}
+
+		if (ExistingNode->ComponentPropertyName == ComponentVariableName && ExistingNode->NavigationEventTag == Tag)
+		{
+			if (UEdGraph* ExistingGraph = ExistingNode->GetGraph())
+			{
+				BlueprintEditor->OpenGraphAndBringToFront(ExistingGraph, true);
+			}
+
+			BlueprintEditor->AddToSelection(ExistingNode);
+			if (ConcreteBlueprintEditor.IsValid())
+			{
+				ConcreteBlueprintEditor->JumpToNode(ExistingNode, false);
+			}
+			else
+			{
+				FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(ExistingNode, false);
+			}
+
+			FNotificationInfo Info(LOCTEXT("DuplicateSwuiNavigationEventNodeTitle", "SWUI navigation event already exists"));
+			Info.bFireAndForget = true;
+			Info.FadeInDuration = 0.2f;
+			Info.FadeOutDuration = 0.5f;
+			Info.ExpireDuration = 3.f;
+			Info.Image = FAppStyle::GetBrush(TEXT("Icons.WarningWithColor"));
+			Info.SubText = FText::Format(
+				LOCTEXT("DuplicateSwuiNavigationEventNodeMessage", "A BP event for {0} already exists on this SwuiNavigation component."),
+				FText::FromString(Tag.GetTagName().ToString()));
+
+			if (TSharedPtr<SNotificationItem> NotificationItem = FSlateNotificationManager::Get().AddNotification(Info))
+			{
+				NotificationItem->SetCompletionState(SNotificationItem::CS_None);
+			}
+			return false;
+		}
+	}
+
 	BlueprintEditor->OpenGraphAndBringToFront(TargetGraph, true);
 
 	FVector2D NodePosition = TargetGraph->GetGoodPlaceForNewNode();
