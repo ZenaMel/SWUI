@@ -98,12 +98,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Instance"))
 	void ObserveSource(UObject* Instance, bool bWarnOnMiss = true);
 
-	// ---- Visual Refresh API ----
+	// ---- Render Activity API ----
 
 	/** Requests a short HUD visual refresh burst: forces a browser frame, marks
 	 *  animation active for the given duration, and optionally requests a full
 	 *  texture upload on the next frame. */
 	void RequestHudVisualRefresh(float DurationSeconds = 0.30f, bool bForceFullUpload = true);
+
+	/** Marks whether SWUI UI interaction (menu/inventory/etc.) is active.
+	 *  When true, the subsystem keeps the animation window active while
+	 *  pointer activity is recent. */
+	void SetUiInteractionActive(bool bActive);
+
+	/** Updates the interaction timer (called from TickComponent when pointer
+	 *  activity is detected). Extends the interactive frame-forcing window. */
+	void UpdateUiInteractionTime();
+
+	/** Begins a full transition refresh on the view (forces full CEF copies
+	 *  and full surface uploads for the given number of fresh paints). */
+	void BeginFullTransitionRefresh(int32 FreshPaintCount = 3);
+
+	// ---- Pointer Input Forwarding (bridge to View) ----
+
+	void SetPointerInputEnabled(bool bEnabled);
+	void SetBrowserInputFocus(bool bFocused);
+	void ForwardMouseMoveToView(FVector2D ScreenPosition);
+	void ForwardMouseButtonToView(FVector2D ScreenPosition, int32 CefButtonType, bool bDown);
+	void ForwardMouseWheelToView(FVector2D ScreenPosition, float DeltaY);
 
 	// ---- Public API ----
 
@@ -149,4 +170,7 @@ private:
 	double HudAnimationActiveUntil = 0.0;
 	bool bForceBrowserFrameThisTick = false;
 	bool bLastFlushSentExternalBeginFrame = false;
+
+	/** Last time SetUiInteractionActive was called with true, or pointer activity was detected. */
+	double LastUiInteractionTime = 0.0;
 };

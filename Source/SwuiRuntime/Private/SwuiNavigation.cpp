@@ -2,7 +2,9 @@
 #include "Swui.h"
 #include "SwuiSubsystem.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "GameplayTagsManager.h"
 
 #if WITH_EDITOR
@@ -92,7 +94,9 @@ const TSet<FName>& FSwuiNavTags::GetAllBuiltInTagNames()
 
 USwuiNavigation::USwuiNavigation()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
 	// Force tags to register early.
 	FSwuiNavTags::Get();
 }
@@ -101,6 +105,15 @@ void USwuiNavigation::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyInputMode();
+}
+
+USwuiSubsystem* USwuiNavigation::GetSubsystem() const
+{
+	UWorld* World = GetWorld();
+	if (!World) return nullptr;
+	UGameInstance* GI = World->GetGameInstance();
+	if (!GI) return nullptr;
+	return GI->GetSubsystem<USwuiSubsystem>();
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +215,172 @@ void USwuiNavigation::RestoreGameInput()
 		PC->bShowMouseCursor = false;
 		FInputModeGameOnly GameMode;
 		PC->SetInputMode(GameMode);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Menu Input Mode — public Blueprint API
+// ---------------------------------------------------------------------------
+
+void USwuiNavigation::SetMenuInputActive(bool bActive)
+{
+	bMenuInputActive = bActive;
+	SetComponentTickEnabled(bActive);
+
+	APlayerController* PC = Cast<APlayerController>(GetOwner());
+	if (!PC)
+	{
+		UE_LOG(LogSwuiNavigation, Warning,
+			TEXT("[SwuiNav] SetMenuInputActive(%s) — owner is not a PlayerController"),
+			bActive ? TEXT("true") : TEXT("false"));
+		return;
+	}
+
+	USwuiSubsystem* Sub = GetSubsystem();
+	if (!Sub)
+	{
+		UE_LOG(LogSwuiNavigation, Warning,
+			TEXT("[SwuiNav] SetMenuInputActive(%s) — USwuiSubsystem not found"),
+			bActive ? TEXT("true") : TEXT("false"));
+		return;
+	}
+
+	if (bActive)
+	{
+		// --- Enable menu input mode ---
+
+		// Show cursor and enable click/mouse-over so the viewport polls mouse state.
+		PC->bShowMouseCursor = true;
+		PC->bEnableClickEvents = true;
+		PC->bEnableMouseOverEvents = true;
+
+		// GameAndUi: allows the viewport to receive mouse events for forwarding to CEF.
+		{
+			FInputModeGameAndUI Mode;
+			Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+			Mode.SetHideCursorDuringCapture(false);
+			PC->SetInputMode(Mode);
+		}
+
+		// Reset previous-frame button tracking so stale state doesn't trigger false events.
+		bPrevLeftDown = bPrevRightDown = bPrevMiddleDown = false;
+		LastSentMousePosition = FVector2D(-1.f, -1.f);
+
+		// Enable CEF pointer forwarding.
+		Sub->SetPointerInputEnabled(true);
+
+		// Focus the browser so it receives mouse events.
+		Sub->SetBrowserInputFocus(true);
+
+		// Mark UI interaction active and begin full transition refresh.
+		Sub->SetUiInteractionActive(true);
+		Sub->BeginFullTransitionRefresh(3);
+
+		if (bDebugMouseCapture || bLogNavigationEvents)
+		{
+			UE_LOG(LogSwuiNavigation, Log,
+				TEXT("[SwuiNav] SetMenuInputActive(true) — cursor=show  input=GameAndUi  pointerForwarding=enabled  browserFocus=true  transition=FullTransition"));
+		}
+	}
+	else
+	{
+		// --- Disable menu input mode ---
+
+		// Release browser focus first.
+		Sub->SetBrowserInputFocus(false);
+
+		// Disable CEF pointer forwarding.
+		Sub->SetPointerInputEnabled(false);
+
+		// Mark UI interaction inactive.
+		Sub->SetUiInteractionActive(false);
+
+		// Restore game-only input.
+		PC->bShowMouseCursor = false;
+		PC->bEnableClickEvents = false;
+		PC->bEnableMouseOverEvents = false;
+		{
+			FInputModeGameOnly Mode;
+			PC->SetInputMode(Mode);
+		}
+
+		if (bDebugMouseCapture || bLogNavigationEvents)
+		{
+			UE_LOG(LogSwuiNavigation, Log,
+				TEXT("[SwuiNav] SetMenuInputActive(false) — cursor=hidden  input=GameOnly  pointerForwarding=disabled  browserFocus=false"));
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TickComponent — per-frame mouse polling when menu input is active
+// ---------------------------------------------------------------------------
+
+void USwuiNavigation::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!bMenuInputActive) return;
+
+	APlayerController* PC = Cast<APlayerController>(GetOwner());
+	if (!PC) return;
+
+	float MouseX, MouseY;
+	if (!PC->GetMousePosition(MouseX, MouseY))
+	{
+		return;
+	}
+
+	FVector2D CurrentPos(MouseX, MouseY);
+
+	USwuiSubsystem* Sub = GetSubsystem();
+	if (!Sub) return;
+
+	// ----- Mouse Move -----
+	// Always forward mouse position while the menu input is active so CEF
+	// always has the latest cursor location for hover/click targeting.
+	{
+		Sub->ForwardMouseMoveToView(CurrentPos);
+		LastSentMousePosition = CurrentPos;
+	}
+
+	// ----- Mouse Buttons (press/release detection) -----
+	const bool bLeftDown   = PC->IsInputKeyDown(EKeys::LeftMouseButton);
+	const bool bRightDown  = PC->IsInputKeyDown(EKeys::RightMouseButton);
+	const bool bMiddleDown = PC->IsInputKeyDown(EKeys::MiddleMouseButton);
+
+	if (bLeftDown != bPrevLeftDown)
+	{
+		Sub->ForwardMouseButtonToView(CurrentPos, 0, bLeftDown);
+		if (bDebugMouseCapture)
+			UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] Tick — %s %s"),
+				TEXT("Left"), bLeftDown ? TEXT("Down") : TEXT("Up"));
+		bPrevLeftDown = bLeftDown;
+	}
+	if (bRightDown != bPrevRightDown)
+	{
+		Sub->ForwardMouseButtonToView(CurrentPos, 2, bRightDown);
+		if (bDebugMouseCapture)
+			UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] Tick — %s %s"),
+				TEXT("Right"), bRightDown ? TEXT("Down") : TEXT("Up"));
+		bPrevRightDown = bRightDown;
+	}
+	if (bMiddleDown != bPrevMiddleDown)
+	{
+		Sub->ForwardMouseButtonToView(CurrentPos, 1, bMiddleDown);
+		if (bDebugMouseCapture)
+			UE_LOG(LogSwuiNavigation, Log, TEXT("[SwuiNav] Tick — %s %s"),
+				TEXT("Middle"), bMiddleDown ? TEXT("Down") : TEXT("Up"));
+		bPrevMiddleDown = bMiddleDown;
+	}
+
+	// ----- Mouse Wheel -----
+	// Use InputAxisKeyState to read accumulated wheel delta.
+	// This is the non-legacy API on PlayerController, no PlayerInput header needed.
+	const float WheelDelta = PC->GetInputAxisKeyValue(EKeys::MouseWheelAxis);
+	if (!FMath::IsNearlyZero(WheelDelta))
+	{
+		Sub->ForwardMouseWheelToView(CurrentPos, WheelDelta);
 	}
 }
 
@@ -346,7 +525,7 @@ void USwuiNavigation::RefreshHudFrame(bool bForceFullFrameRefresh)
 	UGameInstance* GI = World->GetGameInstance();
 	if (!GI) return;
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
-	if (Sub) Sub->RequestHudVisualRefresh(0.30f, true);
+	if (Sub) Sub->BeginFullTransitionRefresh(3);
 }
 
 void USwuiNavigation::EmitEvent(FGameplayTag Event, bool bForceFullFrameRefresh)

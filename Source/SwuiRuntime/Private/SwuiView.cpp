@@ -528,6 +528,50 @@ bool USwuiView::HasFreshOnPaintDataPending() const
 		PendingFreshPaintGeneration > DrainedFreshPaintGeneration;
 }
 
+void USwuiView::BeginFullTransitionRefresh(int32 FreshPaintCount)
+{
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] BeginFullTransitionRefresh  freshCount=%d  mode=FullTransition"), FreshPaintCount);
+
+	RenderActivityMode = ESwuiRenderActivityMode::FullTransition;
+	PendingFullCefPaintCopies = FreshPaintCount;
+	bNeedsFullBaselineUpload = true;
+	bAwaitingFreshPaintForForcedUpload = true;
+	ForcedUploadRequestedAtPaintGeneration = PaintGeneration;
+	PendingFreshFullUploads = FreshPaintCount;
+	SuppressCenterCriticalRectFrames = FreshPaintCount + 2;
+	if (ActiveDirtyTileMask.Num() > 0)
+	{
+		ActiveDirtyTileMask.Init(false, ActiveDirtyTileMask.Num());
+		DirtyTileScanCursor = 0;
+	}
+
+	if (CefData && CefData->Browser)
+	{
+		CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+		if (Host)
+		{
+			Host->Invalidate(PET_VIEW);
+		}
+	}
+}
+
+void USwuiView::SetUiInteractionActive(bool bActive)
+{
+	bUiInteractionActive = bActive;
+	if (!bActive && RenderActivityMode == ESwuiRenderActivityMode::InteractiveUi)
+	{
+		RenderActivityMode = ESwuiRenderActivityMode::NormalHud;
+	}
+	else if (bActive)
+	{
+		// If a FullTransition is in progress, let it finish before switching
+		if (RenderActivityMode != ESwuiRenderActivityMode::FullTransition)
+		{
+			RenderActivityMode = ESwuiRenderActivityMode::InteractiveUi;
+		}
+	}
+}
+
 void USwuiView::RequestFullTextureUploadNextFrame()
 {
 	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] RequestFullTextureUploadNextFrame  paintGen=%llu"),
@@ -737,34 +781,81 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			bNeedsFullBaselineUpload = true;
 	}
 
-	for (int32 i = 0; i < RegionCount; ++i)
+	// -----------------------------------------------------------------------
+	// Automatic large-paint detection: if CEF produces a large or high-rect
+	// paint that looks like a fullscreen UI transition, enter FullTransition.
+	// -----------------------------------------------------------------------
 	{
-		FUpdateTextureRegion2D& Rg = Regions[i];
+		int64 TotalDirtyArea = 0;
+		int32 MaxRectArea = 0;
+		for (int32 i = 0; i < RegionCount; ++i)
+		{
+			const FUpdateTextureRegion2D& Rg = Regions[i];
+			const int64 Area = (int64)Rg.Width * Rg.Height;
+			TotalDirtyArea += Area;
+			if ((int32)Area > MaxRectArea) MaxRectArea = (int32)Area;
+		}
+		const int64 SurfaceArea = (int64)InWidth * InHeight;
+		const float DirtyRatio = SurfaceArea > 0 ? (float)TotalDirtyArea / (float)SurfaceArea : 0.f;
+		const bool bLargeTransition =
+			DirtyRatio >= 0.35f ||
+			RegionCount >= 32 ||
+			(float)MaxRectArea >= (float)SurfaceArea * 0.50f;
+		if (bLargeTransition && RenderActivityMode != ESwuiRenderActivityMode::FullTransition
+			&& PendingFullCefPaintCopies == 0 && !bAwaitingFreshPaintForForcedUpload)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
+				DirtyRatio, RegionCount, MaxRectArea);
+			BeginFullTransitionRefresh(3);
+		}
+	}
 
-		// Clamp degenerate rects against texture bounds.
-		Rg.SrcX  = Rg.DestX = (uint32)FMath::Clamp((int32)Rg.SrcX,  0, InWidth  - 1);
-		Rg.SrcY  = Rg.DestY = (uint32)FMath::Clamp((int32)Rg.SrcY,  0, InHeight - 1);
-		Rg.Width  = (uint32)FMath::Clamp((int32)Rg.Width,  0, InWidth  - (int32)Rg.SrcX);
-		Rg.Height = (uint32)FMath::Clamp((int32)Rg.Height, 0, InHeight - (int32)Rg.SrcY);
-
-		if (Rg.Width == 0 || Rg.Height == 0) continue;
-
-		// Blit this dirty rect into the backing buffer (partial in-place update).
-		const int32  RowBytes = (int32)Rg.Width * 4;
-		const uint8* Src = (const uint8*)Buffer    + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
-		uint8*       Dst = BackingBuffer.GetData() + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
-		for (uint32 Row = 0; Row < Rg.Height; ++Row, Src += FullPitch, Dst += FullPitch)
-			FPlatformMemory::Memcpy(Dst, Src, RowBytes);
-
-		// Accumulate for TickDeferredUpload.
-		const int64 Area = (int64)Rg.Width * Rg.Height;
+	// -----------------------------------------------------------------------
+	// CEF paint: full buffer copy (FullTransition) or dirty rect copy.
+	// -----------------------------------------------------------------------
+	if (PendingFullCefPaintCopies > 0)
+	{
+		// Full CEF buffer copy into BackingBuffer.
+		if (BackingBuffer.Num() == BufBytes)
+		{
+			FPlatformMemory::Memcpy(BackingBuffer.GetData(), Buffer, BufBytes);
+		}
+		--PendingFullCefPaintCopies;
 		++PendingIncomingRects;
-		PendingIncomingPx += Area;
-		if ((int32)Area > PendingLargestIncoming) PendingLargestIncoming = (int32)Area;
-		PendingDirtyRects.Add(FIntRect((int32)Rg.SrcX, (int32)Rg.SrcY,
-			(int32)Rg.SrcX + (int32)Rg.Width, (int32)Rg.SrcY + (int32)Rg.Height));
-		if (bShowDirtyRects)
-			PendingOverlayRects.Add(Rg);
+		PendingIncomingPx += BufBytes / 4;
+		if (BufBytes / 4 > PendingLargestIncoming) PendingLargestIncoming = BufBytes / 4;
+		PendingDirtyRects.Add(FIntRect(0, 0, InWidth, InHeight));
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Full CEF copy  remainingCopies=%d  size=%dx%d"),
+			PendingFullCefPaintCopies, InWidth, InHeight);
+	}
+	else
+	{
+		for (int32 i = 0; i < RegionCount; ++i)
+		{
+			FUpdateTextureRegion2D& Rg = Regions[i];
+
+			Rg.SrcX  = Rg.DestX = (uint32)FMath::Clamp((int32)Rg.SrcX,  0, InWidth  - 1);
+			Rg.SrcY  = Rg.DestY = (uint32)FMath::Clamp((int32)Rg.SrcY,  0, InHeight - 1);
+			Rg.Width  = (uint32)FMath::Clamp((int32)Rg.Width,  0, InWidth  - (int32)Rg.SrcX);
+			Rg.Height = (uint32)FMath::Clamp((int32)Rg.Height, 0, InHeight - (int32)Rg.SrcY);
+
+			if (Rg.Width == 0 || Rg.Height == 0) continue;
+
+			const int32  RowBytes = (int32)Rg.Width * 4;
+			const uint8* Src = (const uint8*)Buffer    + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
+			uint8*       Dst = BackingBuffer.GetData() + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
+			for (uint32 Row = 0; Row < Rg.Height; ++Row, Src += FullPitch, Dst += FullPitch)
+				FPlatformMemory::Memcpy(Dst, Src, RowBytes);
+
+			const int64 Area = (int64)Rg.Width * Rg.Height;
+			++PendingIncomingRects;
+			PendingIncomingPx += Area;
+			if ((int32)Area > PendingLargestIncoming) PendingLargestIncoming = (int32)Area;
+			PendingDirtyRects.Add(FIntRect((int32)Rg.SrcX, (int32)Rg.SrcY,
+				(int32)Rg.SrcX + (int32)Rg.Width, (int32)Rg.SrcY + (int32)Rg.Height));
+			if (bShowDirtyRects)
+				PendingOverlayRects.Add(Rg);
+		}
 	}
 
 	++PendingCefPaints;
@@ -1131,6 +1222,8 @@ void USwuiView::TickDeferredUpload()
 				bAwaitingFreshPaintForForcedUpload ||
 				bNeedsFullBaselineUpload ||
 				PendingFreshFullUploads > 0 ||
+				PendingFullCefPaintCopies > 0 ||
+				bUiInteractionActive ||
 				SuppressCenterCriticalRectFrames > 0;
 
 			if (bCenterEnabled && !bForceFullUploadMode)
@@ -1361,6 +1454,27 @@ void USwuiView::TickDeferredUpload()
 	if (SuppressCenterCriticalRectFrames > 0)
 	{
 		--SuppressCenterCriticalRectFrames;
+	}
+
+	// -----------------------------------------------------------------------
+	// Mode transition: when FullTransition finishes, switch to InteractiveUi
+	// if UI interaction is still active, otherwise NormalHud.
+	// -----------------------------------------------------------------------
+	if (RenderActivityMode == ESwuiRenderActivityMode::FullTransition)
+	{
+		const bool bTransitionDone =
+			PendingFullCefPaintCopies == 0 &&
+			PendingFreshFullUploads == 0 &&
+			!bAwaitingFreshPaintForForcedUpload &&
+			!bNeedsFullBaselineUpload;
+		if (bTransitionDone)
+		{
+			RenderActivityMode = bUiInteractionActive
+				? ESwuiRenderActivityMode::InteractiveUi
+				: ESwuiRenderActivityMode::NormalHud;
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] FullTransition complete → %s"),
+				RenderActivityMode == ESwuiRenderActivityMode::InteractiveUi ? TEXT("InteractiveUi") : TEXT("NormalHud"));
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -1806,6 +1920,118 @@ void USwuiView::TickAcceleratedUpload()
 	}
 
 #endif // PLATFORM_WINDOWS
+}
+
+// ---------------------------------------------------------------------------
+// Pointer Input Forwarding — called from game thread, forwards to CEF.
+// ---------------------------------------------------------------------------
+
+void USwuiView::SetPointerInputEnabled(bool bEnabled)
+{
+	bPointerInputEnabled = bEnabled;
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] SetPointerInputEnabled(%s)"),
+		bEnabled ? TEXT("true") : TEXT("false"));
+}
+
+void USwuiView::ForwardMouseMoveToBrowser(FVector2D ScreenPosition)
+{
+	if (!bPointerInputEnabled) return;
+	if (!CefData || !CefData->Browser) return;
+
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return;
+
+	FVector2D BrowserPos = ScreenPosition;
+	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
+	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
+
+	CefMouseEvent Event;
+	Event.x = static_cast<int>(BrowserPos.X);
+	Event.y = static_cast<int>(BrowserPos.Y);
+	Event.modifiers = 0;
+
+	Host->SendMouseMoveEvent(Event, false);
+
+	if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0)
+	{
+		UE_LOG(LogSwuiRuntime, Verbose, TEXT("[SwuiPointer] MouseMove: (%.0f, %.0f) -> browser (%d, %d)"),
+			ScreenPosition.X, ScreenPosition.Y, Event.x, Event.y);
+	}
+}
+
+void USwuiView::ForwardMouseButtonToBrowser(FVector2D ScreenPosition, int32 CefButtonType, bool bDown)
+{
+	if (!bPointerInputEnabled) return;
+	if (!CefData || !CefData->Browser) return;
+
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return;
+
+	FVector2D BrowserPos = ScreenPosition;
+	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
+	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
+
+	CefMouseEvent Event;
+	Event.x = static_cast<int>(BrowserPos.X);
+	Event.y = static_cast<int>(BrowserPos.Y);
+	Event.modifiers = 0;
+
+	cef_mouse_button_type_t CefButton = MBT_LEFT;
+	switch (CefButtonType)
+	{
+	case 1: CefButton = MBT_MIDDLE; break;
+	case 2: CefButton = MBT_RIGHT;  break;
+	default: CefButton = MBT_LEFT;   break;
+	}
+
+	Host->SendMouseClickEvent(Event, CefButton, !bDown, 1);
+
+	const TCHAR* Action = bDown ? TEXT("Down") : TEXT("Up");
+	const TCHAR* Btn    = CefButtonType == 0 ? TEXT("Left")
+		: CefButtonType == 1 ? TEXT("Middle") : TEXT("Right");
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] MouseButton %s %s at (%.0f, %.0f)"),
+		Btn, Action, ScreenPosition.X, ScreenPosition.Y);
+}
+
+void USwuiView::ForwardMouseWheelToBrowser(FVector2D ScreenPosition, float DeltaY)
+{
+	if (!bPointerInputEnabled) return;
+	if (!CefData || !CefData->Browser) return;
+
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return;
+
+	FVector2D BrowserPos = ScreenPosition;
+	BrowserPos.X = FMath::Clamp(BrowserPos.X, 0.0f, static_cast<float>(Width));
+	BrowserPos.Y = FMath::Clamp(BrowserPos.Y, 0.0f, static_cast<float>(Height));
+
+	// CEF expects wheel deltas in physical pixels (typically 120 per notch on Windows).
+	// UE's accumulated wheel axis value is also ~120 per notch, so pass directly.
+	CefMouseEvent Event;
+	Event.x = static_cast<int>(BrowserPos.X);
+	Event.y = static_cast<int>(BrowserPos.Y);
+	Event.modifiers = 0;
+
+	const int32 DeltaX = 0;
+	const int32 DeltaYInt = static_cast<int32>(DeltaY);
+
+	Host->SendMouseWheelEvent(Event, DeltaX, DeltaYInt);
+
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] Wheel: deltaY=%d at (%.0f, %.0f)"),
+		DeltaYInt, ScreenPosition.X, ScreenPosition.Y);
+}
+
+void USwuiView::SetBrowserInputFocus(bool bFocused)
+{
+	if (!CefData || !CefData->Browser) return;
+
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (Host)
+	{
+		Host->SetFocus(bFocused);
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPointer] BrowserHost->SetFocus(%s)"),
+			bFocused ? TEXT("true") : TEXT("false"));
+	}
 }
 
 void USwuiView::BeginDestroy()

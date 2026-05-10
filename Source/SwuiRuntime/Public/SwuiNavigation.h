@@ -7,6 +7,7 @@
 #include "SwuiNavigation.generated.h"
 
 class USwui;
+class USwuiSubsystem;
 
 // ---------------------------------------------------------------------------
 // Delegates — Blueprint-assignable events for side effects.
@@ -151,6 +152,31 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation|Debug",
 		meta=(ToolTip="Log every routed navigation event for debugging."))
 	bool bLogNavigationEvents = false;
+
+	/** When true, logs detailed mouse-capture info (position, buttons, wheel, focus).
+	 *  Set this in the Details panel or at runtime via Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation|Debug",
+		meta=(ToolTip="Logs detailed mouse-capture info for debugging pointer forwarding to CEF."))
+	bool bDebugMouseCapture = false;
+
+	// ---- Menu Input Mode ----
+
+	/** Activates or deactivates full menu input mode for the SWUI CEF browser.
+	 *
+	 *  When enabled:
+	 *    - Shows the mouse cursor
+	 *    - Sets input mode to Game and UI (so viewport mouse events are received)
+	 *    - Enables automatic CEF pointer forwarding (move/click/wheel/focus)
+	 *    - Focuses the CEF browser
+	 *
+	 *  When disabled:
+	 *    - Hides the mouse cursor
+	 *    - Restores input mode to Game Only
+	 *    - Disables pointer forwarding and releases browser focus
+	 */
+	UFUNCTION(BlueprintCallable, Category="SWUI|Input",
+		meta=(ToolTip="Activates/deactivates SWUI menu input mode with automatic CEF pointer forwarding."))
+	void SetMenuInputActive(bool bActive);
 
 	// ---- Navigation Events ----
 
@@ -429,6 +455,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
 	// Requests a visual refresh burst on the subsystem if the flag is set.
@@ -448,4 +475,20 @@ private:
 	static FString EscapeJsonString(const FString& Raw);
 	static const TCHAR* DirectionToString(ESwuiNavDirection Direction);
 	static const TCHAR* PointerButtonToString(ESwuiPointerButton Button);
+
+	// ---- Menu Input State ----
+
+	/** Returns the USwuiSubsystem for this game instance, or nullptr. */
+	USwuiSubsystem* GetSubsystem() const;
+
+	/** Whether pointer forwarding is currently active (set by SetMenuInputActive). */
+	bool bMenuInputActive = false;
+
+	/** Last known cursor position sent to CEF (avoids redundant move events). */
+	FVector2D LastSentMousePosition = FVector2D(-1.f, -1.f);
+
+	/** Previous-frame mouse-button states for detecting press/release transitions. */
+	bool bPrevLeftDown   = false;
+	bool bPrevRightDown  = false;
+	bool bPrevMiddleDown = false;
 };

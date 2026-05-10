@@ -227,6 +227,33 @@ void USwuiSubsystem::ExecuteJavaScript(const FString& Script)
 	if (View) View->ExecuteJavaScript(Script);
 }
 
+// ---- Pointer Input Forwarding (bridge to View) ----
+
+void USwuiSubsystem::SetPointerInputEnabled(bool bEnabled)
+{
+	if (View) View->SetPointerInputEnabled(bEnabled);
+}
+
+void USwuiSubsystem::SetBrowserInputFocus(bool bFocused)
+{
+	if (View) View->SetBrowserInputFocus(bFocused);
+}
+
+void USwuiSubsystem::ForwardMouseMoveToView(FVector2D ScreenPosition)
+{
+	if (View) View->ForwardMouseMoveToBrowser(ScreenPosition);
+}
+
+void USwuiSubsystem::ForwardMouseButtonToView(FVector2D ScreenPosition, int32 CefButtonType, bool bDown)
+{
+	if (View) View->ForwardMouseButtonToBrowser(ScreenPosition, CefButtonType, bDown);
+}
+
+void USwuiSubsystem::ForwardMouseWheelToView(FVector2D ScreenPosition, float DeltaY)
+{
+	if (View) View->ForwardMouseWheelToBrowser(ScreenPosition, DeltaY);
+}
+
 // ---- Observe API ----
 
 FString USwuiSubsystem::ResolveNamespace(UObject* Source, const FString& Namespace) const
@@ -464,6 +491,17 @@ void USwuiSubsystem::Tick(float DeltaTime)
 		View->TickDeferredUpload();
 	}
 
+	// Interactive mode: keep animation active while pointer activity is recent.
+	if (View->IsUiInteractionActive())
+	{
+		const double Now = FPlatformTime::Seconds();
+		if (Now - LastUiInteractionTime < 0.5)
+		{
+			bForceBrowserFrameThisTick = true;
+			MarkHudAnimationActive(0.50);
+		}
+	}
+
 	if (bUseHudLockstepMode)
 	{
 		// Final HUD-only pump for responsiveness. This keeps browser/compositor
@@ -658,6 +696,28 @@ void USwuiSubsystem::RequestHudVisualRefresh(float DurationSeconds, bool bForceF
 	if (bForceFullUpload && View)
 	{
 		View->RequestFullTextureUploadNextFrame();
+	}
+}
+
+void USwuiSubsystem::BeginFullTransitionRefresh(int32 FreshPaintCount)
+{
+	if (View) View->BeginFullTransitionRefresh(FreshPaintCount);
+	bForceBrowserFrameThisTick = true;
+	MarkHudAnimationActive(0.50);
+}
+
+void USwuiSubsystem::UpdateUiInteractionTime()
+{
+	LastUiInteractionTime = FPlatformTime::Seconds();
+}
+
+void USwuiSubsystem::SetUiInteractionActive(bool bActive)
+{
+	if (View) View->SetUiInteractionActive(bActive);
+	if (bActive)
+	{
+		LastUiInteractionTime = FPlatformTime::Seconds();
+		MarkHudAnimationActive(0.50);
 	}
 }
 

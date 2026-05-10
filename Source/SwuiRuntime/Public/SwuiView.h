@@ -82,7 +82,65 @@ public:
 	// Kept public so USwuiSubsystem can read isolation flags (e.g. bPauseBrowserUpdates).
 	FSwuiInstanceSettings InstanceSettings;
 
+	// ---- Pointer Input Forwarding ----
+
+	/** Enable/disable automatic CEF pointer event forwarding. */
+	void SetPointerInputEnabled(bool bEnabled);
+
+	/** Whether pointer input forwarding is currently active. */
+	bool IsPointerInputEnabled() const { return bPointerInputEnabled; }
+
+	/** Forward a mouse-move event to the CEF browser at the given viewport coordinates. */
+	void ForwardMouseMoveToBrowser(FVector2D ScreenPosition);
+
+	/** Forward a mouse-button (down/up) event to CEF.
+	 *  CefButtonType: 0=Left, 1=Middle, 2=Right. */
+	void ForwardMouseButtonToBrowser(FVector2D ScreenPosition, int32 CefButtonType, bool bDown);
+
+	/** Forward a mouse-wheel event to CEF. */
+	void ForwardMouseWheelToBrowser(FVector2D ScreenPosition, float DeltaY);
+
+	/** Set/unset CEF browser keyboard/mouse focus. */
+	void SetBrowserInputFocus(bool bFocused);
+
+	// ---- Render Activity API ----
+
+	enum class ESwuiRenderActivityMode
+	{
+		NormalHud,
+		FullTransition,
+		InteractiveUi
+	};
+
+	/** Begins a short FullTransition burst: forces full CEF surface copies into
+	 *  the BackingBuffer, uploads the full surface for FreshPaintCount frames,
+	 *  and suppresses center-critical/tile optimization paths. */
+	void BeginFullTransitionRefresh(int32 FreshPaintCount = 3);
+
+	/** Marks whether UI interaction (menu/inventory/etc.) is active.
+	 *  When true, center-critical rect is disabled and upload budget is relaxed. */
+	void SetUiInteractionActive(bool bActive);
+
+	/** Returns the current render activity mode. */
+	ESwuiRenderActivityMode GetRenderActivityMode() const { return RenderActivityMode; }
+
+	/** Whether UI interaction is currently active. */
+	bool IsUiInteractionActive() const { return bUiInteractionActive; }
+
 private:
+
+	/** Whether pointer events should be forwarded to CEF. */
+	bool bPointerInputEnabled = false;
+
+	/** Current render activity mode. */
+	ESwuiRenderActivityMode RenderActivityMode = ESwuiRenderActivityMode::NormalHud;
+
+	/** Whether UI interaction (menu/inventory/etc.) is active. */
+	bool bUiInteractionActive = false;
+
+	// Pending full CEF copies from OnPaint to BackingBuffer.
+	int32 PendingFullCefPaintCopies = 0;
+
 	// --- Browser frame pacer ---
 	AActor* ResolveOwningActor() const;
 	TWeakObjectPtr<AActor> OwningActor;
