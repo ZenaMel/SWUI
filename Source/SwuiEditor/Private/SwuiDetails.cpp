@@ -2,6 +2,8 @@
 #include "Swui.h"
 #include "SwuiBindingSource.h"
 #include "SwuiTSGenerator.h"
+#include "SwuiNavigation.h"
+#include "GameFramework/Actor.h"
 
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
@@ -90,7 +92,19 @@ SNew(SButton)
 {
 	bool bOK = false;
 	if (SwuiPtr.IsValid())
+	{
 		bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
+		// Also regenerate preview schema with whatever nav events currently exist.
+		// If a SwuiNavigation component is present on the same actor it supplies
+		// its events; otherwise we pass an empty list so the state/events still emit.
+		TArray<FSwuiNavigationEvent> NavEvents;
+		if (AActor* Owner = Cast<AActor>(SwuiPtr->GetOwner()))
+		{
+			if (USwuiNavigation* NavComp = Owner->FindComponentByClass<USwuiNavigation>())
+				NavEvents = NavComp->NavigationEvents;
+		}
+		FSwuiTSGenerator::GeneratePreview(SwuiPtr.Get(), NavEvents);
+	}
 
 	FNotificationInfo Info(bOK
 		? LOCTEXT("GenOK",  "JS Bindings generated successfully.")
