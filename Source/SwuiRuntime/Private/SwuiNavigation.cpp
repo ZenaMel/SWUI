@@ -574,11 +574,25 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 
 	if (Event == Tags.MenuClose)
 	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Explicit close refresh bypassed AutoFullTransition cooldown"));
 		DispatchEvent(Event, Detail, [this]()
 		{
 			OnMenuClose.Broadcast();
 			return HandleMenuClose();
 		}, false);
+		RefreshHudFrame(true);
+		// Schedule a delayed refresh to catch CEF paint after React commits close state.
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(CloseRefreshRetryHandle);
+			World->GetTimerManager().SetTimer(CloseRefreshRetryHandle,
+				FTimerDelegate::CreateWeakLambda(this, [this]()
+				{
+					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					RefreshHudFrame(true);
+				}),
+				0.04f, false);
+		}
 		return;
 	}
 
@@ -589,6 +603,7 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			OnMenuBack.Broadcast();
 			return HandleMenuBack();
 		}, false);
+		RefreshHudFrame(true);
 		return;
 	}
 
@@ -599,6 +614,18 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			OnMenuContinue.Broadcast();
 			return HandleMenuContinue();
 		}, false);
+		RefreshHudFrame(true);
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(CloseRefreshRetryHandle);
+			World->GetTimerManager().SetTimer(CloseRefreshRetryHandle,
+				FTimerDelegate::CreateWeakLambda(this, [this]()
+				{
+					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					RefreshHudFrame(true);
+				}),
+				0.04f, false);
+		}
 		return;
 	}
 
@@ -609,6 +636,7 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			OnMenuSettings.Broadcast();
 			return HandleMenuSettings();
 		}, false);
+		RefreshHudFrame(true);
 		return;
 	}
 

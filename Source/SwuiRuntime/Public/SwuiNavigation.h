@@ -481,6 +481,9 @@ private:
 	/** Returns the USwuiSubsystem for this game instance, or nullptr. */
 	USwuiSubsystem* GetSubsystem() const;
 
+	/** Timer handle for delayed close refresh retry. */
+	FTimerHandle CloseRefreshRetryHandle;
+
 	/** Whether pointer forwarding is currently active (set by SetMenuInputActive). */
 	bool bMenuInputActive = false;
 };

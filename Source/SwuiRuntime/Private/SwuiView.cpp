@@ -828,15 +828,32 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			DirtyRatio >= 0.35f ||
 			RegionCount >= 32 ||
 			(float)MaxRectArea >= (float)SurfaceArea * 0.50f;
-		// Suppress automatic FullTransition while interactive UI is active
-		// to avoid full-surface copies on hover/click during menus.
-		if (bLargeTransition && RenderActivityMode != ESwuiRenderActivityMode::FullTransition
-			&& PendingFullCefPaintCopies == 0 && !bAwaitingFreshPaintForForcedUpload
+		// Suppress automatic FullTransition:
+		//   - While interactive UI is active (hover/click during menus).
+		//   - Within 500ms of a previous auto FullTransition (cooldown).
+		static constexpr double AutoFullTransitionCooldown = 0.5;
+		bool bCooldownBlocked = false;
+		if (bLargeTransition
+			&& RenderActivityMode != ESwuiRenderActivityMode::FullTransition
+			&& PendingFullCefPaintCopies == 0
+			&& !bAwaitingFreshPaintForForcedUpload
 			&& !bUiInteractionActive)
 		{
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
-				DirtyRatio, RegionCount, MaxRectArea);
-			BeginFullTransitionRefresh(3);
+			if ((PaintNow - LastAutoFullTransitionTime) >= AutoFullTransitionCooldown)
+			{
+				LastAutoFullTransitionTime = PaintNow;
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
+					DirtyRatio, RegionCount, MaxRectArea);
+				BeginFullTransitionRefresh(3);
+			}
+			else
+			{
+				bCooldownBlocked = true;
+			}
+		}
+		if (bCooldownBlocked)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition suppressed by cooldown"));
 		}
 	}
 
@@ -874,8 +891,18 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			const int32  RowBytes = (int32)Rg.Width * 4;
 			const uint8* Src = (const uint8*)Buffer    + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
 			uint8*       Dst = BackingBuffer.GetData() + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
-			for (uint32 Row = 0; Row < Rg.Height; ++Row, Src += FullPitch, Dst += FullPitch)
-				FPlatformMemory::Memcpy(Dst, Src, RowBytes);
+
+			// Fast path: full-width rect → single contiguous memcpy.
+			if (Rg.SrcX == 0 && Rg.Width == (uint32)InWidth)
+			{
+				const int64 CopyBytes = (int64)RowBytes * Rg.Height;
+				FPlatformMemory::Memcpy(Dst, Src, CopyBytes);
+			}
+			else
+			{
+				for (uint32 Row = 0; Row < Rg.Height; ++Row, Src += FullPitch, Dst += FullPitch)
+					FPlatformMemory::Memcpy(Dst, Src, RowBytes);
+			}
 
 			const int64 Area = (int64)Rg.Width * Rg.Height;
 			++PendingIncomingRects;

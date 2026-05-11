@@ -182,6 +182,7 @@ private:
 	double ExternalBeginFrameAccumulatedTime = 0.0;
 	double PendingBeginFrameSentTime = -1.0;
 	double LastPaintArrivalTime = 0.0;
+	double LastAutoFullTransitionTime = 0.0;
 	bool bPaintArrivedAfterExternalBeginFrame = false;
 	bool bPendingInvalidateForPaint = false;
 

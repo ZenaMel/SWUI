@@ -258,7 +258,14 @@ bool BrowserClient::OnBeforeBrowse(CefRefPtr<CefBrowser> Browser,
 
 			if (OwningView)
 			{
-				OwningView->HandleIncomingMessage(RawJson);
+				TWeakObjectPtr<USwuiView> WeakView(OwningView);
+				AsyncTask(ENamedThreads::GameThread, [WeakView, RawJson]()
+				{
+					if (WeakView.IsValid())
+					{
+						WeakView->HandleIncomingMessage(RawJson);
+					}
+				});
 			}
 
 			return true; // Cancel navigation — do not load the swui://bus URL.
