@@ -235,15 +235,25 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 		const ESwuiRenderingMode RequestedMode = InstanceSettings.RenderingMode;
 		if (RequestedMode == ESwuiRenderingMode::GpuAccelerated)
 		{
-			if (IsGpuAcceleratedSupported())
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] GPU Accelerated requested by setting"));
+
+			// GPU Accelerated mode requires D3D11 RHI. CEF's shared_texture_enabled
+			// always produces D3D11-native shared handles, and OnAcceleratedPaint
+			// opens them via ID3D11Device::OpenSharedResource.  Non-D3D11 RHIs
+			// (e.g. D3D12, Vulkan) cannot open these handles and will crash.
+			const bool bIsD3D11 = GDynamicRHI && FString(GDynamicRHI->GetName()).Contains(TEXT("D3D11"));
+			if (bIsD3D11)
 			{
 				ResolvedRenderingMode = ESwuiRenderingMode::GpuAccelerated;
 			}
 			else
 			{
-				GpuFallbackReason = TEXT("GPU Accelerated requested but not supported on this platform/RHI — falling back to CPU Compatible.");
+				const FString RHIName = GDynamicRHI ? GDynamicRHI->GetName() : TEXT("null");
+				UE_LOG(LogSwuiRuntime, Error,
+					TEXT("[SWUI RENDER] GPU Accelerated requires D3D11 RHI, but active RHI is '%s'. ")
+					TEXT("CEF shared texture handles are D3D11-only. Falling back to CPU Compatible."),
+					*RHIName);
 				ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
-				UE_LOG(LogSwuiRuntime, Warning, TEXT("USwuiView: %s"), *GpuFallbackReason);
 			}
 		}
 		else if (RequestedMode == ESwuiRenderingMode::Auto)
@@ -254,9 +264,8 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 			}
 			else
 			{
-				GpuFallbackReason = TEXT("Auto mode: GPU Accelerated unavailable — using CPU Compatible.");
 				ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
-				UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: %s"), *GpuFallbackReason);
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] Auto: GPU Accelerated unavailable — using CPU Compatible."));
 			}
 		}
 		else
@@ -272,7 +281,7 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 
 		const TCHAR* ModeStr =
 			ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated ? TEXT("GPU Accelerated") : TEXT("CPU Compatible");
-		UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: Rendering mode resolved: %s (requested=%d)"),
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] Resolved mode: %s (requested=%d)"),
 			ModeStr, (int32)RequestedMode);
 	}
 
