@@ -93,6 +93,18 @@ void USwuiSubsystem::Deinitialize()
 	InputPreprocessor.Reset();
 
 	ShutdownRenderer();
+	// Ensure the CVar is restored even if ShutdownRenderer missed it.
+	if (SavedOneFrameThreadLag >= 0)
+	{
+		IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.OneFrameThreadLag"));
+		if (CVar)
+		{
+			CVar->Set(SavedOneFrameThreadLag, ECVF_SetByGameOverride);
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d (on Deinitialize)"), SavedOneFrameThreadLag);
+		}
+		SavedOneFrameThreadLag = -1;
+	}
+	LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;
 	ObservedProperties.Empty();
 	ObservedDelegates.Empty();
 	Super::Deinitialize();
@@ -157,6 +169,8 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	View->SetOwningActor(OwnerActor);
 	View->Init(InstanceSettings);
 
+	UpdateLowLatencyFramePacing();
+
 	Widget = CreateWidget<UUserWidget>(World, USwuiWidget::StaticClass());
 	if (!Widget) return;
 
@@ -204,6 +218,7 @@ void USwuiSubsystem::ShutdownRenderer()
 	}
 	Widget = nullptr;
 	View   = nullptr;
+	UpdateLowLatencyFramePacing();
 }
 
 void USwuiSubsystem::UpdateInstanceSettings(const FSwuiInstanceSettings& NewSettings)
@@ -720,6 +735,7 @@ void USwuiSubsystem::SetUiInteractionActive(bool bActive)
 		LastUiInteractionTime = FPlatformTime::Seconds();
 		MarkHudAnimationActive(0.50);
 	}
+	UpdateLowLatencyFramePacing();
 }
 
 void USwuiSubsystem::QueueHudEventScript(const FString& Script)
@@ -734,6 +750,60 @@ void USwuiSubsystem::MarkHudAnimationActive(double DurationSeconds)
 {
 	const double Now = FPlatformTime::Seconds();
 	HudAnimationActiveUntil = FMath::Max(HudAnimationActiveUntil, Now + DurationSeconds);
+}
+
+void USwuiSubsystem::UpdateLowLatencyFramePacing()
+{
+	const USwuiSettings* Settings = GetDefault<USwuiSettings>();
+	const ESwuiLowLatencyFramePacingMode ConfiguredMode = Settings
+		? Settings->LowLatencyFramePacingMode
+		: ESwuiLowLatencyFramePacingMode::Disabled;
+
+	// Determine whether the condition is currently active.
+	bool bShouldApply = false;
+	switch (ConfiguredMode)
+	{
+	case ESwuiLowLatencyFramePacingMode::WhileInteractiveUiActive:
+		bShouldApply = View && View->IsUiInteractionActive();
+		break;
+	case ESwuiLowLatencyFramePacingMode::WhileAnySwuiViewActive:
+		bShouldApply = (View != nullptr);
+		break;
+	default:
+		break;
+	}
+
+	// Avoid repeated CVar sets when mode hasn't changed.
+	if (bShouldApply == (LastAppliedFramePacingMode != ESwuiLowLatencyFramePacingMode::Disabled))
+	{
+		return;
+	}
+
+	IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.OneFrameThreadLag"));
+	if (!CVar) return;
+
+	if (bShouldApply)
+	{
+		// Save previous value on first activation.
+		if (SavedOneFrameThreadLag < 0)
+		{
+			SavedOneFrameThreadLag = CVar->GetInt();
+		}
+		CVar->Set(0, ECVF_SetByGameOverride);
+		LastAppliedFramePacingMode = ConfiguredMode;
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Applied low latency frame pacing: r.OneFrameThreadLag 0"));
+	}
+	else
+	{
+		// Restore previous value.
+		if (SavedOneFrameThreadLag >= 0)
+		{
+			CVar->Set(SavedOneFrameThreadLag, ECVF_SetByGameOverride);
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d"), SavedOneFrameThreadLag);
+			SavedOneFrameThreadLag = -1;
+		}
+		LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;
+	}
 }
 
 bool USwuiSubsystem::SendExternalBeginFrameIfDue(float DeltaTime)

@@ -22,6 +22,14 @@ enum class ESwuiRenderingMode : uint8
 	CpuCompatible   UMETA(DisplayName = "CPU Compatible")
 };
 
+UENUM(BlueprintType)
+enum class ESwuiLowLatencyFramePacingMode : uint8
+{
+	Disabled                  UMETA(DisplayName = "Disabled"),
+	WhileInteractiveUiActive  UMETA(DisplayName = "While Interactive UI Active"),
+	WhileAnySwuiViewActive    UMETA(DisplayName = "While Any SWUI View Active")
+};
+
 // ---------------------------------------------------------------------------
 // Navigation enums — used by USwuiNavigation for menu/input routing.
 // ---------------------------------------------------------------------------

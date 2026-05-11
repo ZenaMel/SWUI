@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/DeveloperSettings.h"
+#include "SwuiTypes.h"
 #include "SwuiSettings.generated.h"
 
 /** Project Settings > Plugins > SimpleWebUI */
@@ -72,6 +73,19 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Rendering|Upload Strategy",
 		meta=(ClampMin="1", ClampMax="256"))
 	int32 MaxPerRectUploads = 32;
+
+	// -----------------------------------------------------------------------
+	// Frame Pacing
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Low-latency frame pacing mode.
+	 * When active, sets r.OneFrameThreadLag=0 to reduce HUD/menu visual latency.
+	 * The previous value is restored when the condition no longer applies.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Frame Pacing",
+		meta=(DisplayName="Low Latency Frame Pacing"))
+	ESwuiLowLatencyFramePacingMode LowLatencyFramePacingMode = ESwuiLowLatencyFramePacingMode::WhileAnySwuiViewActive;
 
 	// -----------------------------------------------------------------------
 	// Debug | Profiling

@@ -183,4 +183,15 @@ private:
 
 	/** Cached input debug logging state from USwuiNavigation. */
 	bool bInputDebugLogging = false;
+
+	// ---- Low-Latency Frame Pacing ----
+
+	/** Evaluates the LowLatencyFramePacingMode setting and applies/restores r.OneFrameThreadLag. */
+	void UpdateLowLatencyFramePacing();
+
+	/** Saved r.OneFrameThreadLag value; -1 = not yet saved. */
+	int32 SavedOneFrameThreadLag = -1;
+
+	/** Last mode that was applied, to avoid repeated CVar sets. */
+	ESwuiLowLatencyFramePacingMode LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;
 };
