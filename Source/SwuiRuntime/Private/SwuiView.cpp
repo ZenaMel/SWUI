@@ -601,8 +601,8 @@ void USwuiView::SetUiInteractionActive(bool bActive)
 
 void USwuiView::RequestFullTextureUploadNextFrame()
 {
-	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] RequestFullTextureUploadNextFrame  paintGen=%llu"),
-		PaintGeneration);
+	// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] RequestFullTextureUploadNextFrame  paintGen=%llu"),
+	// 	PaintGeneration);
 
 	bNeedsFullBaselineUpload = true;
 	bAwaitingFreshPaintForForcedUpload = true;
@@ -853,7 +853,7 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		}
 		if (bCooldownBlocked)
 		{
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition suppressed by cooldown"));
+			// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition suppressed by cooldown"));
 		}
 	}
 
@@ -1142,8 +1142,8 @@ void USwuiView::TickDeferredUpload()
 		if (bAwaitingFreshPaintForForcedUpload)
 		{
 			const bool bFreshPaintArrived = PaintGeneration > ForcedUploadRequestedAtPaintGeneration;
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Awaiting fresh paint  paintGen=%llu  requestedAt=%llu  arrived=%d"),
-				PaintGeneration, ForcedUploadRequestedAtPaintGeneration, bFreshPaintArrived ? 1 : 0);
+			// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Awaiting fresh paint  paintGen=%llu  requestedAt=%llu  arrived=%d"),
+			// 	PaintGeneration, ForcedUploadRequestedAtPaintGeneration, bFreshPaintArrived ? 1 : 0);
 			if (!bFreshPaintArrived)
 			{
 				return;
@@ -1189,8 +1189,8 @@ void USwuiView::TickDeferredUpload()
 				if (PendingFreshFullUploads > 0)
 				{
 					--PendingFreshFullUploads;
-					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Full upload executed  remaining=%d  fullSurface=%dx%d"),
-						PendingFreshFullUploads, SnapW, SnapH);
+					// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Full upload executed  remaining=%d  fullSurface=%dx%d"),
+					// 	PendingFreshFullUploads, SnapW, SnapH);
 					bNeedsFullBaselineUpload = (PendingFreshFullUploads > 0);
 				}
 				else
