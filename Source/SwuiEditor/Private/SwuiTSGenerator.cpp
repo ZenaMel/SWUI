@@ -142,6 +142,7 @@ struct FSwuiGeneratedPropertyInfo
 	FString MaxVal;
 	FString StepVal;
 	TArray<FString> EnumOptions;
+	const void* StructDef = nullptr; // UScriptStruct* for generic struct props
 };
 
 struct FSwuiGeneratedEventInfo
@@ -164,9 +165,9 @@ struct FSwuiGeneratedSourceEntry
 struct FSwuiCollectedEnum
 {
 	const UEnum* EnumDef = nullptr;
-	FString EnumPath;			// unique identity: /Script/...
-	FString ShortName;			// eg ETetherState
-	TArray<FString> SourceNames;	// every source that exposes this enum
+	FString EnumPath;
+	FString ShortName;
+	TArray<FString> SourceNames;
 	TArray<FString> ValueNames;
 };
 
@@ -175,11 +176,13 @@ struct FSwuiResolvedEnum
 	const UEnum* EnumDef = nullptr;
 	FString EnumPath;
 	FString ShortName;
-	FString PrimaryCanonicalName;	// first source's canonical (e.g., "TetherComponentETetherState")
+	FString PrimaryCanonicalName;
 	bool bShortNameUnique;
 	TArray<FString> ValueNames;
-	TMap<FString, FString> SourceCanonicalNames;	// SourceName -> CanonicalName
+	TMap<FString, FString> SourceCanonicalNames;
 };
+
+static TArray<FString> SwuiBuildStructChildFieldTypes(UScriptStruct* Struct); // forward
 
 static FString SwuiGetNavigationCategory(const FString& EventName, bool bDefaultEvent)
 {
@@ -252,6 +255,43 @@ static void SwuiCollectEnumFromProperty(const FProperty* Prop, const FString& Ob
 	}
 
 	Entry.SourceNames.AddUnique(ObjectName);
+}
+
+static TArray<FString> SwuiBuildStructChildFieldTypes(UScriptStruct* Struct)
+{
+	TArray<FString> FieldTypes;
+	for (TFieldIterator<FProperty> It(Struct); It; ++It)
+	{
+		const FString FieldTSType = SwuiGetTSType(*It);
+		if (FieldTSType.IsEmpty()) continue;
+		FieldTypes.Add(It->GetName() + TEXT(":") + FieldTSType);
+	}
+	return FieldTypes;
+}
+
+static FString SwuiBuildStructTypeBody(UScriptStruct* Struct)
+{
+	TArray<FString> FieldTypes = SwuiBuildStructChildFieldTypes(Struct);
+	TArray<FString> Lines;
+	for (const FString& FT : FieldTypes)
+	{
+		FString FieldName, FieldType;
+		FT.Split(TEXT(":"), &FieldName, &FieldType);
+		Lines.Add(FString::Printf(TEXT("\t%s: %s;"), *FieldName, *FieldType));
+	}
+	return FString::Join(Lines, TEXT("\n"));
+}
+
+static bool SwuiIsGenericStruct(const FStructProperty* StructProp)
+{
+	if (!StructProp || !StructProp->Struct) return false;
+	const FString Name = StructProp->Struct->GetName();
+	return Name != TEXT("GameplayTag")
+		&& Name != TEXT("Vector2D")
+		&& Name != TEXT("Vector")
+		&& Name != TEXT("Rotator")
+		&& Name != TEXT("LinearColor")
+		&& Name != TEXT("Color");
 }
 
 static FString SwuiReadFirstMetadataValue(const FProperty* Prop, std::initializer_list<const TCHAR*> Keys)
@@ -413,6 +453,17 @@ static void SwuiPopulateFieldMetadata(
 		return;
 	}
 
+	if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
+	{
+		const FString StructName = StructProp->Struct->GetName();
+		if (StructName == TEXT("GameplayTag"))
+		{
+			OutType = TEXT("string");
+			OutDefaultValueLiteral = TEXT("''");
+			return;
+		}
+	}
+
 	if (const FNumericProperty* NumericProp = CastField<const FNumericProperty>(Prop))
 	{
 		const bool bInteger = NumericProp->IsInteger();
@@ -433,6 +484,41 @@ static void SwuiPopulateFieldMetadata(
 		OutMaxVal = SwuiReadFirstMetadataValue(Prop, { TEXT("ClampMax"), TEXT("UIMax") });
 		OutStepVal = SwuiReadFirstMetadataValue(Prop, { TEXT("Delta"), TEXT("Multiple"), TEXT("Step") });
 		SwuiApplyNumericFallbacks(FieldName, bInteger, OutMinVal, OutMaxVal, OutStepVal);
+		return;
+	}
+
+	if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
+	{
+		OutType = TEXT("object");
+		OutDefaultValueLiteral = TEXT("null");
+		return;
+	}
+
+	if (const FArrayProperty* ArrayProp = CastField<const FArrayProperty>(Prop))
+	{
+		OutType = TEXT("array");
+		OutDefaultValueLiteral = TEXT("null");
+		return;
+	}
+
+	if (const FMapProperty* MapProp = CastField<const FMapProperty>(Prop))
+	{
+		OutType = TEXT("map");
+		OutDefaultValueLiteral = TEXT("null");
+		return;
+	}
+
+	if (Prop->IsA<FObjectPropertyBase>())
+	{
+		OutType = TEXT("object");
+		OutDefaultValueLiteral = TEXT("null");
+		return;
+	}
+
+	if (Prop->IsA<FSoftObjectProperty>() || Prop->IsA<FSoftClassProperty>())
+	{
+		OutType = TEXT("object");
+		OutDefaultValueLiteral = TEXT("null");
 		return;
 	}
 
@@ -677,6 +763,14 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 			SwuiCollectEnumFromProperty(Prop, ObjectName, CollectedEnumsByPath);
 
+			if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
+			{
+				if (SwuiIsGenericStruct(StructProp))
+				{
+					Info.StructDef = StructProp->Struct;
+				}
+			}
+
 			Entry.Props.Add(MoveTemp(Info));
 		}
 
@@ -793,6 +887,124 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 				}
 			}
 		}
+	}
+
+	// ── Detect which types are used ───────────────────────────────────────
+	TSet<FString> UsedTypes;
+	for (const FSwuiGeneratedSourceEntry& Src : Sources)
+	{
+		for (const FSwuiGeneratedPropertyInfo& P : Src.Props)
+		{
+			UsedTypes.Add(P.TSType);
+		}
+	}
+	bool bHasFVector2D     = UsedTypes.Contains(TEXT("FVector2D"));
+	bool bHasFVector       = UsedTypes.Contains(TEXT("FVector"));
+	bool bHasFRotator      = UsedTypes.Contains(TEXT("FRotator"));
+	bool bHasFLinearColor  = UsedTypes.Contains(TEXT("FLinearColor"));
+	bool bHasFColor        = UsedTypes.Contains(TEXT("FColor"));
+	bool bHasGameplayTag   = UsedTypes.Contains(TEXT("GameplayTag"));
+	bool bHasObjectRef     = UsedTypes.Contains(TEXT("SwuiObjectRef"));
+	bool bHasAssetRef      = UsedTypes.Contains(TEXT("SwuiAssetRef"));
+
+	// ── Build base TS types (generated once when used) ───────────────────
+	FString BaseTypesBlock;
+	if (bHasFVector2D)
+	{
+		BaseTypesBlock += TEXT(
+			"export type FVector2D = {\n"
+			"\tx: number;\n"
+			"\ty: number;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasFVector)
+	{
+		BaseTypesBlock += TEXT(
+			"export type FVector = {\n"
+			"\tx: number;\n"
+			"\ty: number;\n"
+			"\tz: number;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasFRotator)
+	{
+		BaseTypesBlock += TEXT(
+			"export type FRotator = {\n"
+			"\tpitch: number;\n"
+			"\tyaw: number;\n"
+			"\troll: number;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasFLinearColor)
+	{
+		BaseTypesBlock += TEXT(
+			"export type FLinearColor = {\n"
+			"\tr: number;\n"
+			"\tg: number;\n"
+			"\tb: number;\n"
+			"\ta: number;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasFColor)
+	{
+		BaseTypesBlock += TEXT(
+			"export type FColor = {\n"
+			"\tr: number;\n"
+			"\tg: number;\n"
+			"\tb: number;\n"
+			"\ta: number;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasGameplayTag)
+	{
+		BaseTypesBlock += TEXT("export type GameplayTag = string;\n\n");
+	}
+	if (bHasObjectRef)
+	{
+		BaseTypesBlock += TEXT(
+			"export type SwuiObjectRef = {\n"
+			"\tname: string;\n"
+			"\tclassName: string;\n"
+			"\tpath?: string;\n"
+			"};\n\n"
+		);
+	}
+	if (bHasAssetRef)
+	{
+		BaseTypesBlock += TEXT(
+			"export type SwuiAssetRef = {\n"
+			"\tpath: string;\n"
+			"\tname?: string;\n"
+			"\tclassName?: string;\n"
+			"};\n\n"
+		);
+	}
+
+	// ── Collect and build generic struct types ───────────────────────────
+	FString StructTypesBlock;
+	TSet<const void*> CollectedStructDefs;
+	TArray<const UScriptStruct*> StructDefOrder;
+	for (const FSwuiGeneratedSourceEntry& Src : Sources)
+	{
+		for (const FSwuiGeneratedPropertyInfo& P : Src.Props)
+		{
+			if (!P.StructDef || CollectedStructDefs.Contains(P.StructDef)) continue;
+			CollectedStructDefs.Add(P.StructDef);
+			StructDefOrder.Add(static_cast<const UScriptStruct*>(P.StructDef));
+		}
+	}
+
+	for (const UScriptStruct* StructDef : StructDefOrder)
+	{
+		const FString StructName = StructDef->GetName();
+		StructTypesBlock += FString::Printf(TEXT("export type %s = {\n"), *StructName);
+		StructTypesBlock += SwuiBuildStructTypeBody(const_cast<UScriptStruct*>(StructDef));
+		StructTypesBlock += TEXT("\n};\n\n");
 	}
 
 	// ── Build enum code ──────────────────────────────────────────────────
@@ -930,10 +1142,14 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"%s"
 		"%s"
 		"%s"
+		"%s"
+		"%s"
 	),
 		*IName,
 		*NsList,
 		*RuntimeBlock,
+		*BaseTypesBlock,
+		*StructTypesBlock,
 		*EnumBlock,
 		*ObjectsBody,
 		*StateTypesBlock,

@@ -19,6 +19,8 @@
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
 #include "UObject/PropertyIterator.h"
+#include "UObject/ScriptInterface.h"
+#include "GameplayTagContainer.h"
 
 // ---- Helpers ----
 
@@ -31,41 +33,173 @@ static FString Swui_GetTSType(const FProperty* Prop)
 	if (Prop->IsA<FBoolProperty>())    return TEXT("boolean");
 	if (Prop->IsA<FStrProperty>()   || Prop->IsA<FNameProperty>() ||
 		Prop->IsA<FTextProperty>())    return TEXT("string");
+
+	if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
+	{
+		const FString StructName = StructProp->Struct->GetName();
+		if (StructName == TEXT("GameplayTag")) return TEXT("string");
+		return TEXT("object");
+	}
+
+	if (Prop->IsA<FArrayProperty>()) return TEXT("array");
+	if (Prop->IsA<FMapProperty>()) return TEXT("map");
+	if (Prop->IsA<FObjectPropertyBase>()) return TEXT("object");
+
 	return FString();
 }
 
-static FString Swui_SerializeProperty(FProperty* Prop, void* Container)
+static FString Swui_QuoteJsonString(const FString& Raw)
 {
-	void* Value = Prop->ContainerPtrToValuePtr<void>(Container);
-	if (const FFloatProperty*  P = CastField<FFloatProperty>(Prop))  return FString::SanitizeFloat(P->GetPropertyValue(Value));
-	if (const FDoubleProperty* P = CastField<FDoubleProperty>(Prop)) return FString::SanitizeFloat(P->GetPropertyValue(Value));
-	if (const FIntProperty*    P = CastField<FIntProperty>(Prop))    return FString::FromInt(P->GetPropertyValue(Value));
-	if (const FInt64Property*  P = CastField<FInt64Property>(Prop))  return FString::Printf(TEXT("%lld"), P->GetPropertyValue(Value));
+	FString Escaped = Raw;
+	Escaped.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
+	Escaped.ReplaceInline(TEXT("\""), TEXT("\\\""));
+	Escaped.ReplaceInline(TEXT("\n"), TEXT("\\n"));
+	Escaped.ReplaceInline(TEXT("\r"), TEXT("\\r"));
+	Escaped.ReplaceInline(TEXT("\t"), TEXT("\\t"));
+	return TEXT("\"") + Escaped + TEXT("\"");
+}
+
+// Forward declaration
+static FString Swui_SerializePropertyValue(const FProperty* Prop, const void* ValuePtr);
+
+static FString Swui_SerializeStructFields(const UScriptStruct* Struct, const void* StructPtr)
+{
+	TArray<FString> Fields;
+	for (TFieldIterator<FProperty> It(Struct); It; ++It)
+	{
+		const void* FieldValuePtr = It->ContainerPtrToValuePtr<void>(StructPtr);
+		FString FieldValue = Swui_SerializePropertyValue(*It, FieldValuePtr);
+		if (FieldValue.IsEmpty()) continue;
+		Fields.Add(Swui_QuoteJsonString(It->GetName()) + TEXT(":") + FieldValue);
+	}
+	return TEXT("{") + FString::Join(Fields, TEXT(",")) + TEXT("}");
+}
+
+static FString Swui_SerializePropertyValue(const FProperty* Prop, const void* ValuePtr)
+{
+	if (const FFloatProperty*  P = CastField<FFloatProperty>(Prop))  return FString::SanitizeFloat(P->GetPropertyValue(ValuePtr));
+	if (const FDoubleProperty* P = CastField<FDoubleProperty>(Prop)) return FString::SanitizeFloat(P->GetPropertyValue(ValuePtr));
+	if (const FIntProperty*    P = CastField<FIntProperty>(Prop))    return FString::FromInt(P->GetPropertyValue(ValuePtr));
+	if (const FInt64Property*  P = CastField<FInt64Property>(Prop))  return FString::Printf(TEXT("%lld"), P->GetPropertyValue(ValuePtr));
 	if (const FEnumProperty*   P = CastField<FEnumProperty>(Prop))
 	{
-		const int64 EnumValue = P->GetUnderlyingProperty()->GetSignedIntPropertyValue(Value);
-		return FString::Printf(TEXT("'%s'"), *P->GetEnum()->GetNameStringByValue(EnumValue));
+		const int64 EnumValue = P->GetUnderlyingProperty()->GetSignedIntPropertyValue(ValuePtr);
+		return Swui_QuoteJsonString(P->GetEnum()->GetNameStringByValue(EnumValue));
 	}
-	if (const FByteProperty*   P = CastField<FByteProperty>(Prop))
+	if (const FByteProperty* P = CastField<FByteProperty>(Prop))
 	{
-		if (P->Enum)
+		if (P->Enum) return Swui_QuoteJsonString(P->Enum->GetNameStringByValue(P->GetPropertyValue(ValuePtr)));
+		return FString::FromInt(P->GetPropertyValue(ValuePtr));
+	}
+	if (const FBoolProperty* P = CastField<FBoolProperty>(Prop)) return P->GetPropertyValue(ValuePtr) ? TEXT("true") : TEXT("false");
+	if (const FStrProperty*  P = CastField<FStrProperty>(Prop))  return Swui_QuoteJsonString(P->GetPropertyValue(ValuePtr));
+	if (const FNameProperty* P = CastField<FNameProperty>(Prop)) return Swui_QuoteJsonString(P->GetPropertyValue(ValuePtr).ToString());
+	if (const FTextProperty* P = CastField<FTextProperty>(Prop)) return Swui_QuoteJsonString(P->GetPropertyValue(ValuePtr).ToString());
+
+	if (const FStructProperty* P = CastField<FStructProperty>(Prop))
+	{
+		const FString StructName = P->Struct->GetName();
+		if (StructName == TEXT("GameplayTag"))
 		{
-			const uint8 ByteVal = P->GetPropertyValue(Value);
-			return FString::Printf(TEXT("'%s'"), *P->Enum->GetNameStringByValue(ByteVal));
+			const FGameplayTag* Tag = static_cast<const FGameplayTag*>(ValuePtr);
+			return Tag ? Swui_QuoteJsonString(Tag->ToString()) : TEXT("null");
 		}
-		return FString::FromInt(P->GetPropertyValue(Value));
+		if (StructName == TEXT("Vector2D"))
+		{
+			const FVector2D* V = static_cast<const FVector2D*>(ValuePtr);
+			return V ? FString::Printf(TEXT("{\"x\":%s,\"y\":%s}"), *FString::SanitizeFloat(V->X), *FString::SanitizeFloat(V->Y)) : TEXT("null");
+		}
+		if (StructName == TEXT("Vector"))
+		{
+			const FVector* V = static_cast<const FVector*>(ValuePtr);
+			return V ? FString::Printf(TEXT("{\"x\":%s,\"y\":%s,\"z\":%s}"), *FString::SanitizeFloat(V->X), *FString::SanitizeFloat(V->Y), *FString::SanitizeFloat(V->Z)) : TEXT("null");
+		}
+		if (StructName == TEXT("Rotator"))
+		{
+			const FRotator* R = static_cast<const FRotator*>(ValuePtr);
+			return R ? FString::Printf(TEXT("{\"pitch\":%s,\"yaw\":%s,\"roll\":%s}"), *FString::SanitizeFloat(R->Pitch), *FString::SanitizeFloat(R->Yaw), *FString::SanitizeFloat(R->Roll)) : TEXT("null");
+		}
+		if (StructName == TEXT("LinearColor"))
+		{
+			const FLinearColor* C = static_cast<const FLinearColor*>(ValuePtr);
+			return C ? FString::Printf(TEXT("{\"r\":%s,\"g\":%s,\"b\":%s,\"a\":%s}"), *FString::SanitizeFloat(C->R), *FString::SanitizeFloat(C->G), *FString::SanitizeFloat(C->B), *FString::SanitizeFloat(C->A)) : TEXT("null");
+		}
+		if (StructName == TEXT("Color"))
+		{
+			const FColor* C = static_cast<const FColor*>(ValuePtr);
+			if (C) return FString::Printf(TEXT("{\"r\":%d,\"g\":%d,\"b\":%d,\"a\":%d}"), C->R, C->G, C->B, C->A);
+			return TEXT("null");
+		}
+		return Swui_SerializeStructFields(P->Struct, ValuePtr);
 	}
-	if (const FBoolProperty*   P = CastField<FBoolProperty>(Prop))   return P->GetPropertyValue(Value) ? TEXT("true") : TEXT("false");
-	if (const FStrProperty* P = CastField<FStrProperty>(Prop))
+
+	if (const FArrayProperty* P = CastField<FArrayProperty>(Prop))
 	{
-		FString S = P->GetPropertyValue(Value);
-		S.ReplaceInline(TEXT("\\"), TEXT("\\\\"));
-		S.ReplaceInline(TEXT("'"), TEXT("\\'"));
-		return FString::Printf(TEXT("'%s'"), *S);
+		FScriptArrayHelper Helper(P, ValuePtr);
+		TArray<FString> Elements;
+		for (int32 i = 0; i < Helper.Num(); ++i)
+		{
+			FString ElemValue = Swui_SerializePropertyValue(P->Inner, Helper.GetRawPtr(i));
+			if (!ElemValue.IsEmpty()) Elements.Add(ElemValue);
+		}
+		return TEXT("[") + FString::Join(Elements, TEXT(",")) + TEXT("]");
 	}
-	if (const FNameProperty* P = CastField<FNameProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
-	if (const FTextProperty* P = CastField<FTextProperty>(Prop)) return FString::Printf(TEXT("'%s'"), *P->GetPropertyValue(Value).ToString());
+
+	if (const FMapProperty* P = CastField<FMapProperty>(Prop))
+	{
+		FScriptMapHelper MapHelper(P, ValuePtr);
+		TArray<FString> Entries;
+		for (int32 Index = 0; Index < MapHelper.GetMaxIndex(); ++Index)
+		{
+			if (!MapHelper.IsValidIndex(Index)) continue;
+
+			const void* KeyPtr = MapHelper.GetKeyPtr(Index);
+			const void* ValPtr = MapHelper.GetValuePtr(Index);
+
+			FString KeyString;
+			if (const FStrProperty* StrKey = CastField<FStrProperty>(P->KeyProp))
+			{
+				KeyString = StrKey->GetPropertyValue(KeyPtr);
+			}
+			else if (const FNameProperty* NameKey = CastField<FNameProperty>(P->KeyProp))
+			{
+				KeyString = NameKey->GetPropertyValue(KeyPtr).ToString();
+			}
+			else
+			{
+				continue;
+			}
+
+			FString ValValue = Swui_SerializePropertyValue(P->ValueProp, ValPtr);
+			if (!ValValue.IsEmpty())
+			{
+				Entries.Add(Swui_QuoteJsonString(KeyString) + TEXT(":") + ValValue);
+			}
+		}
+		return TEXT("{") + FString::Join(Entries, TEXT(",")) + TEXT("}");
+	}
+
+	if (const FObjectPropertyBase* P = CastField<FObjectPropertyBase>(Prop))
+	{
+		UObject* Obj = P->GetObjectPropertyValue(ValuePtr);
+		if (!Obj) return TEXT("null");
+		return FString::Printf(TEXT("{\"name\":%s,\"className\":%s}"),
+			*Swui_QuoteJsonString(Obj->GetName()), *Swui_QuoteJsonString(Obj->GetClass()->GetName()));
+	}
+
+	if (Prop->IsA<FSoftObjectProperty>() || Prop->IsA<FSoftClassProperty>())
+	{
+		return TEXT("null");
+	}
+
 	return FString();
+}
+
+static FString Swui_SerializeProperty(const FProperty* Prop, const void* Container)
+{
+	if (!Prop || !Container) return FString();
+	const void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Container);
+	return Swui_SerializePropertyValue(Prop, ValuePtr);
 }
 
 static int32 SwuiGetIntCVar(const TCHAR* Name, int32 DefaultValue = -1)
