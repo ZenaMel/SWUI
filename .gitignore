@@ -5,3 +5,4 @@ ThirdParty/cef/Win/*
 Build/*
 Saved/*
 DerivedDataCache/*
+build-loop.ps1

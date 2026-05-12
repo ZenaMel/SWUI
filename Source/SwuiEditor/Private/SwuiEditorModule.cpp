@@ -92,9 +92,9 @@ private:
 		if (!FPaths::DirectoryExists(ContentUI / TEXT("../.."))) return; // sanity
 
 		// Spawn: start "SWUI Dev" /D "<ContentUI>" cmd.exe /k pnpm dev
-		const FString Cmd = FString::Printf(
-			TEXT("start \"SWUI Dev\" /D \"%s\" cmd.exe /k pnpm dev"),
-			*ContentUI);
+		// const FString Cmd = FString::Printf(
+		// 	TEXT("start \"SWUI Dev\" /D \"%s\" cmd.exe /k pnpm dev"),
+		// 	*ContentUI);
 
 		FPlatformProcess::CreateProc(
 			TEXT("cmd.exe"),

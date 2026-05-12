@@ -481,7 +481,7 @@ static void SwuiPopulateFieldMetadata(
 	const UEnum* EnumDefinition = nullptr;
 	if (SwuiTryGetEnumDefinition(Prop, EnumDefinition) && EnumDefinition)
 	{
-		OutType = TEXT("enum");
+		OutType = SwuiGetTSType(Prop);
 
 		int64 EnumValue = 0;
 		if (DefaultsObject)
@@ -498,7 +498,22 @@ static void SwuiPopulateFieldMetadata(
 			}
 		}
 
-		OutDefaultValueLiteral = SwuiQuotePreviewString(EnumDefinition->GetNameStringByValue(EnumValue));
+		if (EnumDefinition->IsValidEnumValue(EnumValue))
+		{
+			OutDefaultValueLiteral = SwuiQuotePreviewString(EnumDefinition->GetNameStringByValue(EnumValue));
+		}
+		else
+		{
+			// Fall back to the first valid option
+			for (int32 i = 0; i < EnumDefinition->NumEnums(); ++i)
+			{
+				if (!SwuiShouldSkipEnumValue(EnumDefinition, i))
+				{
+					OutDefaultValueLiteral = SwuiQuotePreviewString(EnumDefinition->GetNameStringByIndex(i));
+					break;
+				}
+			}
+		}
 
 		for (int32 Index = 0; Index < EnumDefinition->NumEnums(); ++Index)
 		{
@@ -515,7 +530,7 @@ static void SwuiPopulateFieldMetadata(
 
 	if (const FBoolProperty* BoolProp = CastField<const FBoolProperty>(Prop))
 	{
-		OutType = TEXT("boolean");
+		OutType = SwuiGetTSType(Prop);
 		const bool bDefaultValue = DefaultsObject
 			? BoolProp->GetPropertyValue_InContainer(DefaultsObject)
 			: false;
@@ -525,7 +540,7 @@ static void SwuiPopulateFieldMetadata(
 
 	if (const FStrProperty* StrProp = CastField<const FStrProperty>(Prop))
 	{
-		OutType = TEXT("string");
+		OutType = SwuiGetTSType(Prop);
 		const FString DefaultValue = DefaultsObject
 			? StrProp->GetPropertyValue_InContainer(DefaultsObject)
 			: FString();
@@ -535,7 +550,7 @@ static void SwuiPopulateFieldMetadata(
 
 	if (const FNameProperty* NameProp = CastField<const FNameProperty>(Prop))
 	{
-		OutType = TEXT("string");
+		OutType = SwuiGetTSType(Prop);
 		const FName DefaultValue = DefaultsObject
 			? NameProp->GetPropertyValue_InContainer(DefaultsObject)
 			: NAME_None;
@@ -545,7 +560,7 @@ static void SwuiPopulateFieldMetadata(
 
 	if (const FTextProperty* TextProp = CastField<const FTextProperty>(Prop))
 	{
-		OutType = TEXT("string");
+		OutType = SwuiGetTSType(Prop);
 		const FText DefaultValue = DefaultsObject
 			? TextProp->GetPropertyValue_InContainer(DefaultsObject)
 			: FText::GetEmpty();
@@ -555,13 +570,49 @@ static void SwuiPopulateFieldMetadata(
 
 	if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
 	{
+		OutType = SwuiGetTSType(Prop);
 		const FString StructName = StructProp->Struct->GetName();
+
 		if (StructName == TEXT("GameplayTag"))
 		{
-			OutType = TEXT("string");
+			OutType = TEXT("GameplayTag");
 			OutDefaultValueLiteral = TEXT("''");
-			return;
 		}
+		else if (StructName == TEXT("Vector2D"))
+		{
+			OutDefaultValueLiteral = TEXT("{x:0,y:0}");
+		}
+		else if (StructName == TEXT("Vector"))
+		{
+			OutDefaultValueLiteral = TEXT("{x:0,y:0,z:0}");
+		}
+		else if (StructName == TEXT("Rotator"))
+		{
+			OutDefaultValueLiteral = TEXT("{pitch:0,yaw:0,roll:0}");
+		}
+		else if (StructName == TEXT("LinearColor"))
+		{
+			OutDefaultValueLiteral = TEXT("{r:0,g:0,b:0,a:1}");
+		}
+		else if (StructName == TEXT("Color"))
+		{
+			OutDefaultValueLiteral = TEXT("{r:0,g:0,b:0,a:255}");
+		}
+		else
+		{
+			// Generic struct — build default from children
+			TArray<FString> Fields;
+			for (TFieldIterator<FProperty> It(StructProp->Struct); It; ++It)
+			{
+				FString ChildType, ChildDefault, ChildMin, ChildMax, ChildStep;
+				TArray<FString> ChildOptions;
+				SwuiPopulateFieldMetadata(nullptr, *It, It->GetName(), ChildType, ChildDefault, ChildMin, ChildMax, ChildStep, ChildOptions);
+				if (ChildType.IsEmpty() || ChildType == TEXT("unknown")) continue;
+				Fields.Add(It->GetName() + TEXT(":") + ChildDefault);
+			}
+			OutDefaultValueLiteral = TEXT("{") + FString::Join(Fields, TEXT(",")) + TEXT("}");
+		}
+		return;
 	}
 
 	if (const FNumericProperty* NumericProp = CastField<const FNumericProperty>(Prop))
@@ -587,37 +638,30 @@ static void SwuiPopulateFieldMetadata(
 		return;
 	}
 
-	if (const FStructProperty* StructProp = CastField<const FStructProperty>(Prop))
-	{
-		OutType = TEXT("object");
-		OutDefaultValueLiteral = TEXT("null");
-		return;
-	}
-
 	if (const FArrayProperty* ArrayProp = CastField<const FArrayProperty>(Prop))
 	{
-		OutType = TEXT("array");
-		OutDefaultValueLiteral = TEXT("null");
+		OutType = SwuiGetTSType(Prop);
+		OutDefaultValueLiteral = TEXT("[]");
 		return;
 	}
 
 	if (const FMapProperty* MapProp = CastField<const FMapProperty>(Prop))
 	{
-		OutType = TEXT("map");
-		OutDefaultValueLiteral = TEXT("null");
+		OutType = SwuiGetTSType(Prop);
+		OutDefaultValueLiteral = TEXT("{}");
 		return;
 	}
 
 	if (Prop->IsA<FObjectPropertyBase>())
 	{
-		OutType = TEXT("object");
+		OutType = SwuiGetTSType(Prop);
 		OutDefaultValueLiteral = TEXT("null");
 		return;
 	}
 
 	if (Prop->IsA<FSoftObjectProperty>() || Prop->IsA<FSoftClassProperty>())
 	{
-		OutType = TEXT("object");
+		OutType = SwuiGetTSType(Prop);
 		OutDefaultValueLiteral = TEXT("null");
 		return;
 	}
@@ -663,7 +707,7 @@ static FString SwuiBuildPayloadFieldsBody(const UFunction* SignatureFunction, co
 		if (!MinVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tmin: %s,\n"), *Indent, *MinVal);
 		if (!MaxVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tmax: %s,\n"), *Indent, *MaxVal);
 		if (!StepVal.IsEmpty()) PayloadBody += FString::Printf(TEXT("%s\tstep: %s,\n"), *Indent, *StepVal);
-		if (FieldType == TEXT("enum") && EnumOptions.Num() > 0)
+		if (EnumOptions.Num() > 0)
 		{
 			PayloadBody += FString::Printf(TEXT("%s\toptions: [%s],\n"), *Indent, *FString::Join(EnumOptions, TEXT(", ")));
 		}
@@ -689,7 +733,7 @@ static FString SwuiBuildContractStateBody(const TArray<FSwuiGeneratedSourceEntry
 			if (!Prop.MinVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tmin: %s,\n"), *Prop.MinVal);
 			if (!Prop.MaxVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tmax: %s,\n"), *Prop.MaxVal);
 			if (!Prop.StepVal.IsEmpty()) StateBody += FString::Printf(TEXT("\t\t\tstep: %s,\n"), *Prop.StepVal);
-			if (Prop.ContractType == TEXT("enum") && Prop.EnumOptions.Num() > 0)
+			if (Prop.EnumOptions.Num() > 0)
 			{
 				StateBody += FString::Printf(TEXT("\t\t\toptions: [%s],\n"), *FString::Join(Prop.EnumOptions, TEXT(", ")));
 			}
@@ -977,7 +1021,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 	{
 		for (FSwuiGeneratedPropertyInfo& P : Src.Props)
 		{
-			if (P.ContractType != TEXT("enum")) continue;
+			if (P.EnumOptions.IsEmpty()) continue;
 
 			const UEnum* EnumDef = nullptr;
 			UClass* SourceClass = nullptr;
