@@ -14,8 +14,28 @@ static FString SwuiGetTSType(const FProperty* Prop)
 	if (Prop->IsA<FFloatProperty>()  ||
 		Prop->IsA<FDoubleProperty>() ||
 		Prop->IsA<FIntProperty>()    ||
-		Prop->IsA<FInt64Property>()  ||
-		Prop->IsA<FByteProperty>())    return TEXT("number");
+		Prop->IsA<FInt64Property>())    return TEXT("number");
+
+	if (Prop->IsA<FEnumProperty>())
+	{
+		if (const FEnumProperty* EnumProp = CastField<const FEnumProperty>(Prop))
+		{
+			if (const UEnum* EnumDef = EnumProp->GetEnum())
+			{
+				return EnumDef->GetName();
+			}
+		}
+		return TEXT("enum");
+	}
+
+	if (const FByteProperty* ByteProp = CastField<const FByteProperty>(Prop))
+	{
+		if (ByteProp->Enum)
+		{
+			return ByteProp->Enum->GetName();
+		}
+		return TEXT("number");
+	}
 
 	if (Prop->IsA<FBoolProperty>())    return TEXT("boolean");
 

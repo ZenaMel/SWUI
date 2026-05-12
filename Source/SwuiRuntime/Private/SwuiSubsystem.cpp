@@ -26,6 +26,7 @@ static FString Swui_GetTSType(const FProperty* Prop)
 {
 	if (Prop->IsA<FFloatProperty>()  || Prop->IsA<FDoubleProperty>() ||
 		Prop->IsA<FIntProperty>()    || Prop->IsA<FInt64Property>()  ||
+		Prop->IsA<FEnumProperty>()   ||
 		Prop->IsA<FByteProperty>())    return TEXT("number");
 	if (Prop->IsA<FBoolProperty>())    return TEXT("boolean");
 	if (Prop->IsA<FStrProperty>()   || Prop->IsA<FNameProperty>() ||
@@ -40,7 +41,20 @@ static FString Swui_SerializeProperty(FProperty* Prop, void* Container)
 	if (const FDoubleProperty* P = CastField<FDoubleProperty>(Prop)) return FString::SanitizeFloat(P->GetPropertyValue(Value));
 	if (const FIntProperty*    P = CastField<FIntProperty>(Prop))    return FString::FromInt(P->GetPropertyValue(Value));
 	if (const FInt64Property*  P = CastField<FInt64Property>(Prop))  return FString::Printf(TEXT("%lld"), P->GetPropertyValue(Value));
-	if (const FByteProperty*   P = CastField<FByteProperty>(Prop))   return FString::FromInt(P->GetPropertyValue(Value));
+	if (const FEnumProperty*   P = CastField<FEnumProperty>(Prop))
+	{
+		const int64 EnumValue = P->GetUnderlyingProperty()->GetSignedIntPropertyValue(Value);
+		return FString::Printf(TEXT("'%s'"), *P->GetEnum()->GetNameStringByValue(EnumValue));
+	}
+	if (const FByteProperty*   P = CastField<FByteProperty>(Prop))
+	{
+		if (P->Enum)
+		{
+			const uint8 ByteVal = P->GetPropertyValue(Value);
+			return FString::Printf(TEXT("'%s'"), *P->Enum->GetNameStringByValue(ByteVal));
+		}
+		return FString::FromInt(P->GetPropertyValue(Value));
+	}
 	if (const FBoolProperty*   P = CastField<FBoolProperty>(Prop))   return P->GetPropertyValue(Value) ? TEXT("true") : TEXT("false");
 	if (const FStrProperty* P = CastField<FStrProperty>(Prop))
 	{

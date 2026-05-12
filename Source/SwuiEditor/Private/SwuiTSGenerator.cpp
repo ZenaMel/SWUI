@@ -161,6 +161,26 @@ struct FSwuiGeneratedSourceEntry
 	TArray<FSwuiGeneratedEventInfo> Events;
 };
 
+struct FSwuiCollectedEnum
+{
+	const UEnum* EnumDef = nullptr;
+	FString EnumPath;			// unique identity: /Script/...
+	FString ShortName;			// eg ETetherState
+	TArray<FString> SourceNames;	// every source that exposes this enum
+	TArray<FString> ValueNames;
+};
+
+struct FSwuiResolvedEnum
+{
+	const UEnum* EnumDef = nullptr;
+	FString EnumPath;
+	FString ShortName;
+	FString PrimaryCanonicalName;	// first source's canonical (e.g., "TetherComponentETetherState")
+	bool bShortNameUnique;
+	TArray<FString> ValueNames;
+	TMap<FString, FString> SourceCanonicalNames;	// SourceName -> CanonicalName
+};
+
 static FString SwuiGetNavigationCategory(const FString& EventName, bool bDefaultEvent)
 {
 	if (!bDefaultEvent)
@@ -195,6 +215,43 @@ static bool SwuiTryGetEnumDefinition(const FProperty* Prop, const UEnum*& OutEnu
 	}
 
 	return false;
+}
+
+static bool SwuiShouldSkipEnumValue(const UEnum* EnumDef, int32 Index)
+{
+	if (!EnumDef) return true;
+
+	const FString ValueName = EnumDef->GetNameStringByIndex(Index);
+	const FString EnumName  = EnumDef->GetName();
+
+	return EnumDef->HasMetaData(TEXT("Hidden"), Index)
+		|| ValueName.IsEmpty()
+		|| ValueName == EnumName + TEXT("_MAX");
+}
+
+static void SwuiCollectEnumFromProperty(const FProperty* Prop, const FString& ObjectName, TMap<FString, FSwuiCollectedEnum>& OutEnums)
+{
+	const UEnum* EnumDef = nullptr;
+	if (!SwuiTryGetEnumDefinition(Prop, EnumDef) || !EnumDef) return;
+
+	const FString EnumPath = EnumDef->GetPathName();
+	const FString ShortName = EnumDef->GetName();
+
+	FSwuiCollectedEnum& Entry = OutEnums.FindOrAdd(EnumPath);
+
+	if (!Entry.EnumDef)
+	{
+		Entry.EnumDef = EnumDef;
+		Entry.EnumPath = EnumPath;
+		Entry.ShortName = ShortName;
+		for (int32 i = 0; i < EnumDef->NumEnums(); ++i)
+		{
+			if (SwuiShouldSkipEnumValue(EnumDef, i)) continue;
+			Entry.ValueNames.Add(EnumDef->GetNameStringByIndex(i));
+		}
+	}
+
+	Entry.SourceNames.AddUnique(ObjectName);
 }
 
 static FString SwuiReadFirstMetadataValue(const FProperty* Prop, std::initializer_list<const TCHAR*> Keys)
@@ -305,7 +362,7 @@ static void SwuiPopulateFieldMetadata(
 
 		for (int32 Index = 0; Index < EnumDefinition->NumEnums(); ++Index)
 		{
-			if (EnumDefinition->HasMetaData(TEXT("Hidden"), Index))
+			if (SwuiShouldSkipEnumValue(EnumDefinition, Index))
 			{
 				continue;
 			}
@@ -574,6 +631,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 	TArray<FSwuiGeneratedSourceEntry> Sources;
 	TArray<FString>      Namespaces;
+	TMap<FString, FSwuiCollectedEnum> CollectedEnumsByPath;
 
 	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
 	{
@@ -617,6 +675,8 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 				Info.StepVal,
 				Info.EnumOptions);
 
+			SwuiCollectEnumFromProperty(Prop, ObjectName, CollectedEnumsByPath);
+
 			Entry.Props.Add(MoveTemp(Info));
 		}
 
@@ -639,6 +699,17 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 				SignatureFunction = SingleDelegateProp->SignatureFunction;
 			}
 
+			if (SignatureFunction)
+			{
+				for (TFieldIterator<const FProperty> ParamIt(SignatureFunction); ParamIt; ++ParamIt)
+				{
+					if (ParamIt->HasAnyPropertyFlags(CPF_Parm) && !ParamIt->HasAnyPropertyFlags(CPF_ReturnParm))
+					{
+						SwuiCollectEnumFromProperty(*ParamIt, ObjectName, CollectedEnumsByPath);
+					}
+				}
+			}
+
 			EInfo.PayloadBody = SwuiBuildPayloadFieldsBody(SignatureFunction, TEXT("\t\t\t\t"));
 			Entry.Events.Add(MoveTemp(EInfo));
 		}
@@ -650,6 +721,126 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SWUI: No supported properties or events to generate for '%s'. Skipping."), *Bridge->InterfaceName);
 		return false;
+	}
+
+	// ── Resolve enums: short-name collisions, canonical names ─────────────
+	TMap<FString, TSet<FString>> ShortNameToEnumPaths;
+	for (const auto& Pair : CollectedEnumsByPath)
+	{
+		const FSwuiCollectedEnum& Entry = Pair.Value;
+		ShortNameToEnumPaths.FindOrAdd(Entry.ShortName).Add(Entry.EnumPath);
+	}
+
+	TArray<FSwuiResolvedEnum> ResolvedEnums;
+	TMap<FString, FSwuiResolvedEnum*> ResolvedByPath;
+
+	for (const auto& Pair : CollectedEnumsByPath)
+	{
+		const FSwuiCollectedEnum& Collected = Pair.Value;
+
+		FSwuiResolvedEnum Resolved;
+		Resolved.EnumDef = Collected.EnumDef;
+		Resolved.EnumPath = Collected.EnumPath;
+		Resolved.ShortName = Collected.ShortName;
+		Resolved.bShortNameUnique = ShortNameToEnumPaths[Collected.ShortName].Num() == 1;
+		Resolved.ValueNames = Collected.ValueNames;
+
+		// Primary canonical: first source's source-prefixed name
+		Resolved.PrimaryCanonicalName = Collected.SourceNames[0] + Collected.ShortName;
+
+		// Source-specific canonical aliases
+		for (const FString& SrcName : Collected.SourceNames)
+		{
+			Resolved.SourceCanonicalNames.Add(SrcName, SrcName + Collected.ShortName);
+		}
+
+		ResolvedEnums.Add(MoveTemp(Resolved));
+	}
+
+	for (FSwuiResolvedEnum& R : ResolvedEnums)
+	{
+		ResolvedByPath.Add(R.EnumPath, &R);
+	}
+
+	// ── Override TSType for enum properties ──────────────────────────────
+	for (FSwuiGeneratedSourceEntry& Src : Sources)
+	{
+		for (FSwuiGeneratedPropertyInfo& P : Src.Props)
+		{
+			if (P.ContractType != TEXT("enum")) continue;
+
+			const UEnum* EnumDef = nullptr;
+			UClass* SourceClass = nullptr;
+			for (const FSwuiBindingSource& BS : Bridge->BindingSources)
+			{
+				if (BS.SourceClass && SwuiComputeObjectName(BS.SourceClass) == Src.ObjectName)
+				{
+					SourceClass = BS.SourceClass;
+					break;
+				}
+			}
+			if (SourceClass)
+			{
+				FProperty* Prop = SourceClass->FindPropertyByName(FName(*P.PropName));
+				if (Prop && SwuiTryGetEnumDefinition(Prop, EnumDef) && EnumDef)
+				{
+					FSwuiResolvedEnum** Found = ResolvedByPath.Find(EnumDef->GetPathName());
+					if (Found)
+					{
+						const FSwuiResolvedEnum* R = *Found;
+						P.TSType = R->bShortNameUnique ? R->ShortName : R->SourceCanonicalNames[Src.ObjectName];
+					}
+				}
+			}
+		}
+	}
+
+	// ── Build enum code ──────────────────────────────────────────────────
+	FString EnumBlock;
+	for (const FSwuiResolvedEnum& R : ResolvedEnums)
+	{
+		// Primary as-const object + type
+		EnumBlock += FString::Printf(TEXT("export const %s = {\n"), *R.PrimaryCanonicalName);
+		for (const FString& ValName : R.ValueNames)
+		{
+			EnumBlock += FString::Printf(TEXT("\t%s: \"%s\",\n"), *ValName, *ValName);
+		}
+		EnumBlock += TEXT("} as const;\n\n");
+
+		EnumBlock += FString::Printf(TEXT("export type %s = typeof %s[keyof typeof %s];\n\n"),
+			*R.PrimaryCanonicalName, *R.PrimaryCanonicalName, *R.PrimaryCanonicalName);
+
+		// Source-specific aliases (skip the primary source — it's already the canonical)
+		for (const auto& SrcPair : R.SourceCanonicalNames)
+		{
+			const FString& SrcName = SrcPair.Key;
+			const FString& Canonical = SrcPair.Value;
+			if (Canonical == R.PrimaryCanonicalName) continue;
+
+			EnumBlock += FString::Printf(TEXT("export const %s = %s;\n"), *Canonical, *R.PrimaryCanonicalName);
+			EnumBlock += FString::Printf(TEXT("export type %s = %s;\n\n"), *Canonical, *R.PrimaryCanonicalName);
+		}
+
+		// Short alias when unique
+		if (R.bShortNameUnique)
+		{
+			EnumBlock += FString::Printf(TEXT("export const %s = %s;\n"), *R.ShortName, *R.PrimaryCanonicalName);
+			EnumBlock += FString::Printf(TEXT("export type %s = %s;\n\n"), *R.ShortName, *R.PrimaryCanonicalName);
+		}
+	}
+
+	// ── Build state types ────────────────────────────────────────────────
+	FString StateTypesBlock;
+	for (const FSwuiGeneratedSourceEntry& Src : Sources)
+	{
+		if (Src.Props.IsEmpty()) continue;
+
+		StateTypesBlock += FString::Printf(TEXT("export type %sState = {\n"), *Src.ObjectName);
+		for (const FSwuiGeneratedPropertyInfo& P : Src.Props)
+		{
+			StateTypesBlock += FString::Printf(TEXT("\t%s: %s;\n"), *P.PropName, *P.TSType);
+		}
+		StateTypesBlock += TEXT("};\n\n");
 	}
 
 	const FString IName  = Bridge->InterfaceName;
@@ -737,11 +928,15 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		"\n"
 		"%s"
 		"%s"
+		"%s"
+		"%s"
 	),
 		*IName,
 		*NsList,
 		*RuntimeBlock,
+		*EnumBlock,
 		*ObjectsBody,
+		*StateTypesBlock,
 		*ContractBlock
 	);
 
