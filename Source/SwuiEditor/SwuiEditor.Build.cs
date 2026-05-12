@@ -1,4 +1,5 @@
-﻿using UnrealBuildTool;
+﻿using System.IO;
+using UnrealBuildTool;
 
 public class SwuiEditor : ModuleRules
 {
@@ -27,6 +28,33 @@ public class SwuiEditor : ModuleRules
 			"GameplayTags",
 			"GameplayTagsEditor",
 		});
+
+		// ── Conditional AngelScript integration ──────────────────────────────
+		// Detect whether the Angelscript plugin is present in the engine or
+		// project at build time.  If found, compile AS hook support and define
+		// SWUI_WITH_ANGELSCRIPT=1 so the C++ code can conditionally include the
+		// AS headers and reference AS module types.
+		//
+		// Non-AS engine forks compile cleanly with SWUI_WITH_ANGELSCRIPT=0.
+		// The runtime heuristic (SwuiProjectLooksLikeAngelScriptProject) still
+		// gates hook *activation* — even AS-enabled builds only bind hooks when
+		// the current project actually has Script/*.as files.
+
+		bool bHasAngelscriptCode =
+			Directory.Exists(Path.Combine(EngineDirectory, "Plugins", "Angelscript")) ||
+			Directory.Exists(Path.Combine(EngineDirectory, "Plugins", "UnrealEngine-Angelscript")) ||
+			Directory.Exists(Path.Combine(ProjectDirectory, "Plugins", "Angelscript")) ||
+			Directory.Exists(Path.Combine(ProjectDirectory, "Plugins", "UnrealEngine-Angelscript"));
+
+		if (bHasAngelscriptCode)
+		{
+			PrivateDependencyModuleNames.Add("AngelscriptCode");
+			PublicDefinitions.Add("SWUI_WITH_ANGELSCRIPT=1");
+		}
+		else
+		{
+			PublicDefinitions.Add("SWUI_WITH_ANGELSCRIPT=0");
+		}
 
 		PrivateIncludePaths.Add("SwuiEditor/Private");
 	}

@@ -2,6 +2,7 @@
 #include "Swui.h"
 #include "SwuiBindingSource.h"
 #include "SwuiTSGenerator.h"
+#include "SwuiBindingCollector.h"
 
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
@@ -304,7 +305,6 @@ BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
 {
 	for (FProperty* Prop : Node.Props)
 	{
-		const FName PropName = Prop->GetFName();
 		const FString TSType = SwuiGetTSType(Prop);
 
 		ParentGroup.AddWidgetRow()
@@ -314,7 +314,7 @@ BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				SNew(STextBlock)
-				.Text(FText::FromName(PropName))
+				.Text(FText::FromName(Prop->GetFName()))
 				.Font(IDetailLayoutBuilder::GetDetailFont())
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
@@ -328,15 +328,33 @@ BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
 		.ValueContent()
 		[
 			SNew(SCheckBox)
-			.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, PropName]()
+			.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, Prop]()
 			{
 				if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
-				return Swui->BindingSources[i].Properties.Contains(PropName)
-					? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+				const FName PropName = Prop->GetFName();
+				const bool bExposed = Prop->HasMetaData(TEXT("SwuiExpose"));
+				const bool bManual  = Swui->BindingSources[i].Properties.Contains(PropName);
+				return (bExposed || bManual) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
 			}))
-			.OnCheckStateChanged_Lambda([Swui, i, PropName, this](ECheckBoxState NewState)
+			.IsEnabled(TAttribute<bool>::CreateLambda([Prop]()
+			{
+				return !Prop->HasMetaData(TEXT("SwuiExpose"));
+			}))
+			.ToolTipText_Lambda([Prop]() -> FText
+			{
+				if (Prop->HasMetaData(TEXT("SwuiExpose")))
+				{
+					return LOCTEXT("SwuiExposeTooltip",
+						"This binding is exposed by code using meta=(SwuiExpose). "
+						"Remove SwuiExpose from the property declaration to disable it.");
+				}
+				return FText::GetEmpty();
+			})
+			.OnCheckStateChanged_Lambda([Swui, i, Prop, this](ECheckBoxState NewState)
 			{
 				if (!Swui->BindingSources.IsValidIndex(i)) return;
+				if (Prop->HasMetaData(TEXT("SwuiExpose"))) return;
+				const FName PropName = Prop->GetFName();
 				Swui->Modify();
 				if (NewState == ECheckBoxState::Checked)
 					Swui->BindingSources[i].Properties.AddUnique(PropName);
@@ -367,8 +385,6 @@ for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
 	FMulticastDelegateProperty* Prop = *It;
 	if (!Prop->HasAnyPropertyFlags(CPF_BlueprintVisible | CPF_BlueprintAssignable)) continue;
 
-	const FName DelegateName = Prop->GetFName();
-
 	EventGroup.AddWidgetRow()
 	.NameContent()
 	[
@@ -376,7 +392,7 @@ for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
 			SNew(STextBlock)
-			.Text(FText::FromName(DelegateName))
+			.Text(FText::FromName(Prop->GetFName()))
 			.Font(IDetailLayoutBuilder::GetDetailFont())
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
@@ -390,15 +406,33 @@ for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
 	.ValueContent()
 	[
 		SNew(SCheckBox)
-		.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, DelegateName]()
+		.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, Prop]()
 		{
 			if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
-			return Swui->BindingSources[i].Delegates.Contains(DelegateName)
-				? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			const FName DelegateName = Prop->GetFName();
+			const bool bExposed = Prop->HasMetaData(TEXT("SwuiExpose"));
+			const bool bManual  = Swui->BindingSources[i].Delegates.Contains(DelegateName);
+			return (bExposed || bManual) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
 		}))
-		.OnCheckStateChanged_Lambda([Swui, i, DelegateName, this](ECheckBoxState NewState)
+		.IsEnabled(TAttribute<bool>::CreateLambda([Prop]()
+		{
+			return !Prop->HasMetaData(TEXT("SwuiExpose"));
+		}))
+		.ToolTipText_Lambda([Prop]() -> FText
+		{
+			if (Prop->HasMetaData(TEXT("SwuiExpose")))
+			{
+				return LOCTEXT("SwuiExposeTooltipEvent",
+					"This event is exposed by code using meta=(SwuiExpose). "
+					"Remove SwuiExpose from the delegate declaration to disable it.");
+			}
+			return FText::GetEmpty();
+		})
+		.OnCheckStateChanged_Lambda([Swui, i, Prop, this](ECheckBoxState NewState)
 		{
 			if (!Swui->BindingSources.IsValidIndex(i)) return;
+			if (Prop->HasMetaData(TEXT("SwuiExpose"))) return;
+			const FName DelegateName = Prop->GetFName();
 			Swui->Modify();
 			if (NewState == ECheckBoxState::Checked)
 				Swui->BindingSources[i].Delegates.AddUnique(DelegateName);

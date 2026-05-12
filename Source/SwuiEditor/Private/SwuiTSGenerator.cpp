@@ -2,6 +2,7 @@
 #include "SwuiNavigation.h"
 #include "Swui.h"
 #include "SwuiBindingSource.h"
+#include "SwuiBindingCollector.h"
 #include "SwuiTypes.h"
 #include "Containers/Map.h"
 #include "Containers/Set.h"
@@ -873,20 +874,32 @@ static TArray<FSwuiGeneratedNavInfo> SwuiCollectGeneratedNavigationEvents(const 
 bool FSwuiTSGenerator::Generate(USwui* Bridge)
 {
 	if (!Bridge || Bridge->InterfaceName.IsEmpty()) return false;
-	if (Bridge->BindingSources.IsEmpty()) return false;
+
+	// Single source of truth: SwuiBindingCollector merges manual + code-exposed (SwuiExpose)
+	FSwuiEffectiveBindings Effective = SwuiCollectEffectiveBindings(Bridge);
+	if (Effective.Sources.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SWUI: No effective bindings to generate for '%s'. Skipping."), *Bridge->InterfaceName);
+		return false;
+	}
+
+	for (const FString& W : Effective.Warnings)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *W);
+	}
 
 	TArray<FSwuiGeneratedSourceEntry> Sources;
 	TArray<FString>      Namespaces;
 	TMap<FString, FSwuiCollectedEnum> CollectedEnumsByPath;
 
-	for (const FSwuiBindingSource& Source : Bridge->BindingSources)
+	for (const FSwuiEffectiveSource& EffSrc : Effective.Sources)
 	{
-		UClass* SourceClass = Source.SourceClass;
+		UClass* SourceClass = EffSrc.SourceClass;
 		if (!SourceClass) continue;
-		if (Source.Properties.IsEmpty() && Source.Delegates.IsEmpty()) continue;
+		if (EffSrc.Properties.IsEmpty() && EffSrc.Delegates.IsEmpty()) continue;
 
-		const FString Namespace  = SwuiComputeNamespace(SourceClass);
-		const FString ObjectName = SwuiComputeObjectName(SourceClass);
+		const FString Namespace  = EffSrc.Namespace;
+		const FString ObjectName = EffSrc.ObjectName;
 		const UObject* DefaultsObject = SourceClass->GetDefaultObject();
 		Namespaces.AddUnique(Namespace);
 
@@ -894,8 +907,9 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		Entry.ObjectName = ObjectName;
 		Entry.Namespace  = Namespace;
 
-		for (const FName& PropFName : Source.Properties)
+		for (const FSwuiEffectiveProperty& EP : EffSrc.Properties)
 		{
+			const FName PropFName = EP.PropName;
 			FProperty* Prop = SourceClass->FindPropertyByName(PropFName);
 			if (!Prop) continue;
 
@@ -934,7 +948,9 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 			Entry.Props.Add(MoveTemp(Info));
 		}
 
-		for (const FName& DelegateFName : Source.Delegates)
+		for (const FSwuiEffectiveDelegate& ED : EffSrc.Delegates)
+		{
+			const FName DelegateFName = ED.DelegateName;
 		{
 			FSwuiGeneratedEventInfo EInfo;
 			EInfo.ObjectName    = ObjectName;
