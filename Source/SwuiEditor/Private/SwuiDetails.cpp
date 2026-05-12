@@ -112,18 +112,16 @@ for (int32 i = 0; i < Swui->BindingSources.Num(); ++i)
 {
 UClass* SourceClass = Swui->BindingSources[i].SourceClass;
 
-// Group label: include the class name when set so collapsed state is informative.
-const FText SourceLabel = (i == 0)
-	? (SourceClass
-		? FText::Format(LOCTEXT("OwnerGroupNamed", "Owner Class ({0})"), FText::FromString(SourceClass->GetName()))
-		: LOCTEXT("OwnerGroupEmpty", "Owner Class"))
-	: (SourceClass
-		? FText::Format(LOCTEXT("SourceGroupNamed", "Source {0} ({1})"), FText::AsNumber(i + 1), FText::FromString(SourceClass->GetName()))
-		: FText::Format(LOCTEXT("SourceGroupEmpty", "Source {0}"), FText::AsNumber(i + 1)));
+// Group label: show only the bound class/object name.
+// Keep the internal group ID indexed for uniqueness.
+const FText SourceLabel = SourceClass
+	? FText::FromString(SourceClass->GetName())
+	: (i == 0
+		? LOCTEXT("OwnerGroupEmpty", "Owner Class")
+		: LOCTEXT("SourceGroupEmpty", "Unassigned Source"));
 
 const FName SourceGroupId = FName(*FString::Printf(TEXT("SwuiSource%d"), i));
 IDetailGroup& SourceGroup = Cat.AddGroup(SourceGroupId, SourceLabel, false);
-
 // Native property handle for the SourceClass field in this slot.
 TSharedPtr<IPropertyHandle> ElemHandle  = BindingSourcesHandle->GetChildHandle((uint32)i);
 TSharedPtr<IPropertyHandle> ClassHandle = ElemHandle.IsValid()
@@ -184,53 +182,114 @@ if (!SourceClass) continue;
 const FName StateGroupId = FName(*FString::Printf(TEXT("SwuiState%d"), i));
 IDetailGroup& StateGroup = SourceGroup.AddGroup(StateGroupId, LOCTEXT("StatePropsGroup", "State Properties"), false);
 
+// Build a category tree from properties to group them by UPROPERTY(Category="...") metadata.
+struct FCategoryNode
+{
+	FString Name;
+	TArray<FProperty*> Props;
+	TArray<TSharedPtr<FCategoryNode>> Children;
+};
+
+auto FindOrAddChild = [](FCategoryNode& Node, const FString& Name) -> FCategoryNode*
+{
+	for (const TSharedPtr<FCategoryNode>& Child : Node.Children)
+	{
+		if (Child.IsValid() && Child->Name == Name)
+		{
+			return Child.Get();
+		}
+	}
+
+	TSharedPtr<FCategoryNode> NewChild = MakeShared<FCategoryNode>();
+	NewChild->Name = Name;
+	Node.Children.Add(NewChild);
+	return NewChild.Get();
+};
+
+FCategoryNode Root;
+
 for (TFieldIterator<FProperty> It(SourceClass); It; ++It)
 {
 	FProperty* Prop = *It;
 	if (!Prop->HasAnyPropertyFlags(CPF_BlueprintVisible)) continue;
 	if (SwuiGetTSType(Prop).IsEmpty()) continue;
 
-	const FName PropName = Prop->GetFName();
-	const FString TSType = SwuiGetTSType(Prop);
+	const FString Category = Prop->HasMetaData(TEXT("Category"))
+		? Prop->GetMetaData(TEXT("Category"))
+		: FString();
 
-	StateGroup.AddWidgetRow()
-	.NameContent()
-	[
-		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-		[
-			SNew(STextBlock)
-			.Text(FText::FromName(PropName))
-			.Font(IDetailLayoutBuilder::GetDetailFont())
-		]
-		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
-		[
-			SNew(STextBlock)
-			.Text(FText::FromString(FString::Printf(TEXT("(%s)"), *TSType)))
-			.Font(IDetailLayoutBuilder::GetDetailFont())
-			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-		]
-	]
-	.ValueContent()
-	[
-		SNew(SCheckBox)
-		.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, PropName]()
-		{
-			if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
-			return Swui->BindingSources[i].Properties.Contains(PropName)
-				? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-		}))
-		.OnCheckStateChanged_Lambda([Swui, i, PropName](ECheckBoxState NewState)
-		{
-			if (!Swui->BindingSources.IsValidIndex(i)) return;
-			Swui->Modify();
-			if (NewState == ECheckBoxState::Checked)
-				Swui->BindingSources[i].Properties.AddUnique(PropName);
-			else
-				Swui->BindingSources[i].Properties.Remove(PropName);
-		})
-	];
+	TArray<FString> Parts;
+	Category.ParseIntoArray(Parts, TEXT("|"), true);
+
+	FCategoryNode* Node = &Root;
+	for (const FString& Part : Parts)
+	{
+		const FString CleanPart = Part.TrimStartAndEnd();
+		if (CleanPart.IsEmpty()) continue;
+		Node = FindOrAddChild(*Node, CleanPart);
+	}
+	Node->Props.Add(Prop);
 }
+
+// Recursively create nested groups for category segments.
+int32 CatCounter = 0;
+TFunction<void(const FCategoryNode&, IDetailGroup&)> BuildCategoryGroups;
+BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
+{
+	for (FProperty* Prop : Node.Props)
+	{
+		const FName PropName = Prop->GetFName();
+		const FString TSType = SwuiGetTSType(Prop);
+
+		ParentGroup.AddWidgetRow()
+		.NameContent()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromName(PropName))
+				.Font(IDetailLayoutBuilder::GetDetailFont())
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(FString::Printf(TEXT("(%s)"), *TSType)))
+				.Font(IDetailLayoutBuilder::GetDetailFont())
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
+		]
+		.ValueContent()
+		[
+			SNew(SCheckBox)
+			.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Swui, i, PropName]()
+			{
+				if (!Swui->BindingSources.IsValidIndex(i)) return ECheckBoxState::Unchecked;
+				return Swui->BindingSources[i].Properties.Contains(PropName)
+					? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			}))
+			.OnCheckStateChanged_Lambda([Swui, i, PropName](ECheckBoxState NewState)
+			{
+				if (!Swui->BindingSources.IsValidIndex(i)) return;
+				Swui->Modify();
+				if (NewState == ECheckBoxState::Checked)
+					Swui->BindingSources[i].Properties.AddUnique(PropName);
+				else
+					Swui->BindingSources[i].Properties.Remove(PropName);
+			})
+		];
+	}
+
+	for (const TSharedPtr<FCategoryNode>& Child : Node.Children)
+	{
+		if (!Child.IsValid()) continue;
+		const FName ChildGroupId = FName(*FString::Printf(TEXT("SwuiCat%d_%d"), i, CatCounter++));
+		IDetailGroup& ChildGroup = ParentGroup.AddGroup(ChildGroupId, FText::FromString(Child->Name), false);
+		BuildCategoryGroups(*Child, ChildGroup);
+	}
+};
+
+BuildCategoryGroups(Root, StateGroup);
 
 // Nested collapsible group for delegate/event checkboxes.
 const FName EventGroupId = FName(*FString::Printf(TEXT("SwuiEvents%d"), i));
