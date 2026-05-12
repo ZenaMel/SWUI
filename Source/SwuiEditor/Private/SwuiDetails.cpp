@@ -16,12 +16,87 @@
 #include "Widgets/SBoxPanel.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
+#include "Containers/Ticker.h"
+#include "Styling/AppStyle.h"
+
+#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "SwuiDetails"
 
 TSharedRef<IDetailCustomization> FSwuiDetails::MakeInstance()
 {
 return MakeShareable(new FSwuiDetails);
+}
+
+FSwuiDetails::~FSwuiDetails()
+{
+	if (RefreshTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(RefreshTickerHandle);
+	}
+}
+
+void FSwuiDetails::ScheduleDebouncedRefresh()
+{
+	bRefreshScheduled = true;
+
+	// Remove existing ticker if any
+	if (RefreshTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(RefreshTickerHandle);
+	}
+
+	constexpr float DebounceDelay = 0.4f;
+	RefreshTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateLambda([this](float) -> bool
+		{
+			if (bRefreshScheduled)
+			{
+				bRefreshScheduled = false;
+				RefreshTickerHandle.Reset();
+				DoRefresh();
+			}
+			return false; // one-shot
+		}),
+		DebounceDelay);
+}
+
+static void SwuiShowRefreshNotification(bool bOK)
+{
+	FNotificationInfo Info(bOK
+		? LOCTEXT("GenOK", "JS Bindings generated successfully.")
+		: LOCTEXT("GenFail", "JS Bindings generation failed — check the Output Log."));
+
+	Info.bFireAndForget = true;
+	Info.FadeInDuration = 0.2f;
+	Info.FadeOutDuration = 0.5f;
+	Info.ExpireDuration = 3.f;
+	Info.Image = FAppStyle::GetBrush(
+		bOK
+			? TEXT("NotificationList.SuccessImage")
+			: TEXT("NotificationList.FailImage")
+	);
+
+	TSharedPtr<SNotificationItem> Notification =
+		FSlateNotificationManager::Get().AddNotification(Info);
+
+	if (Notification.IsValid())
+	{
+		Notification->SetCompletionState(
+			bOK
+				? SNotificationItem::CS_Success
+				: SNotificationItem::CS_Fail
+		);
+	}
+}
+
+void FSwuiDetails::DoRefresh()
+{
+	if (SwuiPtr.IsValid())
+	{
+		const bool bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
+		SwuiShowRefreshNotification(bOK);
+	}
 }
 
 void FSwuiDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
@@ -93,16 +168,7 @@ SNew(SButton)
 	{
 		bOK = FSwuiTSGenerator::Generate(SwuiPtr.Get());
 	}
-
-	FNotificationInfo Info(bOK
-		? LOCTEXT("GenOK",  "JS Bindings generated successfully.")
-		: LOCTEXT("GenFail", "JS Bindings generation failed — check the Output Log."));
-	Info.bFireAndForget = true;
-	Info.FadeInDuration  = 0.2f;
-	Info.FadeOutDuration = 0.5f;
-	Info.ExpireDuration  = 3.f;
-	Info.Image = FAppStyle::GetBrush(bOK ? TEXT("NotificationList.SuccessImage") : TEXT("NotificationList.FailImage"));
-	FSlateNotificationManager::Get().AddNotification(Info);
+	SwuiShowRefreshNotification(bOK);
 	return FReply::Handled();
 })
 ];
@@ -268,7 +334,7 @@ BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
 				return Swui->BindingSources[i].Properties.Contains(PropName)
 					? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
 			}))
-			.OnCheckStateChanged_Lambda([Swui, i, PropName](ECheckBoxState NewState)
+			.OnCheckStateChanged_Lambda([Swui, i, PropName, this](ECheckBoxState NewState)
 			{
 				if (!Swui->BindingSources.IsValidIndex(i)) return;
 				Swui->Modify();
@@ -276,6 +342,7 @@ BuildCategoryGroups = [&](const FCategoryNode& Node, IDetailGroup& ParentGroup)
 					Swui->BindingSources[i].Properties.AddUnique(PropName);
 				else
 					Swui->BindingSources[i].Properties.Remove(PropName);
+				this->ScheduleDebouncedRefresh();
 			})
 		];
 	}
@@ -329,7 +396,7 @@ for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
 			return Swui->BindingSources[i].Delegates.Contains(DelegateName)
 				? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
 		}))
-		.OnCheckStateChanged_Lambda([Swui, i, DelegateName](ECheckBoxState NewState)
+		.OnCheckStateChanged_Lambda([Swui, i, DelegateName, this](ECheckBoxState NewState)
 		{
 			if (!Swui->BindingSources.IsValidIndex(i)) return;
 			Swui->Modify();
@@ -337,6 +404,7 @@ for (TFieldIterator<FMulticastDelegateProperty> It(SourceClass); It; ++It)
 				Swui->BindingSources[i].Delegates.AddUnique(DelegateName);
 			else
 				Swui->BindingSources[i].Delegates.Remove(DelegateName);
+			this->ScheduleDebouncedRefresh();
 		})
 	];
 }
