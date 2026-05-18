@@ -25,6 +25,8 @@
 #include "TextureResource.h"
 #include "Widgets/SViewport.h"
 
+#include "SwuiFullSurfaceCpuRenderer.h"
+
 struct FSwuiViewCefData
 {
 	CefRefPtr<BrowserClient> Client;
@@ -343,11 +345,11 @@ void USwuiView::LoadURL(const FString& URI)
 	{
 		FScopeLock Lock(&PaintMutex);
 		bHasPendingFullSurfacePaint = false;
-		PendingFreshPaintGeneration = 0;
-		UploadedFreshPaintGeneration = 0;
 		PendingFreshPaintArrivalTime = 0.0;
 		LastPaintArrivalTime = 0.0;
 	}
+
+	FullSurfaceRenderer.ClearPendingPaint();
 
 	if (URI.StartsWith(TEXT("http://"), ESearchCase::IgnoreCase) ||
 		URI.StartsWith(TEXT("https://"), ESearchCase::IgnoreCase) ||
@@ -500,9 +502,7 @@ bool USwuiView::IsForceFullFrameMode() const
 bool USwuiView::HasFreshOnPaintDataPending() const
 {
 	FScopeLock Lock(&PaintMutex);
-
-	return bHasPendingFullSurfacePaint &&
-		PendingFreshPaintGeneration > UploadedFreshPaintGeneration;
+	return bHasPendingFullSurfacePaint && FullSurfaceRenderer.HasFreshPaintPending();
 }
 
 void USwuiView::RequestBrowserVisualRefresh(bool bForceFrame)
@@ -733,70 +733,47 @@ void USwuiView::OnPaint(
 		return;
 	}
 
-	StageFullSurfacePaint(Buffer, InWidth, InHeight, FPlatformTime::Seconds());
+	const double PaintNow = FPlatformTime::Seconds();
+	const bool bCanCopy = !InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture;
 
-	FMemory::Free(Regions);
-}
-
-void USwuiView::StageFullSurfacePaint(
-	const void* Buffer,
-	int32 InWidth,
-	int32 InHeight,
-	double PaintNow)
-{
-	const int32 FullPitch = InWidth * 4;
-	const int32 BufBytes = FullPitch * InHeight;
-
-	const double CopyStart = FPlatformTime::Seconds();
-
-	FScopeLock Lock(&PaintMutex);
-
-	LastPaintArrivalTime = PaintNow;
-	PendingFreshPaintArrivalTime = PaintNow;
-	++PendingFreshPaintGeneration;
-
-	if (PendingBeginFrameSentTime > 0.0)
+	// Track external begin frame timing before staging to the renderer.
 	{
-		const double PaintAfterBeginMs = (PaintNow - PendingBeginFrameSentTime) * 1000.0;
+		FScopeLock Lock(&PaintMutex);
 
-		Stat_PaintAfterBeginFrameMsSum += PaintAfterBeginMs;
-		Stat_PaintAfterBeginFrameMsMax = FMath::Max(
-			Stat_PaintAfterBeginFrameMsMax,
-			PaintAfterBeginMs);
-		++Stat_PaintAfterBeginFrameSamples;
+		LastPaintArrivalTime = PaintNow;
+		PendingFreshPaintArrivalTime = PaintNow;
 
-		bPaintArrivedAfterExternalBeginFrame = true;
-
-		if (bPendingInvalidateForPaint)
+		if (PendingBeginFrameSentTime > 0.0)
 		{
-			++Stat_PaintsAfterInvalidate;
-			bPendingInvalidateForPaint = false;
+			const double PaintAfterBeginMs = (PaintNow - PendingBeginFrameSentTime) * 1000.0;
+
+			Stat_PaintAfterBeginFrameMsSum += PaintAfterBeginMs;
+			Stat_PaintAfterBeginFrameMsMax = FMath::Max(
+				Stat_PaintAfterBeginFrameMsMax,
+				PaintAfterBeginMs);
+			++Stat_PaintAfterBeginFrameSamples;
+
+			bPaintArrivedAfterExternalBeginFrame = true;
+
+			if (bPendingInvalidateForPaint)
+			{
+				++Stat_PaintsAfterInvalidate;
+				bPendingInvalidateForPaint = false;
+			}
+
+			PendingBeginFrameSentTime = -1.0;
 		}
 
-		PendingBeginFrameSentTime = -1.0;
+		bHasPendingFullSurfacePaint = true;
 	}
 
-	if (BackingBuffer.Num() != BufBytes)
+	// Stage the frame into the renderer's pool (latest-frame-wins).
+	if (bCanCopy)
 	{
-		BackingBuffer.SetNumUninitialized(BufBytes);
+		FullSurfaceRenderer.StagePaint(Buffer, InWidth, InHeight, PaintNow);
 	}
 
-	if (!InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
-	{
-		FPlatformMemory::Memcpy(BackingBuffer.GetData(), Buffer, BufBytes);
-	}
-
-	bHasPendingFullSurfacePaint = true;
-	PendingFullSurfaceWidth = InWidth;
-	PendingFullSurfaceHeight = InHeight;
-
-	++Stat_FullSurfaceCefPaints;
-
-	const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
-
-	Stat_FullSurfacePaintCopyMsSum += CopyMs;
-	Stat_FullSurfacePaintCopyMsMax = FMath::Max(Stat_FullSurfacePaintCopyMsMax, CopyMs);
-	++Stat_FullSurfacePaintCopySamples;
+	FMemory::Free(Regions);
 }
 
 void USwuiView::TickDeferredUpload()
@@ -804,30 +781,7 @@ void USwuiView::TickDeferredUpload()
 	const double Now = FPlatformTime::Seconds();
 	++Stat_ViewUploadTicks;
 
-	TickFullSurfaceUpload(Now);
-}
-
-void USwuiView::TickFullSurfaceUpload(double Now)
-{
-	++Stat_FullSurfaceUploadTicks;
-
 	const bool bDebugForceEveryTick = IsForceFullFrameMode();
-
-	if (bDebugForceEveryTick)
-	{
-		if (!bFullSurfaceFirstEntryLogged)
-		{
-			bFullSurfaceFirstEntryLogged = true;
-
-			UE_LOG(LogSwuiRuntime, Log,
-				TEXT("[SwuiFullSurface] Force-every-tick mode ACTIVE — uploading full texture every tick, even without fresh CEF paint."));
-		}
-	}
-	else
-	{
-		bFullSurfaceFirstEntryLogged = false;
-	}
-
 	DriveContinuousBrowserFrame(Now, bDebugForceEveryTick);
 
 	if (!Texture || !Texture->GetResource())
@@ -847,136 +801,25 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 		return;
 	}
 
-	if (!bDebugForceEveryTick && !HasFreshOnPaintDataPending())
+	// Delegate to the renderer — it handles latest-frame-wins and the pool.
+	FullSurfaceRenderer.TickUpload(
+		static_cast<FTextureResource*>(Texture->GetResource()),
+		Now,
+		bDebugForceEveryTick);
+
+	// In force-every-tick mode, the renderer handles re-upload; we just log once.
+	if (bDebugForceEveryTick)
 	{
-		++Stat_FullSurfaceSkippedNoFreshPaint;
-		LogFullSurfaceStatsIfNeeded(Now);
-		return;
+		static bool bForceModeLogged = false;
+		if (!bForceModeLogged)
+		{
+			bForceModeLogged = true;
+			UE_LOG(LogSwuiRuntime, Log,
+				TEXT("[SwuiFullSurface] Force-every-tick mode ACTIVE — uploading full texture every tick, even without fresh CEF paint."));
+		}
 	}
 
-	UploadLatestFullSurface(bDebugForceEveryTick);
 	LogFullSurfaceStatsIfNeeded(Now);
-}
-
-void USwuiView::UploadLatestFullSurface(bool bForceMemcpy)
-{
-	const int32 SnapW = Texture->GetSizeX();
-	const int32 SnapH = Texture->GetSizeY();
-	const int32 FullPitch = SnapW * 4;
-	const int32 BufBytes = FullPitch * SnapH;
-
-	bool bShouldUpload = false;
-	uint64 LocalPaintGeneration = 0;
-	double LocalPaintArrivalTime = 0.0;
-
-	const double LockWaitStart = FPlatformTime::Seconds();
-
-	FSwuiPaintUploadData* UploadData = nullptr;
-
-	{
-		FScopeLock Lock(&PaintMutex);
-
-		Stat_FullSurfaceLockWaitMs += (FPlatformTime::Seconds() - LockWaitStart) * 1000.0;
-
-		const bool bHasFreshPaint = HasFreshOnPaintDataPending();
-
-		bShouldUpload = bForceMemcpy || bHasFreshPaint;
-
-		if (!bShouldUpload)
-		{
-			++Stat_FullSurfaceSkippedNoFreshPaint;
-		}
-		else if (BackingBuffer.Num() == BufBytes)
-		{
-			UploadData = new FSwuiPaintUploadData;
-			UploadData->Texture2DResource = static_cast<FTextureResource*>(Texture->GetResource());
-			UploadData->PackedPixels.SetNumUninitialized(BufBytes);
-			UploadData->Rects.SetNum(1);
-
-			const double CopyStart = FPlatformTime::Seconds();
-
-			if (bHasFreshPaint && !bForceMemcpy)
-			{
-				::Swap(UploadData->PackedPixels, BackingBuffer);
-			}
-			else
-			{
-				FPlatformMemory::Memcpy(
-					UploadData->PackedPixels.GetData(),
-					BackingBuffer.GetData(),
-					BufBytes);
-			}
-
-			const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
-
-			Stat_FullSurfaceUploadCopyMsSum += CopyMs;
-			Stat_FullSurfaceUploadCopyMsMax = FMath::Max(Stat_FullSurfaceUploadCopyMsMax, CopyMs);
-			++Stat_FullSurfaceUploadCopySamples;
-
-			LocalPaintGeneration = PendingFreshPaintGeneration;
-			LocalPaintArrivalTime = PendingFreshPaintArrivalTime;
-
-			if (bHasFreshPaint)
-			{
-				bHasPendingFullSurfacePaint = false;
-				UploadedFreshPaintGeneration = PendingFreshPaintGeneration;
-			}
-		}
-	}
-
-	if (!UploadData)
-	{
-		return;
-	}
-
-	FSwuiPackedRectDesc& Desc = UploadData->Rects[0];
-	Desc.Region = FUpdateTextureRegion2D(0, 0, 0, 0, SnapW, SnapH);
-	Desc.SrcPitch = static_cast<uint32>(FullPitch);
-	Desc.SrcOffsetBytes = 0;
-
-	const double EnqueueStart = FPlatformTime::Seconds();
-
-	ENQUEUE_RENDER_COMMAND(UpdateSwuiViewFullSurface)(
-		[UploadData](FRHICommandList& RHICmdList)
-		{
-			FRHITexture* Tex = UploadData->Texture2DResource
-				? UploadData->Texture2DResource->TextureRHI.GetReference()
-				: nullptr;
-
-			if (Tex)
-			{
-				const FSwuiPackedRectDesc& Rd = UploadData->Rects[0];
-
-				RHIUpdateTexture2D(
-					Tex,
-					0,
-					Rd.Region,
-					Rd.SrcPitch,
-					UploadData->PackedPixels.GetData());
-			}
-
-			delete UploadData;
-		});
-
-	const double EnqueueMs = (FPlatformTime::Seconds() - EnqueueStart) * 1000.0;
-
-	Stat_FullSurfaceEnqueueMsSum += EnqueueMs;
-	Stat_FullSurfaceEnqueueMsMax = FMath::Max(Stat_FullSurfaceEnqueueMsMax, EnqueueMs);
-	++Stat_FullSurfaceEnqueueSamples;
-
-	++Stat_FullSurfaceUploads;
-	Stat_FullSurfaceUploadedPx += int64(SnapW) * SnapH;
-
-	if (LocalPaintGeneration > 0 && LocalPaintArrivalTime > 0.0)
-	{
-		const double PaintToUploadMs = (FPlatformTime::Seconds() - LocalPaintArrivalTime) * 1000.0;
-
-		Stat_FullSurfacePaintToUploadMsSum += PaintToUploadMs;
-		Stat_FullSurfacePaintToUploadMsMax = FMath::Max(
-			Stat_FullSurfacePaintToUploadMsMax,
-			PaintToUploadMs);
-		++Stat_FullSurfacePaintToUploadSamples;
-	}
 }
 
 void USwuiView::DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTick)
@@ -1052,48 +895,64 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		return;
 	}
 
-	const float PaintCopyAvgMs = Stat_FullSurfacePaintCopySamples > 0
-		? static_cast<float>(Stat_FullSurfacePaintCopyMsSum / Stat_FullSurfacePaintCopySamples)
-		: 0.f;
+	// Refresh pool snapshot and read stats from the renderer.
+	FullSurfaceRenderer.RefreshPoolSnapshot();
+	const FSwuiFullSurfaceCpuRenderer::FStats& R = FullSurfaceRenderer.GetStats();
 
-	const float UploadCopyAvgMs = Stat_FullSurfaceUploadCopySamples > 0
-		? static_cast<float>(Stat_FullSurfaceUploadCopyMsSum / Stat_FullSurfaceUploadCopySamples)
+	const float PaintCopyAvgMs   = R.StatInterval_PaintCopySamples > 0
+		? static_cast<float>(R.StatInterval_PaintCopyMsSum / R.StatInterval_PaintCopySamples)
 		: 0.f;
-
-	const float EnqueueAvgMs = Stat_FullSurfaceEnqueueSamples > 0
-		? static_cast<float>(Stat_FullSurfaceEnqueueMsSum / Stat_FullSurfaceEnqueueSamples)
+	const float EnqueueAvgMs     = R.StatInterval_EnqueueSamples > 0
+		? static_cast<float>(R.StatInterval_EnqueueMsSum / R.StatInterval_EnqueueSamples)
 		: 0.f;
-
-	const float PaintToUploadAvgMs = Stat_FullSurfacePaintToUploadSamples > 0
-		? static_cast<float>(Stat_FullSurfacePaintToUploadMsSum / Stat_FullSurfacePaintToUploadSamples)
+	const float PaintToUploadAvgMs = R.StatInterval_PaintToUploadSamples > 0
+		? static_cast<float>(R.StatInterval_PaintToUploadMsSum / R.StatInterval_PaintToUploadSamples)
 		: 0.f;
-
 	const float PaintAfterBeginFrameAvgMs = Stat_PaintAfterBeginFrameSamples > 0
 		? static_cast<float>(Stat_PaintAfterBeginFrameMsSum / Stat_PaintAfterBeginFrameSamples)
 		: 0.f;
 
 	const TCHAR* PresetName = SwuiUiResolutionPresetName(InstanceSettings.UiResolutionPreset);
 
+	// Sanity checks.
+	if (R.StatInterval_Uploads > Stat_ViewUploadTicks + 2)
+	{
+		UE_LOG(LogSwuiRuntime, Warning,
+			TEXT("[SwuiFullSurface] Impossible stats: uploads (%d) exceed upload ticks (%d). Stats reset/wiring bug."),
+			R.StatInterval_Uploads, Stat_ViewUploadTicks);
+	}
+
+	if (R.StatInterval_Allocations > 0 && Stat_ViewUploadTicks > 10)
+	{
+		UE_LOG(LogSwuiRuntime, Warning,
+			TEXT("[SwuiFullSurface] Unexpected steady-state allocation detected: allocs=%d > 0 after view stabilised."),
+			R.StatInterval_Allocations);
+	}
+
 	UE_LOG(LogSwuiRuntime, Log,
-		TEXT("[SwuiFullSurface] preset=%s subsystemTicks/s=%d viewUploadTicks/s=%d uploadTicks/s=%d")
-		TEXT(" cefPaints/s=%d uploads/s=%d skippedNoFreshPaint/s=%d uploadedPx/s=%lld")
+		TEXT("[SwuiFullSurface] preset=%s subsystemTicks/s=%d viewUploadTicks/s=%d")
+		TEXT(" cefPaints/s=%d uploads/s=%d skippedNoFreshPaint/s=%d uploadedPx/s=%lld droppedPaints/s=%d replacedReady/s=%d")
+		TEXT(" pool{free=%d ready=%d inFlight=%d} allocs=%d")
 		TEXT(" externalBeginFrames/s=%d invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
 		TEXT(" extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
 		TEXT(" paintCopyAvgMs=%.3f paintCopyMaxMs=%.3f")
-		TEXT(" uploadCopyAvgMs=%.3f uploadCopyMaxMs=%.3f")
 		TEXT(" enqueueAvgMs=%.3f enqueueMaxMs=%.3f")
-		TEXT(" lockWaitMs=%.3f")
 		TEXT(" paintAfterBeginFrameAvgMs=%.3f paintAfterBeginFrameMaxMs=%.3f")
 		TEXT(" paintToUploadAvgMs=%.3f paintToUploadMaxMs=%.3f")
 		TEXT(" targetFps=%d browserFpsCap=%d tex=%dx%d forceEveryTick=%d"),
 		PresetName,
 		Stat_SubsystemTicks,
 		Stat_ViewUploadTicks,
-		Stat_FullSurfaceUploadTicks,
-		Stat_FullSurfaceCefPaints,
-		Stat_FullSurfaceUploads,
-		Stat_FullSurfaceSkippedNoFreshPaint,
-		Stat_FullSurfaceUploadedPx,
+		R.StatInterval_CefPaints,
+		R.StatInterval_Uploads,
+		R.StatInterval_SkippedNoFreshPaint,
+		R.StatInterval_UploadedPx,
+		R.StatInterval_DroppedPaints,
+		R.StatInterval_ReplacedReadyFrames,
+		R.PoolFree,
+		R.PoolReady,
+		R.PoolInFlight,
+		R.StatInterval_Allocations,
 		Stat_ExternalBeginFrames,
 		Stat_InvalidateView,
 		Stat_BeginFramesWithoutPaint,
@@ -1103,16 +962,13 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_ExternalBeginFrameSkipNoBrowser,
 		Stat_ExternalBeginFrameSkipRateLimited,
 		PaintCopyAvgMs,
-		Stat_FullSurfacePaintCopyMsMax,
-		UploadCopyAvgMs,
-		Stat_FullSurfaceUploadCopyMsMax,
+		R.StatInterval_PaintCopyMsMax,
 		EnqueueAvgMs,
-		Stat_FullSurfaceEnqueueMsMax,
-		Stat_FullSurfaceLockWaitMs,
+		R.StatInterval_EnqueueMsMax,
 		PaintAfterBeginFrameAvgMs,
 		Stat_PaintAfterBeginFrameMsMax,
 		PaintToUploadAvgMs,
-		Stat_FullSurfacePaintToUploadMsMax,
+		R.StatInterval_PaintToUploadMsMax,
 		TargetFpsForLog,
 		WindowlessFrameRate,
 		Texture ? Texture->GetSizeX() : 0,
@@ -1143,29 +999,8 @@ void USwuiView::ResetFullSurfaceStats()
 	Stat_PaintAfterBeginFrameMsMax = 0.0;
 	Stat_PaintAfterBeginFrameSamples = 0;
 
-	Stat_FullSurfaceUploadTicks = 0;
-	Stat_FullSurfaceUploads = 0;
-	Stat_FullSurfaceSkippedNoFreshPaint = 0;
-	Stat_FullSurfaceCefPaints = 0;
-	Stat_FullSurfaceUploadedPx = 0;
-
-	Stat_FullSurfacePaintCopyMsSum = 0.0;
-	Stat_FullSurfacePaintCopyMsMax = 0.0;
-	Stat_FullSurfacePaintCopySamples = 0;
-
-	Stat_FullSurfaceUploadCopyMsSum = 0.0;
-	Stat_FullSurfaceUploadCopyMsMax = 0.0;
-	Stat_FullSurfaceUploadCopySamples = 0;
-
-	Stat_FullSurfaceEnqueueMsSum = 0.0;
-	Stat_FullSurfaceEnqueueMsMax = 0.0;
-	Stat_FullSurfaceEnqueueSamples = 0;
-
-	Stat_FullSurfaceLockWaitMs = 0.0;
-
-	Stat_FullSurfacePaintToUploadMsSum = 0.0;
-	Stat_FullSurfacePaintToUploadMsMax = 0.0;
-	Stat_FullSurfacePaintToUploadSamples = 0;
+	// Reset renderer interval counters too.
+	FullSurfaceRenderer.ResetIntervalStats();
 }
 
 UTexture2D* USwuiView::GetOrCreateTexture(int32 InWidth, int32 InHeight)
@@ -1181,14 +1016,11 @@ UTexture2D* USwuiView::GetOrCreateTexture(int32 InWidth, int32 InHeight)
 		{
 			FScopeLock Lock(&PaintMutex);
 			bHasPendingFullSurfacePaint = false;
-			PendingFullSurfaceWidth = InWidth;
-			PendingFullSurfaceHeight = InHeight;
-			PendingFreshPaintGeneration = 0;
-			UploadedFreshPaintGeneration = 0;
 			PendingFreshPaintArrivalTime = 0.0;
 			LastPaintArrivalTime = 0.0;
-			BackingBuffer.Reset();
 		}
+
+		FullSurfaceRenderer.HandleTextureSizeChanged(InWidth, InHeight);
 
 		ResetMatInstance();
 	}
@@ -1207,14 +1039,12 @@ void USwuiView::ResetTexture()
 	{
 		FScopeLock Lock(&PaintMutex);
 		bHasPendingFullSurfacePaint = false;
-		PendingFullSurfaceWidth = Width;
-		PendingFullSurfaceHeight = Height;
-		PendingFreshPaintGeneration = 0;
-		UploadedFreshPaintGeneration = 0;
 		PendingFreshPaintArrivalTime = 0.0;
 		LastPaintArrivalTime = 0.0;
-		BackingBuffer.Reset();
 	}
+
+	FullSurfaceRenderer.Reset();
+	FullSurfaceRenderer.HandleTextureSizeChanged(Width, Height);
 
 	ResetMatInstance();
 }
@@ -1511,6 +1341,7 @@ void USwuiView::BeginDestroy()
 		CefData->Browser->GetHost()->CloseBrowser(true);
 	}
 
+	FullSurfaceRenderer.Reset();
 	DestroyTexture();
 
 	Super::BeginDestroy();

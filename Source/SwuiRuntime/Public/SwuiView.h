@@ -8,6 +8,7 @@
 
 #include "RenderHandler.h"
 #include "SwuiTypes.h"
+#include "SwuiFullSurfaceCpuRenderer.h"
 
 #include "SwuiView.generated.h"
 
@@ -126,30 +127,19 @@ public:
 private:
 	AActor* ResolveOwningActor() const;
 
-	// ---- Full-surface rendering path ----
-
-	void StageFullSurfacePaint(
-		const void* Buffer,
-		int32 InWidth,
-		int32 InHeight,
-		double PaintNow);
-
-	void TickFullSurfaceUpload(double Now);
-
-	void DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTick);
-	void UploadLatestFullSurface(bool bForceMemcpy);
-
-	void PumpBrowserFrameIfDue(double Now, bool bForceFrame);
-	void InvalidateBrowserView();
-
-	void LogFullSurfaceStatsIfNeeded(double Now);
-	void ResetFullSurfaceStats();
-
 	// ---- Texture / material lifecycle ----
 
 	void ResetTexture();
 	void DestroyTexture();
 	void ResetMatInstance();
+
+	// ---- Browser frame pacing helpers ----
+
+	void DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTick);
+	void PumpBrowserFrameIfDue(double Now, bool bForceFrame);
+	void InvalidateBrowserView();
+	void LogFullSurfaceStatsIfNeeded(double Now);
+	void ResetFullSurfaceStats();
 
 	// ---- Ownership / browser ----
 
@@ -191,20 +181,14 @@ private:
 	bool bPaintArrivedAfterExternalBeginFrame = false;
 	bool bPendingInvalidateForPaint = false;
 
-	// ---- Full-surface paint state ----
-	// Written from the CEF renderer thread, consumed from the game thread.
-	// Guarded by PaintMutex.
+	// ---- Full-surface CPU renderer (owns frame pool, staging, upload) ----
 
+	FSwuiFullSurfaceCpuRenderer FullSurfaceRenderer;
+
+	// Paint staging mutex for CEF renderer thread coordination.
 	mutable FCriticalSection PaintMutex;
 
-	TArray<uint8> BackingBuffer;
-
 	bool bHasPendingFullSurfacePaint = false;
-	int32 PendingFullSurfaceWidth = 0;
-	int32 PendingFullSurfaceHeight = 0;
-
-	uint64 PendingFreshPaintGeneration = 0;
-	uint64 UploadedFreshPaintGeneration = 0;
 
 	double LastPaintArrivalTime = 0.0;
 	double PendingFreshPaintArrivalTime = 0.0;
@@ -220,10 +204,6 @@ private:
 	int32 Stat_ExternalBeginFrameSkipDisabled = 0;
 	int32 Stat_ExternalBeginFrameSkipNoBrowser = 0;
 	int32 Stat_ExternalBeginFrameSkipRateLimited = 0;
-	int32 Stat_ExternalBeginFrameForced = 0;
-	int32 Stat_ExternalBeginFrameNonForced = 0;
-	int32 Stat_ExternalBeginFrameCoalescedPending = 0;
-	int32 Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	int32 Stat_InvalidateView = 0;
 	int32 Stat_BeginFramesWithoutPaint = 0;
 	int32 Stat_PaintsAfterInvalidate = 0;
@@ -234,33 +214,4 @@ private:
 
 	double Stat_LastLogTime = 0.0;
 	int32 TargetFpsForLog = 0;
-
-	// ---- Full-surface upload stats ----
-
-	bool bFullSurfaceFirstEntryLogged = false;
-
-	int32 Stat_FullSurfaceUploadTicks = 0;
-	int32 Stat_FullSurfaceUploads = 0;
-	int32 Stat_FullSurfaceSkippedNoFreshPaint = 0;
-	int32 Stat_FullSurfaceCefPaints = 0;
-
-	int64 Stat_FullSurfaceUploadedPx = 0;
-
-	double Stat_FullSurfacePaintCopyMsSum = 0.0;
-	double Stat_FullSurfacePaintCopyMsMax = 0.0;
-	int32 Stat_FullSurfacePaintCopySamples = 0;
-
-	double Stat_FullSurfaceUploadCopyMsSum = 0.0;
-	double Stat_FullSurfaceUploadCopyMsMax = 0.0;
-	int32 Stat_FullSurfaceUploadCopySamples = 0;
-
-	double Stat_FullSurfaceEnqueueMsSum = 0.0;
-	double Stat_FullSurfaceEnqueueMsMax = 0.0;
-	int32 Stat_FullSurfaceEnqueueSamples = 0;
-
-	double Stat_FullSurfaceLockWaitMs = 0.0;
-
-	double Stat_FullSurfacePaintToUploadMsSum = 0.0;
-	double Stat_FullSurfacePaintToUploadMsMax = 0.0;
-	int32 Stat_FullSurfacePaintToUploadSamples = 0;
 };
