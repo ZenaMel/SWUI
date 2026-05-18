@@ -807,10 +807,23 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 
 			const double CopyStart = FPlatformTime::Seconds();
 
-			FPlatformMemory::Memcpy(
-				UploadData->PackedPixels.GetData(),
-				BackingBuffer.GetData(),
-				BufBytes);
+			if (bHasFreshPaint)
+			{
+				// Zero-copy handoff: UploadData takes ownership of the latest painted
+				// buffer. BackingBuffer receives UploadData's pre-sized empty allocation
+				// for the next CEF OnPaint to fill.
+				::Swap(UploadData->PackedPixels, BackingBuffer);
+			}
+			else
+			{
+				// Only used by debug force-every-tick mode when no fresh CEF paint
+				// arrived. Keep memcpy so stale debug uploads do not upload an
+				// empty/uninitialized buffer.
+				FPlatformMemory::Memcpy(
+					UploadData->PackedPixels.GetData(),
+					BackingBuffer.GetData(),
+					BufBytes);
+			}
 
 			const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
 
