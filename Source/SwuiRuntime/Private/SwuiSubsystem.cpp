@@ -603,8 +603,6 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	// Drive continuous browser frame + upload latest full surface if fresh paint exists.
 	View->TickDeferredUpload();
 
-	bForceBrowserFrameThisTick = false;
-
 	const bool bCanFlushJs = !View->InstanceSettings.bPauseBrowserUpdates;
 	if (bCanFlushJs && FlushHudStateToJs(DeltaTime))
 	{
@@ -624,31 +622,25 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 {
 	if (!View) return false;
 
-	const bool bHudLockStep =
-		View->InstanceSettings.bIsHUD &&
-		SwuiCVarBool(
-			CVarSwuiHudLockstep.GetValueOnGameThread(),
-			View->InstanceSettings.bUseUEFrameLockedBrowser);
 	const bool bFlushBeforeFrame =
-		!bHudLockStep ||
 		SwuiCVarBool(
 			CVarSwuiHudFlushBeforeFrame.GetValueOnGameThread(),
 			View->InstanceSettings.bFlushHudStateBeforeBrowserFrame);
 	if (!bFlushBeforeFrame) return false;
-	const bool bUseCombinedHudFramePath = bHudLockStep && View->IsExternalBeginFrameActive();
-	const int32 BrowserFpsSetting = SwuiCVarInt(
+
+	const int32 CefFPS = SwuiCVarInt(
 		CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread(),
 		View->InstanceSettings.MaxBrowserFramesPerSecond);
-	const int32 CefFPS = BrowserFpsSetting > 0 ? BrowserFpsSetting : View->GetWindowlessFrameRate();
+	const int32 EffectiveFPS = CefFPS > 0 ? CefFPS : View->GetWindowlessFrameRate();
 
 	// Exponential moving average FPS (alpha=0.1, smoothed over ~10 frames)
 	if (DeltaTime > 0.f)
 		AvgFPS = AvgFPS * 0.9f + (1.f / DeltaTime) * 0.1f;
 	LastDeltaTime = DeltaTime;
 
-	if (!bHudLockStep)
+	// Rate-limit JS state pushes to the CEF frame rate to avoid flooding.
 	{
-		const float MinInterval = CefFPS > 0 ? 1.0f / static_cast<float>(CefFPS) : 1.0f / 120.f;
+		const float MinInterval = EffectiveFPS > 0 ? 1.0f / static_cast<float>(EffectiveFPS) : 1.0f / 120.f;
 		TickAccumulator += DeltaTime;
 		if (TickAccumulator < MinInterval) return false;
 		TickAccumulator = 0.f;
@@ -695,17 +687,11 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 			if (bChanged)
 			{
 				LastObservedValues.Add(Entry.NamespacedKey, JSValue);
-				if (Entry.NamespacedKey.Contains(TEXT("compass"), ESearchCase::IgnoreCase))
-				{
-					bForceBrowserFrameThisTick = true;
-				}
 				if (Entry.NamespacedKey.Contains(TEXT("ammo"), ESearchCase::IgnoreCase)
 					|| Entry.NamespacedKey.Contains(TEXT("reload"), ESearchCase::IgnoreCase)
 					|| Entry.NamespacedKey.Contains(TEXT("crosshair"), ESearchCase::IgnoreCase)
 					|| Entry.NamespacedKey.Contains(TEXT("ability"), ESearchCase::IgnoreCase))
 				{
-					bForceBrowserFrameThisTick = true;
-					MarkHudAnimationActive(0.20);
 				}
 			}
 
@@ -781,16 +767,7 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 		return false;
 	}
 
-	if (bUseCombinedHudFramePath)
-	{
-		const bool bAnimationWindowActive = FPlatformTime::Seconds() < HudAnimationActiveUntil;
-		const bool bForceFrame = bForceBrowserFrameThisTick || bAnimationWindowActive;
-		bLastFlushSentExternalBeginFrame = View->FlushHudStateAndRequestBrowserFrame(BatchedScript, DeltaTime, bForceFrame);
-	}
-	else
-	{
-		View->ExecuteJavaScript(BatchedScript);
-	}
+	View->ExecuteJavaScript(BatchedScript);
 
 	return bFlushed;
 }
@@ -817,13 +794,7 @@ void USwuiSubsystem::QueueHudEventScript(const FString& Script)
 	QueuedHudEventScripts.Add(Script);
 }
 
-void USwuiSubsystem::MarkHudAnimationActive(double DurationSeconds)
-{
-	const double Now = FPlatformTime::Seconds();
-	HudAnimationActiveUntil = FMath::Max(
-		HudAnimationActiveUntil,
-		Now + FMath::Max(0.0, DurationSeconds));
-}
+
 
 void USwuiSubsystem::UpdateLowLatencyFramePacing()
 {
@@ -919,8 +890,6 @@ void USwuiSubsystem::OnObservedDelegateFired()
 			|| Entry.NamespacedKey.Contains(TEXT("ability"), ESearchCase::IgnoreCase))
 		{
 			QueueHudEventScript(TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.weaponFired)window.__SWUI_HUD__.weaponFired({});"));
-			bForceBrowserFrameThisTick = true;
-			MarkHudAnimationActive(0.20);
 		}
 	}
 }

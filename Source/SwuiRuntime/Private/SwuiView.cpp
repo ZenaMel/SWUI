@@ -597,8 +597,6 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(
 
 	// Coalescing: if a previous begin frame is still pending without paint
 	// and hasn't timed out yet, skip this non-forced, scriptless begin frame.
-	// When bHasScript is true we never coalesce — the script is piggybacked
-	// on the begin frame to keep JS state updates responsive.
 	{
 		FScopeLock Lock(&PaintMutex);
 		if (!bForceFrame && !bHasScript &&
@@ -608,14 +606,7 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(
 			const double Now = FPlatformTime::Seconds();
 			if ((Now - PendingBeginFrameSentTime) < BrowserFrameTimeout)
 			{
-				++Stat_ExternalBeginFrameCoalescedPending;
-				// No script to execute (bHasScript was false), nothing to post.
 				return false;
-			}
-			else
-			{
-				// Pending begin frame timed out — let this one through.
-				++Stat_ExternalBeginFrameCoalescedTimeout;
 			}
 		}
 	}
@@ -682,8 +673,6 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(
 		}
 
 		++Stat_ExternalBeginFrames;
-		if (bForceFrame) ++Stat_ExternalBeginFrameForced;
-		else ++Stat_ExternalBeginFrameNonForced;
 	}
 
 	if (bHasScript || bWillSendBeginFrame)
@@ -1088,9 +1077,8 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 	UE_LOG(LogSwuiRuntime, Log,
 		TEXT("[SwuiFullSurface] preset=%s subsystemTicks/s=%d viewUploadTicks/s=%d uploadTicks/s=%d")
 		TEXT(" cefPaints/s=%d uploads/s=%d skippedNoFreshPaint/s=%d uploadedPx/s=%lld")
-		TEXT(" externalBeginFrames/s=%d[forced=%d nonForced=%d] invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
+		TEXT(" externalBeginFrames/s=%d invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
 		TEXT(" extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
-		TEXT(" extBeginCoalesce[pending=%d timeout=%d]")
 		TEXT(" paintCopyAvgMs=%.3f paintCopyMaxMs=%.3f")
 		TEXT(" uploadCopyAvgMs=%.3f uploadCopyMaxMs=%.3f")
 		TEXT(" enqueueAvgMs=%.3f enqueueMaxMs=%.3f")
@@ -1107,8 +1095,6 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_FullSurfaceSkippedNoFreshPaint,
 		Stat_FullSurfaceUploadedPx,
 		Stat_ExternalBeginFrames,
-		Stat_ExternalBeginFrameForced,
-		Stat_ExternalBeginFrameNonForced,
 		Stat_InvalidateView,
 		Stat_BeginFramesWithoutPaint,
 		Stat_PaintsAfterInvalidate,
@@ -1116,8 +1102,6 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_ExternalBeginFrameSkipDisabled,
 		Stat_ExternalBeginFrameSkipNoBrowser,
 		Stat_ExternalBeginFrameSkipRateLimited,
-		Stat_ExternalBeginFrameCoalescedPending,
-		Stat_ExternalBeginFrameCoalescedTimeout,
 		PaintCopyAvgMs,
 		Stat_FullSurfacePaintCopyMsMax,
 		UploadCopyAvgMs,
@@ -1146,10 +1130,6 @@ void USwuiView::ResetFullSurfaceStats()
 	Stat_HudStateFlushes = 0;
 
 	Stat_ExternalBeginFrames = 0;
-	Stat_ExternalBeginFrameForced = 0;
-	Stat_ExternalBeginFrameNonForced = 0;
-	Stat_ExternalBeginFrameCoalescedPending = 0;
-	Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	Stat_ExternalBeginFrameSkipInactive = 0;
 	Stat_ExternalBeginFrameSkipDisabled = 0;
 	Stat_ExternalBeginFrameSkipNoBrowser = 0;

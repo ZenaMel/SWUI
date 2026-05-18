@@ -2,52 +2,85 @@
 
 **SWUI** is a web UI layer for Unreal Engine.
 
-It lets you build HUDs, menus, overlays, and interactive game UI with HTML, CSS, and TypeScript, while keeping gameplay state and event wiring inside Unreal.
+Build HUDs, menus, overlays, and interactive game UI with browser technologies such as **HTML, CSS, JavaScript, TypeScript, React, Vue, Svelte, or your own frontend setup**.
 
-SWUI uses a bundled CEF/Chromium runtime through its initial BLUI-derived backend.
+SWUI keeps gameplay state, events, and input wiring inside Unreal while letting the visual UI layer live in a web runtime.
 
-## What SWUI does
+## Why SWUI?
 
-SWUI connects reflected Unreal properties and events to a generated TypeScript API.
+Unreal UI work often needs a lot of glue:
 
-Instead of manually building JSON, calling JavaScript, or matching raw string event names, you define the UI contract from Unreal objects, properties, and delegates.
+- manually pushing values to JavaScript
+- hand-writing JSON payloads
+- matching raw string event names
+- wiring Blueprint events to browser callbacks
+- keeping Unreal state and frontend state in sync
 
-SWUI then handles:
+SWUI reduces that plumbing by generating a bridge between Unreal and the web UI.
 
-- reading reflected Unreal values
-- inferring value types and ranges
-- forwarding gameplay events
-- generating TypeScript bindings
-- updating the web UI only when values change
-- previewing the UI without launching Unreal Editor
+The goal is simple:
 
-## Workflow
+> Build UI like a web app. Wire it like an Unreal system.
 
-1. Select Unreal properties and events for your UI.
-2. SWUI generates a typed TypeScript facade.
-3. Build the visual layer with HTML, CSS, and TypeScript.
-4. Preview the UI in a dedicated CEF window.
-5. Run the same UI in Unreal.
+## Core idea
+
+Define the UI-facing state and events in Unreal.
+
+SWUI exposes them to JavaScript and generates optional TypeScript-friendly bindings for projects that want stronger typing.
+
+```text
+Unreal properties, events, and GameplayTags
+        ↓
+SWUI bridge
+        ↓
+Browser UI: HTML / CSS / JS / any framework
+        ↓
+GameplayTag-based events back to Unreal
+````
+
+## What already works
+
+SWUI has already proven the core Unreal ↔ JavaScript interop path:
+
+* Unreal values can be exposed to the web UI
+* JavaScript can react to Unreal-driven updates
+* JavaScript can emit events back into Unreal
+* GameplayTag-based event routing works
+* Blueprint-side event dispatchers and emitters are usable
+* HUD/menu interactions can be wired with little to no manual glue
+* local web UI files can run through the CEF-backed runtime
+* preview/control workflows are already part of the architecture
+
+## What SWUI handles
+
+* exposing selected Unreal values to JavaScript
+* forwarding Unreal events to the web UI
+* sending web UI events back to Unreal
+* routing UI actions through GameplayTags
+* generating TypeScript-friendly contracts where useful
+* updating UI state only when values change
+* previewing UI outside normal gameplay
+* keeping the Unreal/web bridge structured instead of stringly-typed
 
 ## Example use cases
 
-- HUDs
-- dynamic crosshairs
-- health, ammo, and stamina displays
-- interaction prompts
-- objective trackers
-- menus
-- inventory screens
-- dialogue UI
-- debug overlays
+* HUDs
+* pause menus
+* interaction prompts
+* objective trackers
+* dialogue UI
+* inventory screens
+* debug overlays
+* internal control panels
+* custom editor/runtime tools
 
-## Preview
+## Workflow
 
-SWUI includes a standalone preview window.
-
-The preview uses the same bundled CEF/Chromium runtime as the Unreal backend, so the UI is tested in the same browser environment it will use at runtime.
-
-Generated preview controls allow values such as numbers, booleans, strings, enums, and events to be changed live.
+1. Expose Unreal properties, events, and GameplayTags.
+2. Generate or use the SWUI bridge API.
+3. Build the UI with your preferred web stack.
+4. Preview and test the UI.
+5. Run the same UI inside Unreal.
 
 ## Local UI files
 
@@ -59,36 +92,48 @@ YourProject/Content/html/
 
 Example:
 
-```
+```text
 YourProject/Content/html/MainHUD/dist/index.html
 ```
 
 Load it with:
 
-```
+```text
 local://MainHUD/dist/index.html
 ```
 
-## C++ naming
+## Platform Support
 
-SWUI uses readable Unreal-style class names such as:
+SWUI currently targets desktop Unreal Engine projects using a CEF/Chromium backend.
 
-```
-USwuiBridge
-USwuiView
-USwuiBindingAsset
-FSwuiPayload
-ISwuiBackend
-```
+| Platform                   |          Status | Notes                            |
+| -------------------------- | --------------: | -------------------------------- |
+| Windows x64                |  🧪 Experimental | Primary target, needs validation |
+| Windows ARM64              |  🧪 Experimental | Needs validation                 |
+| macOS                      |     ✅ Supported | Desktop CEF backend available    |
+| Linux                      |  🧪 Experimental | Needs packaging validation       |
+| Android                    | ❌ Not supported | No CEF backend                   |
+| iOS                        | ❌ Not supported | No CEF backend                   |
+| PlayStation 5              | ❌ Not supported | No UE-bundled CEF support        |
+| Xbox Series X/S            | ❌ Not supported | No UE-bundled CEF support        |
+| Nintendo Switch / Switch 2 | ❌ Not supported | No UE-bundled CEF support        |
+
+### Legend
+
+| Icon | Meaning       |
+| ---- | ------------- |
+| ✅    | Supported     |
+| 🧪    | Experimental  |
+| ❌    | Not supported |
 
 ## Status
 
-SWUI is an early-stage project derived from the BLUI/SimpleWebUI plugin lineage.
+SWUI is an active early-stage Unreal Engine plugin derived from the BLUI / SimpleWebUI lineage.
 
-The initial focus is a reflection-driven HUD workflow, using a dynamic crosshair sample to dogfood the API and preview system.
+The core Unreal ↔ JavaScript interop model is already working well. The current focus is improving the developer workflow, generated bindings, preview tooling, event ergonomics, packaging, and desktop runtime stability.
 
 ## Credits
 
-SWUI is derived from the BLUI/SimpleWebUI lineage and keeps the CEF-backed Unreal browser integration model.
+SWUI is derived from the BLUI / SimpleWebUI lineage and keeps the CEF-backed Unreal browser integration model.
 
 Original license notices and credits are preserved according to the upstream license.

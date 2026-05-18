@@ -158,13 +158,9 @@ private:
 	bool FlushHudStateToJs(float DeltaTime);
 	void QueueHudEventScript(const FString& Script);
 	bool SendExternalBeginFrameIfDue(float DeltaTime);
-	void MarkHudAnimationActive(double DurationSeconds);
 
 	TArray<FString> QueuedHudEventScripts;
 	TMap<FString, FString> LastObservedValues;
-	double HudAnimationActiveUntil = 0.0;
-	bool bForceBrowserFrameThisTick = false;
-	bool bLastFlushSentExternalBeginFrame = false;
 
 	/** Last interaction time, used to keep the animation window active after pointer events. */
 	double LastUiInteractionTime = 0.0;
