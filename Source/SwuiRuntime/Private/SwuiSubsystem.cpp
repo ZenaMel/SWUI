@@ -652,15 +652,12 @@ void USwuiSubsystem::Tick(float DeltaTime)
 		View->TickDeferredUpload();
 	}
 
-	// Interactive mode: keep animation active while pointer activity is recent.
-	if (View->IsUiInteractionActive())
+	// Keep animation active while pointer activity is recent.
+	const double Now = FPlatformTime::Seconds();
+	if (Now - LastUiInteractionTime < 0.5)
 	{
-		const double Now = FPlatformTime::Seconds();
-		if (Now - LastUiInteractionTime < 0.5)
-		{
-			bForceBrowserFrameThisTick = true;
-			MarkHudAnimationActive(0.50);
-		}
+		bForceBrowserFrameThisTick = true;
+		MarkHudAnimationActive(0.50);
 	}
 
 	if (bUseHudLockstepMode)
@@ -856,15 +853,8 @@ void USwuiSubsystem::RequestHudVisualRefresh(float DurationSeconds, bool bForceF
 	MarkHudAnimationActive(DurationSeconds);
 	if (bForceFullUpload && View)
 	{
-		View->RequestFullTextureUploadNextFrame();
+		View->RequestBrowserVisualRefresh(true);
 	}
-}
-
-void USwuiSubsystem::BeginFullTransitionRefresh(int32 FreshPaintCount)
-{
-	if (View) View->BeginFullTransitionRefresh(FreshPaintCount);
-	bForceBrowserFrameThisTick = true;
-	MarkHudAnimationActive(0.50);
 }
 
 void USwuiSubsystem::UpdateUiInteractionTime()
@@ -872,29 +862,21 @@ void USwuiSubsystem::UpdateUiInteractionTime()
 	LastUiInteractionTime = FPlatformTime::Seconds();
 }
 
-void USwuiSubsystem::SetUiInteractionActive(bool bActive)
-{
-	if (View) View->SetUiInteractionActive(bActive);
-	if (bActive)
-	{
-		LastUiInteractionTime = FPlatformTime::Seconds();
-		MarkHudAnimationActive(0.50);
-	}
-	UpdateLowLatencyFramePacing();
-}
-
 void USwuiSubsystem::QueueHudEventScript(const FString& Script)
 {
-	if (!Script.IsEmpty())
+	if (Script.IsEmpty())
 	{
-		QueuedHudEventScripts.Add(Script);
+		return;
 	}
+	QueuedHudEventScripts.Add(Script);
 }
 
 void USwuiSubsystem::MarkHudAnimationActive(double DurationSeconds)
 {
 	const double Now = FPlatformTime::Seconds();
-	HudAnimationActiveUntil = FMath::Max(HudAnimationActiveUntil, Now + DurationSeconds);
+	HudAnimationActiveUntil = FMath::Max(
+		HudAnimationActiveUntil,
+		Now + FMath::Max(0.0, DurationSeconds));
 }
 
 void USwuiSubsystem::UpdateLowLatencyFramePacing()
@@ -909,7 +891,7 @@ void USwuiSubsystem::UpdateLowLatencyFramePacing()
 	switch (ConfiguredMode)
 	{
 	case ESwuiLowLatencyFramePacingMode::WhileInteractiveUiActive:
-		bShouldApply = View && View->IsUiInteractionActive();
+		bShouldApply = (View != nullptr);
 		break;
 	case ESwuiLowLatencyFramePacingMode::WhileAnySwuiViewActive:
 		bShouldApply = (View != nullptr);

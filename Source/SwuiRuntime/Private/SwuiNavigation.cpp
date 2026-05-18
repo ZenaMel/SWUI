@@ -263,13 +263,12 @@ void USwuiNavigation::SetMenuInputActive(bool bActive)
 		SwuiSub->SetPointerInputEnabled(true);
 		SwuiSub->SetBrowserInputFocus(true);
 
-		SwuiSub->SetUiInteractionActive(true);
-		SwuiSub->BeginFullTransitionRefresh(3);
+		SwuiSub->RequestHudVisualRefresh(0.50f, true);
 
 		if (bDebugLog)
 		{
 			UE_LOG(LogSwuiNavigation, Log,
-				TEXT("[SwuiNav] SetMenuInputActive(true) — cursor=show  input=GameAndUI  pointerForwarding=enabled  browserFocus=true  transition=FullTransition  debugLog=%d"),
+				TEXT("[SwuiNav] SetMenuInputActive(true) — cursor=show  input=GameAndUI  pointerForwarding=enabled  browserFocus=true  refresh=RequestHudVisualRefresh  debugLog=%d"),
 				bDebugLog ? 1 : 0);
 		}
 	}
@@ -277,7 +276,6 @@ void USwuiNavigation::SetMenuInputActive(bool bActive)
 	{
 		SwuiSub->SetBrowserInputFocus(false);
 		SwuiSub->SetPointerInputEnabled(false);
-		SwuiSub->SetUiInteractionActive(false);
 
 		PC->bShowMouseCursor = false;
 		PC->bEnableClickEvents = false;
@@ -455,7 +453,7 @@ void USwuiNavigation::RefreshHudFrame(bool bForceFullFrameRefresh)
 	UGameInstance* GI = World->GetGameInstance();
 	if (!GI) return;
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
-	if (Sub) Sub->BeginFullTransitionRefresh(3);
+	if (Sub) Sub->RequestHudVisualRefresh(0.50f, true);
 }
 
 void USwuiNavigation::EmitEvent(FGameplayTag Event, bool bForceFullFrameRefresh)

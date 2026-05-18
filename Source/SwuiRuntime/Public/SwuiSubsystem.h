@@ -106,18 +106,9 @@ public:
 	 *  texture upload on the next frame. */
 	void RequestHudVisualRefresh(float DurationSeconds = 0.30f, bool bForceFullUpload = true);
 
-	/** Marks whether SWUI UI interaction (menu/inventory/etc.) is active.
-	 *  When true, the subsystem keeps the animation window active while
-	 *  pointer activity is recent. */
-	void SetUiInteractionActive(bool bActive);
-
 	/** Updates the interaction timer (called from TickComponent when pointer
 	 *  activity is detected). Extends the interactive frame-forcing window. */
 	void UpdateUiInteractionTime();
-
-	/** Begins a full transition refresh on the view (forces full CEF copies
-	 *  and full surface uploads for the given number of fresh paints). */
-	void BeginFullTransitionRefresh(int32 FreshPaintCount = 3);
 
 	// ---- Pointer Input Forwarding (bridge to View) ----
 
@@ -175,7 +166,7 @@ private:
 	bool bForceBrowserFrameThisTick = false;
 	bool bLastFlushSentExternalBeginFrame = false;
 
-	/** Last time SetUiInteractionActive was called with true, or pointer activity was detected. */
+	/** Last interaction time, used to keep the animation window active after pointer events. */
 	double LastUiInteractionTime = 0.0;
 
 	/** Slate input preprocessor for raw pointer forwarding to CEF. */
