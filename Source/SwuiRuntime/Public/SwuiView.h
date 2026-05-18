@@ -213,6 +213,10 @@ private:
 	int32 Stat_HudStateFlushes = 0;
 
 	int32 Stat_ExternalBeginFrames = 0;
+	int32 Stat_ExternalBeginFrameForced = 0;
+	int32 Stat_ExternalBeginFrameNonForced = 0;
+	int32 Stat_ExternalBeginFrameCoalescedPending = 0;
+	int32 Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	int32 Stat_ExternalBeginFrameSkipInactive = 0;
 	int32 Stat_ExternalBeginFrameSkipDisabled = 0;
 	int32 Stat_ExternalBeginFrameSkipNoBrowser = 0;

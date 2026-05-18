@@ -255,6 +255,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
 	bool bDebugForceFullFrameUploadEveryFrame = false;
 
+	// ---- UI Resolution -----------------------------------------------------
+
+	/** Internal UI render resolution preset. Controls the CEF render size and
+	 *  SWUI texture size before HUD scaling. Lower resolutions = faster paint
+	 *  copies at the cost of sharpness when scaled to the game viewport. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|UI Resolution")
+	ESwuiUiResolutionPreset UiResolutionPreset = ESwuiUiResolutionPreset::Quality1080p;
+
+	/** Custom UI width (only used when UiResolutionPreset is Custom). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|UI Resolution",
+		meta=(EditCondition="UiResolutionPreset == ESwuiUiResolutionPreset::Custom", ClampMin="1"))
+	int32 CustomUiWidth = 1920;
+
+	/** Custom UI height (only used when UiResolutionPreset is Custom). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|UI Resolution",
+		meta=(EditCondition="UiResolutionPreset == ESwuiUiResolutionPreset::Custom", ClampMin="1"))
+	int32 CustomUiHeight = 1080;
+
 	/** Focused SWUI dirty upload tuning (hybrid rect+tile path with center-critical lane). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance")
 	FSwuiDirtyUploadSettings DirtyUploadSettings;

@@ -30,6 +30,11 @@ extern TAutoConsoleVariable<int32> CVarSwuiDebugLogPaintStats;
 extern TAutoConsoleVariable<int32> CVarSwuiDebugShowDirtyRects;
 extern TAutoConsoleVariable<int32> CVarSwuiDebugForceFullFrameUploadEveryFrame;
 
+// UI resolution presets
+extern TAutoConsoleVariable<int32> CVarSwuiUiResolutionPreset;
+extern TAutoConsoleVariable<int32> CVarSwuiCustomUiWidth;
+extern TAutoConsoleVariable<int32> CVarSwuiCustomUiHeight;
+
 // Profiling helpers
 extern TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload;
 extern TAutoConsoleVariable<int32> CVarSwuiVerbosePaint;

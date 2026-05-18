@@ -45,6 +45,8 @@ class RenderHandler : public CefRenderHandler
 			ISwuiAcceleratedRenderTarget* InAcceleratedTarget = nullptr,
 			ESwuiRenderingMode InMode = ESwuiRenderingMode::CpuCompatible);
 
+		void SetViewSize(int32 NewWidth, int32 NewHeight);
+
 	public:
 		IMPLEMENT_REFCOUNTING(RenderHandler);
 };

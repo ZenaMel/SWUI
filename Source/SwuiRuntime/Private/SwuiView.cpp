@@ -96,9 +96,65 @@ USwuiView::USwuiView()
 	CefData = MakeShared<FSwuiViewCefData>();
 }
 
+// ---------------------------------------------------------------------------
+// UI Resolution preset helpers
+// ---------------------------------------------------------------------------
+static FIntPoint ResolveSwuiUiResolution(const FSwuiInstanceSettings& Settings, const FIntPoint& ViewportSize)
+{
+	const int32 PresetOverride = CVarSwuiUiResolutionPreset.GetValueOnGameThread();
+	const ESwuiUiResolutionPreset EffectivePreset = (PresetOverride >= 0 && PresetOverride <= 5)
+		? static_cast<ESwuiUiResolutionPreset>(PresetOverride)
+		: Settings.UiResolutionPreset;
+
+	switch (EffectivePreset)
+	{
+	case ESwuiUiResolutionPreset::Performance720p:
+		return FIntPoint(1280, 720);
+	case ESwuiUiResolutionPreset::Balanced900p:
+		return FIntPoint(1600, 900);
+	case ESwuiUiResolutionPreset::Quality1080p:
+		return FIntPoint(1920, 1080);
+	case ESwuiUiResolutionPreset::High1440p:
+		return FIntPoint(2560, 1440);
+	case ESwuiUiResolutionPreset::NativeViewport:
+		return (ViewportSize.X > 0 && ViewportSize.Y > 0)
+			? ViewportSize
+			: FIntPoint(1920, 1080);
+	case ESwuiUiResolutionPreset::Custom:
+	{
+		const int32 W = SwuiCVarInt(CVarSwuiCustomUiWidth.GetValueOnGameThread(),  Settings.CustomUiWidth);
+		const int32 H = SwuiCVarInt(CVarSwuiCustomUiHeight.GetValueOnGameThread(), Settings.CustomUiHeight);
+		return FIntPoint(FMath::Max(1, W), FMath::Max(1, H));
+	}
+	default:
+		return FIntPoint(1920, 1080);
+	}
+}
+
+static const TCHAR* SwuiUiResolutionPresetName(ESwuiUiResolutionPreset Preset)
+{
+	switch (Preset)
+	{
+	case ESwuiUiResolutionPreset::Performance720p: return TEXT("Performance720p");
+	case ESwuiUiResolutionPreset::Balanced900p:    return TEXT("Balanced900p");
+	case ESwuiUiResolutionPreset::Quality1080p:    return TEXT("Quality1080p");
+	case ESwuiUiResolutionPreset::High1440p:       return TEXT("High1440p");
+	case ESwuiUiResolutionPreset::NativeViewport:  return TEXT("NativeViewport");
+	case ESwuiUiResolutionPreset::Custom:          return TEXT("Custom");
+	default:                                       return TEXT("Unknown");
+	}
+}
+
 void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 {
 	InstanceSettings = InInstanceSettings;
+
+	// Resolve UI resolution preset: override Width/Height with the internal
+	// render size chosen by the user, keeping the Subsystem-provided values
+	// as the viewport reference for NativeViewport mode.
+	const FIntPoint ResolvedRes = ResolveSwuiUiResolution(InstanceSettings, FIntPoint(Width, Height));
+	Width  = ResolvedRes.X;
+	Height = ResolvedRes.Y;
 
 	if (Width <= 0 || Height <= 0)
 	{
@@ -112,6 +168,11 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 		CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 ||
 		InstanceSettings.bVerbosePaintLog ||
 		(Settings && Settings->bVerbosePaintLog);
+
+	UE_LOG(LogSwuiRuntime, Log,
+		TEXT("[SWUI RESOLUTION] preset=%s internal=%dx%d"),
+		SwuiUiResolutionPresetName(InstanceSettings.UiResolutionPreset),
+		Width, Height);
 
 	CefWindowInfo Info;
 	Info.SetAsWindowless(0);
@@ -534,6 +595,31 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(
 		return false;
 	}
 
+	// Coalescing: if a previous begin frame is still pending without paint
+	// and hasn't timed out yet, skip this non-forced, scriptless begin frame.
+	// When bHasScript is true we never coalesce — the script is piggybacked
+	// on the begin frame to keep JS state updates responsive.
+	{
+		FScopeLock Lock(&PaintMutex);
+		if (!bForceFrame && !bHasScript &&
+			PendingBeginFrameSentTime > 0.0 &&
+			!bPaintArrivedAfterExternalBeginFrame)
+		{
+			const double Now = FPlatformTime::Seconds();
+			if ((Now - PendingBeginFrameSentTime) < BrowserFrameTimeout)
+			{
+				++Stat_ExternalBeginFrameCoalescedPending;
+				// No script to execute (bHasScript was false), nothing to post.
+				return false;
+			}
+			else
+			{
+				// Pending begin frame timed out — let this one through.
+				++Stat_ExternalBeginFrameCoalescedTimeout;
+			}
+		}
+	}
+
 	const int32 BrowserFpsSetting = SwuiCVarInt(
 		CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread(),
 		InstanceSettings.MaxBrowserFramesPerSecond);
@@ -596,6 +682,8 @@ bool USwuiView::FlushHudStateAndRequestBrowserFrame(
 		}
 
 		++Stat_ExternalBeginFrames;
+		if (bForceFrame) ++Stat_ExternalBeginFrameForced;
+		else ++Stat_ExternalBeginFrameNonForced;
 	}
 
 	if (bHasScript || bWillSendBeginFrame)
@@ -994,11 +1082,14 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		? static_cast<float>(Stat_PaintAfterBeginFrameMsSum / Stat_PaintAfterBeginFrameSamples)
 		: 0.f;
 
+	const TCHAR* PresetName = SwuiUiResolutionPresetName(InstanceSettings.UiResolutionPreset);
+
 	UE_LOG(LogSwuiRuntime, Log,
-		TEXT("[SwuiFullSurface] subsystemTicks/s=%d viewUploadTicks/s=%d uploadTicks/s=%d")
+		TEXT("[SwuiFullSurface] preset=%s subsystemTicks/s=%d viewUploadTicks/s=%d uploadTicks/s=%d")
 		TEXT(" cefPaints/s=%d uploads/s=%d skippedNoFreshPaint/s=%d uploadedPx/s=%lld")
-		TEXT(" externalBeginFrames/s=%d invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
+		TEXT(" externalBeginFrames/s=%d[forced=%d nonForced=%d] invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
 		TEXT(" extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
+		TEXT(" extBeginCoalesce[pending=%d timeout=%d]")
 		TEXT(" paintCopyAvgMs=%.3f paintCopyMaxMs=%.3f")
 		TEXT(" uploadCopyAvgMs=%.3f uploadCopyMaxMs=%.3f")
 		TEXT(" enqueueAvgMs=%.3f enqueueMaxMs=%.3f")
@@ -1006,6 +1097,7 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		TEXT(" paintAfterBeginFrameAvgMs=%.3f paintAfterBeginFrameMaxMs=%.3f")
 		TEXT(" paintToUploadAvgMs=%.3f paintToUploadMaxMs=%.3f")
 		TEXT(" browserFpsCap=%d tex=%dx%d forceEveryTick=%d"),
+		PresetName,
 		Stat_SubsystemTicks,
 		Stat_ViewUploadTicks,
 		Stat_FullSurfaceUploadTicks,
@@ -1014,6 +1106,8 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_FullSurfaceSkippedNoFreshPaint,
 		Stat_FullSurfaceUploadedPx,
 		Stat_ExternalBeginFrames,
+		Stat_ExternalBeginFrameForced,
+		Stat_ExternalBeginFrameNonForced,
 		Stat_InvalidateView,
 		Stat_BeginFramesWithoutPaint,
 		Stat_PaintsAfterInvalidate,
@@ -1021,6 +1115,8 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_ExternalBeginFrameSkipDisabled,
 		Stat_ExternalBeginFrameSkipNoBrowser,
 		Stat_ExternalBeginFrameSkipRateLimited,
+		Stat_ExternalBeginFrameCoalescedPending,
+		Stat_ExternalBeginFrameCoalescedTimeout,
 		PaintCopyAvgMs,
 		Stat_FullSurfacePaintCopyMsMax,
 		UploadCopyAvgMs,
@@ -1048,6 +1144,10 @@ void USwuiView::ResetFullSurfaceStats()
 	Stat_HudStateFlushes = 0;
 
 	Stat_ExternalBeginFrames = 0;
+	Stat_ExternalBeginFrameForced = 0;
+	Stat_ExternalBeginFrameNonForced = 0;
+	Stat_ExternalBeginFrameCoalescedPending = 0;
+	Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	Stat_ExternalBeginFrameSkipInactive = 0;
 	Stat_ExternalBeginFrameSkipDisabled = 0;
 	Stat_ExternalBeginFrameSkipNoBrowser = 0;

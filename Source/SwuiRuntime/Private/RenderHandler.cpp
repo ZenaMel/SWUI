@@ -138,6 +138,12 @@ void RenderHandler::GetViewRect(CefRefPtr<CefBrowser> Browser, CefRect &Rect)
 	Rect = CefRect(0, 0, Width, Height);
 }
 
+void RenderHandler::SetViewSize(int32 NewWidth, int32 NewHeight)
+{
+	Width  = NewWidth;
+	Height = NewHeight;
+}
+
 void RenderHandler::OnPaint(CefRefPtr<CefBrowser> Browser, PaintElementType Type, const RectList &DirtyRects, const void *Buffer, int InWidth, int InHeight)
 {
 	if (!RenderTarget || !Buffer)

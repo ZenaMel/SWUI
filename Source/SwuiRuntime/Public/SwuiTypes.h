@@ -30,6 +30,17 @@ enum class ESwuiLowLatencyFramePacingMode : uint8
 	WhileAnySwuiViewActive    UMETA(DisplayName = "While Any SWUI View Active")
 };
 
+UENUM(BlueprintType)
+enum class ESwuiUiResolutionPreset : uint8
+{
+	Performance720p UMETA(DisplayName = "Performance - 1280x720"),
+	Balanced900p    UMETA(DisplayName = "Balanced - 1600x900"),
+	Quality1080p    UMETA(DisplayName = "Quality - 1920x1080"),
+	High1440p       UMETA(DisplayName = "High - 2560x1440"),
+	NativeViewport  UMETA(DisplayName = "Native Viewport"),
+	Custom          UMETA(DisplayName = "Custom")
+};
+
 // ---------------------------------------------------------------------------
 // Navigation enums — used by USwuiNavigation for menu/input routing.
 // ---------------------------------------------------------------------------
@@ -129,6 +140,11 @@ struct FSwuiInstanceSettings
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
 	bool  bShowDirtyRectOverlay     = false; // push dirty rects + stats to __SWUI_DEBUG_RECTS__ at ~10 Hz
 	bool  bDebugForceFullFrameUploadEveryFrame = false; // bypass all optimisations, upload full texture every frame
+
+	// UI resolution preset — internal render size before HUD scaling.
+	ESwuiUiResolutionPreset UiResolutionPreset = ESwuiUiResolutionPreset::Quality1080p;
+	int32 CustomUiWidth  = 1920;
+	int32 CustomUiHeight = 1080;
 
 	// Focused hybrid upload-path tuning
 	bool  bEnableHybridDirtyUpload             = true;

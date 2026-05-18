@@ -131,6 +131,26 @@ TAutoConsoleVariable<int32> CVarSwuiDebugForceFullFrameUploadEveryFrame(
 	TEXT("Also forces browser frame pumping. 0=off, 1=on."),
 	ECVF_Default);
 
+// UI resolution presets
+TAutoConsoleVariable<int32> CVarSwuiUiResolutionPreset(
+	TEXT("swui.hud.UiResolutionPreset"),
+	-1,
+	TEXT("Override UI resolution preset. -1 = use instance setting, ")
+	TEXT("0=720p, 1=900p, 2=1080p, 3=1440p, 4=native, 5=custom."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiCustomUiWidth(
+	TEXT("swui.hud.CustomUiWidth"),
+	-1,
+	TEXT("Override custom UI width when preset is Custom. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiCustomUiHeight(
+	TEXT("swui.hud.CustomUiHeight"),
+	-1,
+	TEXT("Override custom UI height when preset is Custom. -1 = use instance setting."),
+	ECVF_Default);
+
 // Profiling helpers
 TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload(
 	TEXT("swui.prof.NoTextureUpload"),

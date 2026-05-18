@@ -124,6 +124,9 @@ void USwui::InitializeSwuiView()
 	InstSettings.bHideDrawComponent        = bHideDrawComponent;
 	InstSettings.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
 	InstSettings.bDebugForceFullFrameUploadEveryFrame = bDebugForceFullFrameUploadEveryFrame;
+	InstSettings.UiResolutionPreset = UiResolutionPreset;
+	InstSettings.CustomUiWidth     = CustomUiWidth;
+	InstSettings.CustomUiHeight    = CustomUiHeight;
 	InstSettings.bEnableHybridDirtyUpload             = DirtyUploadSettings.bEnabled;
 	InstSettings.bEnableTileDiffForLargeRects         = DirtyUploadSettings.bEnableTileDiffForLargeRects;
 	InstSettings.bEnableUploadBudget                  = DirtyUploadSettings.bEnableUploadBudget;
@@ -215,6 +218,9 @@ void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 	Rebuilt.bHideDrawComponent        = bHideDrawComponent;
 	Rebuilt.bShowDirtyRectOverlay     = bShowDirtyRectOverlay;
 	Rebuilt.bDebugForceFullFrameUploadEveryFrame = bDebugForceFullFrameUploadEveryFrame;
+	Rebuilt.UiResolutionPreset = UiResolutionPreset;
+	Rebuilt.CustomUiWidth     = CustomUiWidth;
+	Rebuilt.CustomUiHeight    = CustomUiHeight;
 	Rebuilt.bEnableHybridDirtyUpload             = DirtyUploadSettings.bEnabled;
 	Rebuilt.bEnableTileDiffForLargeRects         = DirtyUploadSettings.bEnableTileDiffForLargeRects;
 	Rebuilt.bEnableUploadBudget                  = DirtyUploadSettings.bEnableUploadBudget;
