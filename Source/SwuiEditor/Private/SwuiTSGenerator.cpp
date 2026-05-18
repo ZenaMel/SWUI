@@ -951,7 +951,7 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		for (const FSwuiEffectiveDelegate& ED : EffSrc.Delegates)
 		{
 			const FName DelegateFName = ED.DelegateName;
-		{
+
 			FSwuiGeneratedEventInfo EInfo;
 			EInfo.ObjectName    = ObjectName;
 			EInfo.Namespace     = Namespace;
@@ -997,8 +997,8 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 	TMap<FString, TSet<FString>> ShortNameToEnumPaths;
 	for (const auto& Pair : CollectedEnumsByPath)
 	{
-		const FSwuiCollectedEnum& Entry = Pair.Value;
-		ShortNameToEnumPaths.FindOrAdd(Entry.ShortName).Add(Entry.EnumPath);
+		const FSwuiCollectedEnum& CollectedEnum = Pair.Value;
+		ShortNameToEnumPaths.FindOrAdd(CollectedEnum.ShortName).Add(CollectedEnum.EnumPath);
 	}
 
 	TArray<FSwuiResolvedEnum> ResolvedEnums;
@@ -1040,18 +1040,18 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 			if (P.EnumOptions.IsEmpty()) continue;
 
 			const UEnum* EnumDef = nullptr;
-			UClass* SourceClass = nullptr;
+			UClass* ResolvedSourceClass = nullptr;
 			for (const FSwuiBindingSource& BS : Bridge->BindingSources)
 			{
 				if (BS.SourceClass && SwuiComputeObjectName(BS.SourceClass) == Src.ObjectName)
 				{
-					SourceClass = BS.SourceClass;
+					ResolvedSourceClass = BS.SourceClass;
 					break;
 				}
 			}
-			if (SourceClass)
+			if (ResolvedSourceClass)
 			{
-				FProperty* Prop = SourceClass->FindPropertyByName(FName(*P.PropName));
+				FProperty* Prop = ResolvedSourceClass->FindPropertyByName(FName(*P.PropName));
 				if (Prop && SwuiTryGetEnumDefinition(Prop, EnumDef) && EnumDef)
 				{
 					FSwuiResolvedEnum** Found = ResolvedByPath.Find(EnumDef->GetPathName());

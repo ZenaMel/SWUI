@@ -40,11 +40,21 @@ public class SwuiEditor : ModuleRules
 		// gates hook *activation* — even AS-enabled builds only bind hooks when
 		// the current project actually has Script/*.as files.
 
+		string ProjectDir = Target.ProjectFile != null
+			? Target.ProjectFile.Directory.FullName
+			: null;
+
 		bool bHasAngelscriptCode =
 			Directory.Exists(Path.Combine(EngineDirectory, "Plugins", "Angelscript")) ||
-			Directory.Exists(Path.Combine(EngineDirectory, "Plugins", "UnrealEngine-Angelscript")) ||
-			Directory.Exists(Path.Combine(ProjectDirectory, "Plugins", "Angelscript")) ||
-			Directory.Exists(Path.Combine(ProjectDirectory, "Plugins", "UnrealEngine-Angelscript"));
+			Directory.Exists(Path.Combine(EngineDirectory, "Plugins", "UnrealEngine-Angelscript"));
+
+		if (!string.IsNullOrEmpty(ProjectDir))
+		{
+			bHasAngelscriptCode =
+				bHasAngelscriptCode ||
+				Directory.Exists(Path.Combine(ProjectDir, "Plugins", "Angelscript")) ||
+				Directory.Exists(Path.Combine(ProjectDir, "Plugins", "UnrealEngine-Angelscript"));
+		}
 
 		if (bHasAngelscriptCode)
 		{
