@@ -235,7 +235,10 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 		const ESwuiRenderingMode RequestedMode = InstanceSettings.RenderingMode;
 		if (RequestedMode == ESwuiRenderingMode::GpuAccelerated)
 		{
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] GPU Accelerated requested by setting"));
+			if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+			{
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] GPU Accelerated requested by setting"));
+			}
 
 			// GPU Accelerated mode requires D3D11 RHI. CEF's shared_texture_enabled
 			// always produces D3D11-native shared handles, and OnAcceleratedPaint
@@ -265,7 +268,10 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 			else
 			{
 				ResolvedRenderingMode = ESwuiRenderingMode::CpuCompatible;
-				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] Auto: GPU Accelerated unavailable — using CPU Compatible."));
+				if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+				{
+					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] Auto: GPU Accelerated unavailable — using CPU Compatible."));
+				}
 			}
 		}
 		else
@@ -279,10 +285,13 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 			Info.shared_texture_enabled = 1;
 		}
 
+		if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+	{
 		const TCHAR* ModeStr =
 			ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated ? TEXT("GPU Accelerated") : TEXT("CPU Compatible");
 		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI RENDER] Resolved mode: %s (requested=%d)"),
 			ModeStr, (int32)RequestedMode);
+	}
 	}
 
 	CefBrowserSettings BrowserSettings;
@@ -370,10 +379,13 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 	bPendingInvalidateForPaint = false;
 	if (bWantsExternalBeginFrames)
 	{
-		UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: External begin frame requested=%s, osrWindowless=%s, active=%s"),
-			bWantsExternalBeginFrames ? TEXT("true") : TEXT("false"),
-			bHostIsWindowless ? TEXT("true") : TEXT("false"),
-			bExternalBeginFrameActive ? TEXT("true") : TEXT("false"));
+		if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView: External begin frame requested=%s, osrWindowless=%s, active=%s"),
+				bWantsExternalBeginFrames ? TEXT("true") : TEXT("false"),
+				bHostIsWindowless ? TEXT("true") : TEXT("false"),
+				bExternalBeginFrameActive ? TEXT("true") : TEXT("false"));
+		}
 	}
 	else if (InstanceSettings.bIsHUD && bHudLockstepEnabled && bExternalBeginFramesEnabled)
 	{
@@ -383,7 +395,10 @@ void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 	CefData->Client = Client;
 	CefData->Browser = Browser;
 
-	UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView Initialized"));
+	if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("USwuiView Initialized"));
+	}
 
 	if (!DefaultURL.IsEmpty())
 	{
@@ -550,14 +565,30 @@ bool USwuiView::HasFreshOnPaintDataPending() const
 	// CPU Compatible path: check CPU paint pending flag.
 	FScopeLock Lock(const_cast<FCriticalSection*>(&PaintMutex));
 	return
-		bHasPendingUpload &&
+		bHasPendingFullSurfacePaint ||
+		(bHasPendingUpload &&
 		PendingIncomingRects > 0 &&
-		PendingFreshPaintGeneration > DrainedFreshPaintGeneration;
+		PendingFreshPaintGeneration > DrainedFreshPaintGeneration);
 }
 
 void USwuiView::BeginFullTransitionRefresh(int32 FreshPaintCount)
 {
-	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] BeginFullTransitionRefresh  freshCount=%d  mode=FullTransition"), FreshPaintCount);
+	if (IsForceFullFrameMode())
+	{
+		if (CefData && CefData->Browser)
+		{
+			if (CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost())
+			{
+				Host->Invalidate(PET_VIEW);
+			}
+		}
+		return;
+	}
+
+	if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] BeginFullTransitionRefresh  freshCount=%d  mode=FullTransition"), FreshPaintCount);
+	}
 
 	RenderActivityMode = ESwuiRenderActivityMode::FullTransition;
 	PendingFullCefPaintCopies = FreshPaintCount;
@@ -601,8 +632,17 @@ void USwuiView::SetUiInteractionActive(bool bActive)
 
 void USwuiView::RequestFullTextureUploadNextFrame()
 {
-	// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] RequestFullTextureUploadNextFrame  paintGen=%llu"),
-	// 	PaintGeneration);
+	if (IsForceFullFrameMode())
+	{
+		if (CefData && CefData->Browser)
+		{
+			if (CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost())
+			{
+				Host->Invalidate(PET_VIEW);
+			}
+		}
+		return;
+	}
 
 	bNeedsFullBaselineUpload = true;
 	bAwaitingFreshPaintForForcedUpload = true;
@@ -758,24 +798,33 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 
 	if (!Texture || !Texture->GetResource()) { FMemory::Free(Regions); return; }
 
-	// Stage gate 1: skip entire pipeline.
 	if (InstanceSettings.bSkipOnPaintProcessing) { FMemory::Free(Regions); return; }
+
+	const double PaintNow = FPlatformTime::Seconds();
+
+	// Force-full-frame mode: stage full surface and skip all dirty/transition logic.
+	if (IsForceFullFrameMode())
+	{
+		StageFullSurfacePaint(Buffer, InWidth, InHeight, PaintNow);
+		FMemory::Free(Regions);
+		return;
+	}
 
 	const int32 FullPitch = InWidth * 4;
 	const int32 BufBytes  = FullPitch * InHeight;
-	const double PaintNow = FPlatformTime::Seconds();
 	const bool bForceFullBaselineUploadOnFirstPaint = SwuiCVarBool(
 		CVarSwuiPaintFullBaseline.GetValueOnAnyThread(),
 		InstanceSettings.bForceFullBaselineUploadOnFirstPaint);
 	const bool bShowDirtyRects = SwuiCVarBool(
 		CVarSwuiDebugShowDirtyRects.GetValueOnAnyThread(),
 		InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects);
+	const bool bVerboseLog =
+		CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 ||
+		InstanceSettings.bVerbosePaintLog;
 
 	FScopeLock Lock(&PaintMutex);
 	LastPaintArrivalTime = PaintNow;
 
-	// Mark this CEF paint as fresh pending data for the subsystem/upload phase.
-	// This generation is consumed when TickDeferredUpload drains pending rects.
 	++PendingFreshPaintGeneration;
 	PendingFreshPaintArrivalTime = PaintNow;
 
@@ -794,7 +843,6 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		PendingBeginFrameSentTime = -1.0;
 	}
 
-	// Resize backing buffer when texture dimensions change.
 	if (BackingBuffer.Num() != BufBytes)
 	{
 		BackingBuffer.SetNumUninitialized(BufBytes);
@@ -808,10 +856,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			bNeedsFullBaselineUpload = true;
 	}
 
-	// -----------------------------------------------------------------------
 	// Automatic large-paint detection: if CEF produces a large or high-rect
 	// paint that looks like a fullscreen UI transition, enter FullTransition.
-	// -----------------------------------------------------------------------
+	// Suppressed entirely when force-full-frame is active (caught above).
 	{
 		int64 TotalDirtyArea = 0;
 		int32 MaxRectArea = 0;
@@ -828,12 +875,10 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			DirtyRatio >= 0.35f ||
 			RegionCount >= 32 ||
 			(float)MaxRectArea >= (float)SurfaceArea * 0.50f;
-		// Suppress automatic FullTransition:
-		//   - While interactive UI is active (hover/click during menus).
-		//   - Within 500ms of a previous auto FullTransition (cooldown).
 		static constexpr double AutoFullTransitionCooldown = 0.5;
 		bool bCooldownBlocked = false;
 		if (bLargeTransition
+			&& !bAutoTransitionEverFired
 			&& RenderActivityMode != ESwuiRenderActivityMode::FullTransition
 			&& PendingFullCefPaintCopies == 0
 			&& !bAwaitingFreshPaintForForcedUpload
@@ -842,9 +887,13 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			if ((PaintNow - LastAutoFullTransitionTime) >= AutoFullTransitionCooldown)
 			{
 				LastAutoFullTransitionTime = PaintNow;
-				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
-					DirtyRatio, RegionCount, MaxRectArea);
+				if (bVerboseLog)
+				{
+					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Auto FullTransition  dirtyRatio=%.3f  rects=%d  maxRectArea=%d"),
+						DirtyRatio, RegionCount, MaxRectArea);
+				}
 				BeginFullTransitionRefresh(3);
+				bAutoTransitionEverFired = true;
 			}
 			else
 			{
@@ -857,12 +906,9 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		}
 	}
 
-	// -----------------------------------------------------------------------
 	// CEF paint: full buffer copy (FullTransition) or dirty rect copy.
-	// -----------------------------------------------------------------------
 	if (PendingFullCefPaintCopies > 0)
 	{
-		// Full CEF buffer copy into BackingBuffer.
 		if (BackingBuffer.Num() == BufBytes)
 		{
 			FPlatformMemory::Memcpy(BackingBuffer.GetData(), Buffer, BufBytes);
@@ -872,8 +918,6 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 		PendingIncomingPx += BufBytes / 4;
 		if (BufBytes / 4 > PendingLargestIncoming) PendingLargestIncoming = BufBytes / 4;
 		PendingDirtyRects.Add(FIntRect(0, 0, InWidth, InHeight));
-		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Full CEF copy  remainingCopies=%d  size=%dx%d"),
-			PendingFullCefPaintCopies, InWidth, InHeight);
 	}
 	else
 	{
@@ -892,7 +936,6 @@ void USwuiView::OnPaint(const void* Buffer, FUpdateTextureRegion2D* Regions, int
 			const uint8* Src = (const uint8*)Buffer    + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
 			uint8*       Dst = BackingBuffer.GetData() + (int64)Rg.SrcY * FullPitch + (int64)Rg.SrcX * 4;
 
-			// Fast path: full-width rect → single contiguous memcpy.
 			if (Rg.SrcX == 0 && Rg.Width == (uint32)InWidth)
 			{
 				const int64 CopyBytes = (int64)RowBytes * Rg.Height;
@@ -931,12 +974,10 @@ void USwuiView::TickDeferredUpload()
 	const double Now = FPlatformTime::Seconds();
 	++Stat_ViewUploadTicks;
 
-	// --- GPU Accelerated path: drain shared texture, skip CPU pipeline entirely ---
 	if (ResolvedRenderingMode == ESwuiRenderingMode::GpuAccelerated)
 	{
 		TickAcceleratedUpload();
 
-		// --- Browser frame pacer (same logic as CPU path) ---
 		int32 TargetFPS = WindowlessFrameRate > 0 ? WindowlessFrameRate : 60;
 		double MinFrameInterval = 1.0 / double(TargetFPS);
 		bool bShouldSendFrame = false;
@@ -954,7 +995,6 @@ void USwuiView::TickDeferredUpload()
 			LastBrowserFrameTime = Now;
 		}
 
-		// --- GPU stats log (per-second) ---
 		if (SwuiCVarBool(CVarSwuiDebugLogPaintStats.GetValueOnGameThread(), InstanceSettings.bLogSwuiPaintStats) && (Now - Stat_LastLogTime >= 1.0))
 		{
 			const float AccelCopyAvgMs = Stat_AccelCopySamples > 0 ? float(Stat_AccelCopyMsSum / Stat_AccelCopySamples) : 0.f;
@@ -972,12 +1012,10 @@ void USwuiView::TickDeferredUpload()
 				Stat_AccelTexRecreates, Stat_AccelResizes,
 				Stat_ExternalBeginFrames,
 				WindowlessFrameRate, Width, Height);
-
 			if (!GpuFallbackReason.IsEmpty())
 			{
 				UE_LOG(LogSwuiRuntime, Log, TEXT("[SwuiPaint] fallbackReason=%s"), *GpuFallbackReason);
 			}
-
 			Stat_SubsystemTicks = 0; Stat_ViewUploadTicks = 0;
 			Stat_AccelPaints = 0; Stat_AccelCopies = 0; Stat_AccelHandleFails = 0;
 			Stat_AccelCopyMsSum = 0.0; Stat_AccelCopyMsMax = 0.0; Stat_AccelCopySamples = 0;
@@ -987,11 +1025,24 @@ void USwuiView::TickDeferredUpload()
 			Stat_ExternalBeginFrameSkipNoBrowser = 0; Stat_ExternalBeginFrameSkipRateLimited = 0;
 			Stat_LastLogTime = Now;
 		}
-		return; // GPU path complete — skip entire CPU pipeline below.
+		return;
 	}
 
-	// --- CPU Compatible path (existing implementation) ---
+	if (IsForceFullFrameMode())
+	{
+		TickForceFullSurfaceUpload(Now);
+		return;
+	}
 
+	TickDirtyOptimizedUpload(Now);
+}
+
+// ---------------------------------------------------------------------------
+// TickDirtyOptimizedUpload — normal dirty-rect / tile-diff / center-critical
+// optimized upload path. Only used when force-full-frame mode is OFF.
+// ---------------------------------------------------------------------------
+void USwuiView::TickDirtyOptimizedUpload(double Now)
+{
 	auto RecordTimingSampleMs = [](double SampleMs, double& SumMs, double& MaxMs, int32& SampleCount)
 	{
 		SumMs += SampleMs;
@@ -999,7 +1050,6 @@ void USwuiView::TickDeferredUpload()
 		++SampleCount;
 	};
 
-	// ---- Phase 1: move pending metadata out under lock ----
 	TArray<FIntRect>               LocalRects;
 	TArray<FUpdateTextureRegion2D> LocalOverlayRects;
 	TArray<FUpdateTextureRegion2D> OptimizedOverlayRects;
@@ -1044,8 +1094,6 @@ void USwuiView::TickDeferredUpload()
 				LocalInRects > 0 &&
 				LocalFreshPaintGeneration > DrainedFreshPaintGeneration;
 
-			// Consuming means TickDeferredUpload has taken ownership of the pending paint data.
-			// It does not require the RHI upload to have completed yet.
 			if (bDrainedFreshPaintThisTick)
 			{
 				DrainedFreshPaintGeneration = LocalFreshPaintGeneration;
@@ -1059,24 +1107,19 @@ void USwuiView::TickDeferredUpload()
 		}
 	}
 
-	// Stats accumulation (game thread only)
 	Stat_CefPaints     += LocalCefPaints;
 	Stat_IncomingRects += LocalInRects;
 	Stat_IncomingPx    += LocalInPx;
 	const bool bHasFreshPaintThisTick = bDrainedFreshPaintThisTick;
 	if (LocalLargestIn > Stat_LargestIncoming) Stat_LargestIncoming = LocalLargestIn;
 
-	// --- Browser frame pacer logic ---
-	// Use existing const double Now
 	int32 TargetFPS = WindowlessFrameRate > 0 ? WindowlessFrameRate : 60;
 	double MinFrameInterval = 1.0 / double(TargetFPS);
 
-	// Mark dirty if new rects or tiles
 	bBrowserDirty = (LocalRects.Num() > 0 || HasActiveDirtyTiles());
 	if (bBrowserDirty)
 		LastDirtyTime = Now;
 
-	// Animate if browser is in a known animating state (user can set bBrowserAnimating externally if needed)
 	bool bShouldSendFrame = false;
 	if (bBrowserDirty || bBrowserAnimating)
 	{
@@ -1085,7 +1128,6 @@ void USwuiView::TickDeferredUpload()
 			bShouldSendFrame = true;
 		}
 	}
-	// Safety: if browser hasn't received a frame in a while, force one
 	if ((Now - LastBrowserFrameTime) > BrowserFrameTimeout)
 	{
 		bShouldSendFrame = true;
@@ -1098,7 +1140,6 @@ void USwuiView::TickDeferredUpload()
 			bBrowserDirty = false;
 	}
 
-	// --- Original upload/paint logic ---
 	if (Texture && Texture->GetResource() && (LocalRects.Num() > 0 || bNeedsFullBaselineUpload || HasActiveDirtyTiles()))
 	{
 		const double DeferredStart = FPlatformTime::Seconds();
@@ -1137,13 +1178,9 @@ void USwuiView::TickDeferredUpload()
 			bNeedsFullBaselineUpload = true;
 		}
 
-		// Fresh-paint gate: if awaiting fresh paint for forced full upload, wait
-		// until CEF has delivered new pixels before uploading from the backing buffer.
 		if (bAwaitingFreshPaintForForcedUpload)
 		{
 			const bool bFreshPaintArrived = PaintGeneration > ForcedUploadRequestedAtPaintGeneration;
-			// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Awaiting fresh paint  paintGen=%llu  requestedAt=%llu  arrived=%d"),
-			// 	PaintGeneration, ForcedUploadRequestedAtPaintGeneration, bFreshPaintArrived ? 1 : 0);
 			if (!bFreshPaintArrived)
 			{
 				return;
@@ -1151,7 +1188,6 @@ void USwuiView::TickDeferredUpload()
 			bAwaitingFreshPaintForForcedUpload = false;
 		}
 
-		// Baseline upload: ensure whole texture is valid once before incremental mode.
 		if (bNeedsFullBaselineUpload && !InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
 		{
 			bool bDidBaselineThisTick = false;
@@ -1189,8 +1225,6 @@ void USwuiView::TickDeferredUpload()
 				if (PendingFreshFullUploads > 0)
 				{
 					--PendingFreshFullUploads;
-					// UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI FORCE UPLOAD] Full upload executed  remaining=%d  fullSurface=%dx%d"),
-					// 	PendingFreshFullUploads, SnapW, SnapH);
 					bNeedsFullBaselineUpload = (PendingFreshFullUploads > 0);
 				}
 				else
@@ -1229,7 +1263,6 @@ void USwuiView::TickDeferredUpload()
 
 			if (bDidBaselineThisTick)
 			{
-				// Baseline is complete and authoritative. Enter optimised mode next tick.
 				RecordTimingSampleMs(
 					(FPlatformTime::Seconds() - DeferredStart) * 1000.0,
 					Stat_DeferredUploadMsSum,
@@ -1295,7 +1328,6 @@ void USwuiView::TickDeferredUpload()
 				bHasCenterRect = CenterRect.Width() > 0 && CenterRect.Height() > 0;
 			}
 
-			// Fresh local large tiles from the latest batch are next priority.
 			for (int32 i = 0; i < ActiveDirtyTileMask.Num(); ++i)
 			{
 				if (!ActiveDirtyTileMask[i] || !FreshLargeTileMask[i] || SelectedMask[i]) continue;
@@ -1311,7 +1343,6 @@ void USwuiView::TickDeferredUpload()
 				SelectedTileIndices.Add(i);
 			}
 
-			// Old backlog tiles are fallback recovery, scanned last with rotating cursor.
 			if (ActiveDirtyTileMask.Num() > 0)
 			{
 				const int32 Start = bRotatingCursor ? (DirtyTileScanCursor % ActiveDirtyTileMask.Num()) : 0;
@@ -1513,10 +1544,6 @@ void USwuiView::TickDeferredUpload()
 		--SuppressCenterCriticalRectFrames;
 	}
 
-	// -----------------------------------------------------------------------
-	// Mode transition: when FullTransition finishes, switch to InteractiveUi
-	// if UI interaction is still active, otherwise NormalHud.
-	// -----------------------------------------------------------------------
 	if (RenderActivityMode == ESwuiRenderActivityMode::FullTransition)
 	{
 		const bool bTransitionDone =
@@ -1529,14 +1556,14 @@ void USwuiView::TickDeferredUpload()
 			RenderActivityMode = bUiInteractionActive
 				? ESwuiRenderActivityMode::InteractiveUi
 				: ESwuiRenderActivityMode::NormalHud;
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] FullTransition complete → %s"),
-				RenderActivityMode == ESwuiRenderActivityMode::InteractiveUi ? TEXT("InteractiveUi") : TEXT("NormalHud"));
+			if (CVarSwuiVerbosePaint.GetValueOnAnyThread() != 0 || InstanceSettings.bVerbosePaintLog)
+			{
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI TRANSITION] FullTransition complete → %s"),
+					RenderActivityMode == ESwuiRenderActivityMode::InteractiveUi ? TEXT("InteractiveUi") : TEXT("NormalHud"));
+			}
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// One-second aggregate stats log (runs every frame, fires once per second)
-	// -----------------------------------------------------------------------
 	if (SwuiCVarBool(CVarSwuiDebugLogPaintStats.GetValueOnGameThread(), InstanceSettings.bLogSwuiPaintStats) && (Now - Stat_LastLogTime >= 1.0))
 	{
 		const float McAvgMs = Stat_UeUploads > 0 ? float(Stat_MemcpyUs) / Stat_UeUploads / 1000.f : 0.f;
@@ -1592,11 +1619,6 @@ void USwuiView::TickDeferredUpload()
 		Stat_LastLogTime     = Now;
 	}
 
-	// -----------------------------------------------------------------------
-	// Dirty-rect overlay push (~10 Hz, only when bShowDirtyRectOverlay is set)
-	// NOTE: The overlay is rendered inside the same CEF surface so it generates
-	// its own dirty rects. Disable overlay for final perf measurements.
-	// -----------------------------------------------------------------------
 	if (SwuiCVarBool(CVarSwuiDebugShowDirtyRects.GetValueOnGameThread(), InstanceSettings.bShowDirtyRectOverlay || InstanceSettings.bShowSwuiDirtyRects)
 		&& (Now - Stat_OverlayLastPushTime >= 0.1)
 		&& (LocalOverlayRects.Num() > 0 || OptimizedOverlayRects.Num() > 0))
@@ -1701,6 +1723,293 @@ void USwuiView::TickDeferredUpload()
 			CefPostTask(TID_UI, new FSwuiOverlayPushTask(CefData->Browser, StdScript));
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// StageFullSurfacePaint — force-full-frame paint path.
+// Copies the full CEF buffer into BackingBuffer under the mutex.
+// Does NOT touch pending dirty rects, transition state, or tile state.
+// ---------------------------------------------------------------------------
+void USwuiView::StageFullSurfacePaint(const void* Buffer, int32 InWidth, int32 InHeight, double PaintNow)
+{
+	const int32 FullPitch = InWidth * 4;
+	const int32 BufBytes  = FullPitch * InHeight;
+
+	const double CopyStart = FPlatformTime::Seconds();
+
+	FScopeLock Lock(&PaintMutex);
+
+	LastPaintArrivalTime = PaintNow;
+	PendingFreshPaintArrivalTime = PaintNow;
+	++PendingFreshPaintGeneration;
+
+	if (BackingBuffer.Num() != BufBytes)
+	{
+		BackingBuffer.SetNumUninitialized(BufBytes);
+	}
+
+	if (!InstanceSettings.bSkipPaintMemcpy && !InstanceSettings.bFreezeTexture)
+	{
+		FPlatformMemory::Memcpy(BackingBuffer.GetData(), Buffer, BufBytes);
+	}
+
+	bHasPendingFullSurfacePaint = true;
+	PendingFullSurfaceWidth = InWidth;
+	PendingFullSurfaceHeight = InHeight;
+
+	++Stat_ForceFullFrameCefPaints;
+
+	const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
+	Stat_ForceFullFramePaintCopyMsSum += CopyMs;
+	Stat_ForceFullFramePaintCopyMsMax = FMath::Max(Stat_ForceFullFramePaintCopyMsMax, CopyMs);
+	++Stat_ForceFullFramePaintCopySamples;
+}
+
+// ---------------------------------------------------------------------------
+// TickForceFullSurfaceUpload — dedicated full-surface CPU upload path for
+// force-full-frame mode. Does NOT interact with dirty rects, tile diff,
+// center-critical rects, transition state, or baseline upload flags.
+// ---------------------------------------------------------------------------
+void USwuiView::TickForceFullSurfaceUpload(double Now)
+{
+	if (!bForceFullFrameFirstEntryLogged)
+	{
+		bForceFullFrameFirstEntryLogged = true;
+		UE_LOG(LogSwuiRuntime, Log,
+			TEXT("[SwuiForceFullFrame] ACTIVE — full-surface upload path enabled; dirty/tile/transition pipeline bypassed."));
+	}
+
+	PumpBrowserFrameForced(Now);
+
+	if (!Texture || !Texture->GetResource())
+	{
+		LogForceFullSurfaceStatsIfNeeded(Now);
+		return;
+	}
+
+	if (InstanceSettings.bSkipTextureUpload || InstanceSettings.bNoTextureUpload || CVarSwuiNoTextureUpload.GetValueOnAnyThread() != 0)
+	{
+		LogForceFullSurfaceStatsIfNeeded(Now);
+		return;
+	}
+
+	const int32 SnapW = Texture->GetSizeX();
+	const int32 SnapH = Texture->GetSizeY();
+	const int32 FullPitch = SnapW * 4;
+	const int32 BufBytes = FullPitch * SnapH;
+
+	FSwuiPaintUploadData* UploadData = new FSwuiPaintUploadData;
+	UploadData->Texture2DResource = static_cast<FTextureResource*>(Texture->GetResource());
+	UploadData->PackedPixels.SetNumUninitialized(BufBytes);
+	UploadData->Rects.SetNum(1);
+
+	double LocalPaintArrivalTime = 0.0;
+	bool bCopied = false;
+
+	const double LockWaitStart = FPlatformTime::Seconds();
+	{
+		FScopeLock Lock(&PaintMutex);
+
+		Stat_ForceFullFrameLockWaitMs += (FPlatformTime::Seconds() - LockWaitStart) * 1000.0;
+
+		if (BackingBuffer.Num() == BufBytes)
+		{
+			const double CopyStart = FPlatformTime::Seconds();
+
+			FPlatformMemory::Memcpy(
+				UploadData->PackedPixels.GetData(),
+				BackingBuffer.GetData(),
+				BufBytes);
+
+			const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
+			Stat_ForceFullFrameUploadCopyMsSum += CopyMs;
+			Stat_ForceFullFrameUploadCopyMsMax = FMath::Max(Stat_ForceFullFrameUploadCopyMsMax, CopyMs);
+			++Stat_ForceFullFrameUploadCopySamples;
+
+			LocalPaintArrivalTime = PendingFreshPaintArrivalTime;
+			bHasPendingFullSurfacePaint = false;
+			bCopied = true;
+		}
+	}
+
+	if (!bCopied)
+	{
+		delete UploadData;
+		LogForceFullSurfaceStatsIfNeeded(Now);
+		return;
+	}
+
+	FSwuiPackedRectDesc& D = UploadData->Rects[0];
+	D.Region = FUpdateTextureRegion2D(0, 0, 0, 0, SnapW, SnapH);
+	D.SrcPitch = static_cast<uint32>(FullPitch);
+	D.SrcOffsetBytes = 0;
+
+	const double EnqueueStart = FPlatformTime::Seconds();
+
+	ENQUEUE_RENDER_COMMAND(UpdateSwuiViewForceFullSurface)(
+		[UploadData](FRHICommandList& RHICmdList)
+		{
+			FRHITexture* Tex = UploadData->Texture2DResource->TextureRHI.GetReference();
+			if (Tex)
+			{
+				const FSwuiPackedRectDesc& Rd = UploadData->Rects[0];
+				RHIUpdateTexture2D(Tex, 0, Rd.Region, Rd.SrcPitch, UploadData->PackedPixels.GetData());
+			}
+			delete UploadData;
+		});
+
+	const double EnqueueMs = (FPlatformTime::Seconds() - EnqueueStart) * 1000.0;
+	Stat_ForceFullFrameEnqueueMsSum += EnqueueMs;
+	Stat_ForceFullFrameEnqueueMsMax = FMath::Max(Stat_ForceFullFrameEnqueueMsMax, EnqueueMs);
+	++Stat_ForceFullFrameEnqueueSamples;
+
+	++Stat_ForceFullFrameUploads;
+	Stat_ForceFullFramePx += int64(SnapW) * SnapH;
+
+	if (LocalPaintArrivalTime > 0.0)
+	{
+		const double PaintToUploadMs = (FPlatformTime::Seconds() - LocalPaintArrivalTime) * 1000.0;
+		Stat_ForceFullFramePaintToUploadMsSum += PaintToUploadMs;
+		Stat_ForceFullFramePaintToUploadMsMax = FMath::Max(Stat_ForceFullFramePaintToUploadMsMax, PaintToUploadMs);
+		++Stat_ForceFullFramePaintToUploadSamples;
+	}
+
+	DrainDirtyPipelineStateForForceMode();
+	LogForceFullSurfaceStatsIfNeeded(Now);
+}
+
+// ---------------------------------------------------------------------------
+// PumpBrowserFrameForced — force a CEF begin frame immediately, bypassing
+// rate limiting and the normal send-if-due logic.
+// ---------------------------------------------------------------------------
+void USwuiView::PumpBrowserFrameForced(double Now)
+{
+	const double DeltaTime = LastBrowserFrameTime > 0.0
+		? FMath::Max(0.0, Now - LastBrowserFrameTime)
+		: 1.0 / 60.0;
+
+	FlushHudStateAndRequestBrowserFrame(FString(), static_cast<float>(DeltaTime), true);
+	LastBrowserFrameTime = Now;
+}
+
+// ---------------------------------------------------------------------------
+// DrainDirtyPipelineStateForForceMode — resets all dirty-rect / tile /
+// transition state so it cannot leak back into the normal path when force
+// mode is later disabled.
+// ---------------------------------------------------------------------------
+void USwuiView::DrainDirtyPipelineStateForForceMode()
+{
+	FScopeLock Lock(&PaintMutex);
+
+	bHasPendingUpload = false;
+	PendingDirtyRects.Empty();
+	PendingOverlayRects.Empty();
+	PendingCefPaints = 0;
+	PendingIncomingRects = 0;
+	PendingIncomingPx = 0;
+	PendingLargestIncoming = 0;
+
+	PendingFullCefPaintCopies = 0;
+	PendingFreshFullUploads = 0;
+	bAwaitingFreshPaintForForcedUpload = false;
+	bNeedsFullBaselineUpload = false;
+	SuppressCenterCriticalRectFrames = 0;
+
+	if (RenderActivityMode == ESwuiRenderActivityMode::FullTransition)
+	{
+		RenderActivityMode = bUiInteractionActive
+			? ESwuiRenderActivityMode::InteractiveUi
+			: ESwuiRenderActivityMode::NormalHud;
+	}
+
+	if (ActiveDirtyTileMask.Num() > 0)
+	{
+		ActiveDirtyTileMask.Init(false, ActiveDirtyTileMask.Num());
+	}
+
+	if (UploadedTileMask.Num() > 0)
+	{
+		UploadedTileMask.Init(false, UploadedTileMask.Num());
+	}
+
+	DirtyTileScanCursor = 0;
+	bSeenFirstPaint = false;
+	bAutoTransitionEverFired = false;
+}
+
+// ---------------------------------------------------------------------------
+// LogForceFullSurfaceStatsIfNeeded — once-per-second stats line for the
+// force-full-frame upload path.
+// ---------------------------------------------------------------------------
+void USwuiView::LogForceFullSurfaceStatsIfNeeded(double Now)
+{
+	if ((Now - Stat_ForceFullFrameLastLogTime) < 1.0)
+	{
+		return;
+	}
+
+	const float PaintCopyAvgMs = Stat_ForceFullFramePaintCopySamples > 0
+		? float(Stat_ForceFullFramePaintCopyMsSum / Stat_ForceFullFramePaintCopySamples)
+		: 0.f;
+
+	const float UploadCopyAvgMs = Stat_ForceFullFrameUploadCopySamples > 0
+		? float(Stat_ForceFullFrameUploadCopyMsSum / Stat_ForceFullFrameUploadCopySamples)
+		: 0.f;
+
+	const float EnqueueAvgMs = Stat_ForceFullFrameEnqueueSamples > 0
+		? float(Stat_ForceFullFrameEnqueueMsSum / Stat_ForceFullFrameEnqueueSamples)
+		: 0.f;
+
+	const float PaintToUploadAvgMs = Stat_ForceFullFramePaintToUploadSamples > 0
+		? float(Stat_ForceFullFramePaintToUploadMsSum / Stat_ForceFullFramePaintToUploadSamples)
+		: 0.f;
+
+	UE_LOG(LogSwuiRuntime, Log,
+		TEXT("[SwuiForceFullFrame] forcedUploads/s=%d cefPaints/s=%d uploadedPx/s=%lld")
+		TEXT(" paintCopyAvgMs=%.3f paintCopyMaxMs=%.3f")
+		TEXT(" uploadCopyAvgMs=%.3f uploadCopyMaxMs=%.3f")
+		TEXT(" enqueueAvgMs=%.3f enqueueMaxMs=%.3f")
+		TEXT(" lockWaitMs=%.3f")
+		TEXT(" paintToUploadAvgMs=%.3f paintToUploadMaxMs=%.3f")
+		TEXT(" tex=%dx%d"),
+		Stat_ForceFullFrameUploads,
+		Stat_ForceFullFrameCefPaints,
+		Stat_ForceFullFramePx,
+		PaintCopyAvgMs,
+		Stat_ForceFullFramePaintCopyMsMax,
+		UploadCopyAvgMs,
+		Stat_ForceFullFrameUploadCopyMsMax,
+		EnqueueAvgMs,
+		Stat_ForceFullFrameEnqueueMsMax,
+		Stat_ForceFullFrameLockWaitMs,
+		PaintToUploadAvgMs,
+		Stat_ForceFullFramePaintToUploadMsMax,
+		Texture ? Texture->GetSizeX() : 0,
+		Texture ? Texture->GetSizeY() : 0);
+
+	Stat_ForceFullFrameUploads = 0;
+	Stat_ForceFullFrameCefPaints = 0;
+	Stat_ForceFullFramePx = 0;
+
+	Stat_ForceFullFramePaintCopyMsSum = 0.0;
+	Stat_ForceFullFramePaintCopyMsMax = 0.0;
+	Stat_ForceFullFramePaintCopySamples = 0;
+
+	Stat_ForceFullFrameUploadCopyMsSum = 0.0;
+	Stat_ForceFullFrameUploadCopyMsMax = 0.0;
+	Stat_ForceFullFrameUploadCopySamples = 0;
+
+	Stat_ForceFullFrameEnqueueMsSum = 0.0;
+	Stat_ForceFullFrameEnqueueMsMax = 0.0;
+	Stat_ForceFullFrameEnqueueSamples = 0;
+
+	Stat_ForceFullFrameLockWaitMs = 0.0;
+
+	Stat_ForceFullFramePaintToUploadMsSum = 0.0;
+	Stat_ForceFullFramePaintToUploadMsMax = 0.0;
+	Stat_ForceFullFramePaintToUploadSamples = 0;
+
+	Stat_ForceFullFrameLastLogTime = Now;
 }
 
 UTexture2D* USwuiView::GetOrCreateTexture(int32 InWidth, int32 InHeight)

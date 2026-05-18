@@ -28,6 +28,7 @@ extern TAutoConsoleVariable<int32> CVarSwuiPaintFullBaseline;
 // Debug
 extern TAutoConsoleVariable<int32> CVarSwuiDebugLogPaintStats;
 extern TAutoConsoleVariable<int32> CVarSwuiDebugShowDirtyRects;
+extern TAutoConsoleVariable<int32> CVarSwuiDebugForceFullFrameUploadEveryFrame;
 
 // Profiling helpers
 extern TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload;

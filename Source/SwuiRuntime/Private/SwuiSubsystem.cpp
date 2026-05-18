@@ -202,15 +202,6 @@ static FString Swui_SerializeProperty(const FProperty* Prop, const void* Contain
 	return Swui_SerializePropertyValue(Prop, ValuePtr);
 }
 
-static int32 SwuiGetIntCVar(const TCHAR* Name, int32 DefaultValue = -1)
-{
-	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(Name))
-	{
-		return CVar->GetInt();
-	}
-	return DefaultValue;
-}
-
 // ---- Lifecycle ----
 
 bool USwuiSubsystem::ShouldCreateSubsystem(UObject* Outer) const
@@ -248,7 +239,10 @@ void USwuiSubsystem::Deinitialize()
 		if (CVar)
 		{
 			CVar->Set(SavedOneFrameThreadLag, ECVF_SetByGameOverride);
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d (on Deinitialize)"), SavedOneFrameThreadLag);
+			if (CVarSwuiVerbosePaint.GetValueOnGameThread() != 0)
+			{
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d (on Deinitialize)"), SavedOneFrameThreadLag);
+			}
 		}
 		SavedOneFrameThreadLag = -1;
 	}
@@ -609,13 +603,16 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	const bool bUseHudLockstepMode =
 		View->InstanceSettings.bIsHUD &&
 		SwuiCVarBool(
-			SwuiGetIntCVar(TEXT("swui.hud.Lockstep"), -1),
+			CVarSwuiHudLockstep.GetValueOnGameThread(),
 			View->InstanceSettings.bUseUEFrameLockedBrowser);
 
 	// If CEF produced fresh paint since the previous UE frame, upload it
 	// immediately before requesting another browser frame. This keeps the
 	// newest available HUD pixels as close as possible to the current UE render.
-	if (View->HasFreshOnPaintDataPending())
+	const bool bForceFullFrame = SwuiCVarBool(
+		CVarSwuiDebugForceFullFrameUploadEveryFrame.GetValueOnGameThread(),
+		View->InstanceSettings.bDebugForceFullFrameUploadEveryFrame);
+	if (bForceFullFrame || View->HasFreshOnPaintDataPending())
 	{
 		View->TickDeferredUpload();
 	}
@@ -650,7 +647,7 @@ void USwuiSubsystem::Tick(float DeltaTime)
 
 	// If the browser produced fresh paint from the frame request above, upload it.
 	// If no fresh paint is ready yet, the next tick's early upload path will pick it up.
-	if (View->HasFreshOnPaintDataPending())
+	if (bForceFullFrame || View->HasFreshOnPaintDataPending())
 	{
 		View->TickDeferredUpload();
 	}
@@ -683,17 +680,17 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 	const bool bHudLockStep =
 		View->InstanceSettings.bIsHUD &&
 		SwuiCVarBool(
-			SwuiGetIntCVar(TEXT("swui.hud.Lockstep"), -1),
+			CVarSwuiHudLockstep.GetValueOnGameThread(),
 			View->InstanceSettings.bUseUEFrameLockedBrowser);
 	const bool bFlushBeforeFrame =
 		!bHudLockStep ||
 		SwuiCVarBool(
-			SwuiGetIntCVar(TEXT("swui.hud.FlushBeforeFrame"), -1),
+			CVarSwuiHudFlushBeforeFrame.GetValueOnGameThread(),
 			View->InstanceSettings.bFlushHudStateBeforeBrowserFrame);
 	if (!bFlushBeforeFrame) return false;
 	const bool bUseCombinedHudFramePath = bHudLockStep && View->IsExternalBeginFrameActive();
 	const int32 BrowserFpsSetting = SwuiCVarInt(
-		SwuiGetIntCVar(TEXT("swui.hud.MaxBrowserFPS"), -1),
+		CVarSwuiHudMaxBrowserFPS.GetValueOnGameThread(),
 		View->InstanceSettings.MaxBrowserFramesPerSecond);
 	const int32 CefFPS = BrowserFpsSetting > 0 ? BrowserFpsSetting : View->GetWindowlessFrameRate();
 
@@ -939,7 +936,10 @@ void USwuiSubsystem::UpdateLowLatencyFramePacing()
 		}
 		CVar->Set(0, ECVF_SetByGameOverride);
 		LastAppliedFramePacingMode = ConfiguredMode;
-		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Applied low latency frame pacing: r.OneFrameThreadLag 0"));
+		if (View && (CVarSwuiVerbosePaint.GetValueOnGameThread() != 0 || View->InstanceSettings.bVerbosePaintLog))
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Applied low latency frame pacing: r.OneFrameThreadLag 0"));
+		}
 	}
 	else
 	{
@@ -947,7 +947,10 @@ void USwuiSubsystem::UpdateLowLatencyFramePacing()
 		if (SavedOneFrameThreadLag >= 0)
 		{
 			CVar->Set(SavedOneFrameThreadLag, ECVF_SetByGameOverride);
-			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d"), SavedOneFrameThreadLag);
+			if (View && (CVarSwuiVerbosePaint.GetValueOnGameThread() != 0 || View->InstanceSettings.bVerbosePaintLog))
+			{
+				UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Runtime] Restored r.OneFrameThreadLag=%d"), SavedOneFrameThreadLag);
+			}
 			SavedOneFrameThreadLag = -1;
 		}
 		LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;

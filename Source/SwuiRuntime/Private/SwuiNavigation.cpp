@@ -574,7 +574,10 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 
 	if (Event == Tags.MenuClose)
 	{
-		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Explicit close refresh bypassed AutoFullTransition cooldown"));
+		if (bLogNavigationEvents)
+		{
+			UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Explicit close refresh bypassed AutoFullTransition cooldown"));
+		}
 		DispatchEvent(Event, Detail, [this]()
 		{
 			OnMenuClose.Broadcast();
@@ -588,7 +591,10 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			World->GetTimerManager().SetTimer(CloseRefreshRetryHandle,
 				FTimerDelegate::CreateWeakLambda(this, [this]()
 				{
-					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					if (bLogNavigationEvents)
+					{
+						UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					}
 					RefreshHudFrame(true);
 				}),
 				0.04f, false);
@@ -621,7 +627,10 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			World->GetTimerManager().SetTimer(CloseRefreshRetryHandle,
 				FTimerDelegate::CreateWeakLambda(this, [this]()
 				{
-					UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					if (bLogNavigationEvents)
+					{
+						UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI PAINT] Delayed close refresh retry"));
+					}
 					RefreshHudFrame(true);
 				}),
 				0.04f, false);

@@ -247,6 +247,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
 	bool bShowDirtyRectOverlay = false;
 
+	/** Force full-frame upload every tick, bypassing dirty rects, tile-priority uploads,
+	 *  center-critical rect processing, transition heuristics, and upload cooldowns.
+	 *  Also forces browser frame pumping so every frame produces a full CEF paint.
+	 *  Uses the existing persistent texture path (no reallocation).
+	 *  CVar: swui.DebugForceFullFrameUploadEveryFrame (0=off, 1=on) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Debug")
+	bool bDebugForceFullFrameUploadEveryFrame = false;
+
 	/** Focused SWUI dirty upload tuning (hybrid rect+tile path with center-critical lane). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance")
 	FSwuiDirtyUploadSettings DirtyUploadSettings;

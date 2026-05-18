@@ -123,6 +123,14 @@ TAutoConsoleVariable<int32> CVarSwuiDebugShowDirtyRects(
 	TEXT("Override dirty rect debug overlay. -1 = use instance setting, 0 = off, 1 = on."),
 	ECVF_Default);
 
+TAutoConsoleVariable<int32> CVarSwuiDebugForceFullFrameUploadEveryFrame(
+	TEXT("swui.DebugForceFullFrameUploadEveryFrame"),
+	0,
+	TEXT("Force full-frame upload every UE frame, bypassing dirty rects, tile priorities, ")
+	TEXT("center-critical rects, transition heuristics, and upload cooldowns. ")
+	TEXT("Also forces browser frame pumping. 0=off, 1=on."),
+	ECVF_Default);
+
 // Profiling helpers
 TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload(
 	TEXT("swui.prof.NoTextureUpload"),

@@ -128,6 +128,7 @@ struct FSwuiInstanceSettings
 	bool  bPauseBrowserUpdates      = false; // skip JS state push and runtime tick dispatch
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
 	bool  bShowDirtyRectOverlay     = false; // push dirty rects + stats to __SWUI_DEBUG_RECTS__ at ~10 Hz
+	bool  bDebugForceFullFrameUploadEveryFrame = false; // bypass all optimisations, upload full texture every frame
 
 	// Focused hybrid upload-path tuning
 	bool  bEnableHybridDirtyUpload             = true;

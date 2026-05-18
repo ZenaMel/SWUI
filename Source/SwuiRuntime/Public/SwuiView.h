@@ -4,6 +4,8 @@
 #include "UObject/WeakObjectPtrTemplates.h"
 #include "UObject/Object.h"
 #include "SwuiTypes.h"
+#include "SwuiCVars.h"
+#include "SwuiCVarHelpers.h"
 #include "HAL/CriticalSection.h"
 #include "Misc/ScopeLock.h"
 #include "Containers/BitArray.h"
@@ -70,6 +72,18 @@ public:
 	// Called every UE frame by USwuiSubsystem::Tick — flushes pending CEF paints
 	// as a single per-frame upload, with tile diff to skip unchanged tiles.
 	void TickDeferredUpload();
+	bool IsForceFullFrameMode() const
+	{
+		return SwuiCVarBool(
+			CVarSwuiDebugForceFullFrameUploadEveryFrame.GetValueOnAnyThread(),
+			InstanceSettings.bDebugForceFullFrameUploadEveryFrame);
+	}
+	void StageFullSurfacePaint(const void* Buffer, int32 InWidth, int32 InHeight, double PaintNow);
+	void TickForceFullSurfaceUpload(double Now);
+	void TickDirtyOptimizedUpload(double Now);
+	void PumpBrowserFrameForced(double Now);
+	void DrainDirtyPipelineStateForForceMode();
+	void LogForceFullSurfaceStatsIfNeeded(double Now);
 	bool FlushHudStateAndRequestBrowserFrame(const FString& CombinedScript, float DeltaTime, bool bForceFrame);
 	bool SendExternalBeginFrameIfDue(float DeltaTime);
 	void NotifySubsystemTick();
@@ -200,6 +214,9 @@ private:
 	int64                          PendingIncomingPx      = 0;
 	int32                          PendingLargestIncoming = 0;
 	bool                           bHasPendingUpload      = false;
+	bool                           bHasPendingFullSurfacePaint = false;
+	int32                          PendingFullSurfaceWidth  = 0;
+	int32                          PendingFullSurfaceHeight = 0;
 
 	// Monotonic fresh-paint tracking.
 	// Used by the subsystem to know whether CEF has produced new paint data
@@ -224,6 +241,7 @@ private:
 	int32          LastSnapW      = 0;
 	int32          LastSnapH      = 0;
 	bool           bSeenFirstPaint = false;
+	bool           bAutoTransitionEverFired = false;
 	bool           bNeedsFullBaselineUpload = true;
 	int32          SuppressCenterCriticalRectFrames = 0;
 	uint64         ForcedUploadRequestedAtPaintGeneration = 0;
@@ -278,7 +296,25 @@ private:
 	int64  Stat_MemcpyUs        = 0;
 	int64  Stat_MemcpyMaxUs     = 0;
 	double Stat_LastLogTime     = 0.0;
-	double Stat_OverlayLastPushTime = 0.0;
+	double Stat_OverlayLastPushTime     = 0.0;
+	double Stat_ForceFullFrameLastLogTime = 0.0;
+	int32  Stat_ForceFullFrameUploads   = 0;
+	int32  Stat_ForceFullFrameCefPaints = 0;
+	int64  Stat_ForceFullFramePx       = 0;
+	bool   bForceFullFrameFirstEntryLogged = false;
+	double Stat_ForceFullFramePaintCopyMsSum = 0.0;
+	double Stat_ForceFullFramePaintCopyMsMax = 0.0;
+	int32  Stat_ForceFullFramePaintCopySamples = 0;
+	double Stat_ForceFullFrameUploadCopyMsSum = 0.0;
+	double Stat_ForceFullFrameUploadCopyMsMax = 0.0;
+	int32  Stat_ForceFullFrameUploadCopySamples = 0;
+	double Stat_ForceFullFrameEnqueueMsSum = 0.0;
+	double Stat_ForceFullFrameEnqueueMsMax = 0.0;
+	int32  Stat_ForceFullFrameEnqueueSamples = 0;
+	double Stat_ForceFullFrameLockWaitMs   = 0.0;
+	double Stat_ForceFullFramePaintToUploadMsSum = 0.0;
+	double Stat_ForceFullFramePaintToUploadMsMax = 0.0;
+	int32  Stat_ForceFullFramePaintToUploadSamples = 0;
 
 	// -----------------------------------------------------------------------
 	// GPU Accelerated backend state
