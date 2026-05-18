@@ -820,9 +820,11 @@ void USwuiView::TickDeferredUpload()
 
 void USwuiView::TickFullSurfaceUpload(double Now)
 {
-	const bool bForceEveryTick = IsForceFullFrameMode();
+	++Stat_FullSurfaceUploadTicks;
 
-	if (bForceEveryTick)
+	const bool bDebugForceEveryTick = IsForceFullFrameMode();
+
+	if (bDebugForceEveryTick)
 	{
 		if (!bFullSurfaceFirstEntryLogged)
 		{
@@ -837,9 +839,7 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 		bFullSurfaceFirstEntryLogged = false;
 	}
 
-	++Stat_FullSurfaceUploadTicks;
-
-	PumpBrowserFrameIfDue(Now, bForceEveryTick);
+	DriveContinuousBrowserFrame(Now, bDebugForceEveryTick);
 
 	if (!Texture || !Texture->GetResource())
 	{
@@ -858,6 +858,19 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 		return;
 	}
 
+	if (!bDebugForceEveryTick && !HasFreshOnPaintDataPending())
+	{
+		++Stat_FullSurfaceSkippedNoFreshPaint;
+		LogFullSurfaceStatsIfNeeded(Now);
+		return;
+	}
+
+	UploadLatestFullSurface(bDebugForceEveryTick);
+	LogFullSurfaceStatsIfNeeded(Now);
+}
+
+void USwuiView::UploadLatestFullSurface(bool bForceMemcpy)
+{
 	const int32 SnapW = Texture->GetSizeX();
 	const int32 SnapH = Texture->GetSizeY();
 	const int32 FullPitch = SnapW * 4;
@@ -876,11 +889,9 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 
 		Stat_FullSurfaceLockWaitMs += (FPlatformTime::Seconds() - LockWaitStart) * 1000.0;
 
-		const bool bHasFreshPaint =
-			bHasPendingFullSurfacePaint &&
-			PendingFreshPaintGeneration > UploadedFreshPaintGeneration;
+		const bool bHasFreshPaint = HasFreshOnPaintDataPending();
 
-		bShouldUpload = bForceEveryTick || bHasFreshPaint;
+		bShouldUpload = bForceMemcpy || bHasFreshPaint;
 
 		if (!bShouldUpload)
 		{
@@ -895,18 +906,12 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 
 			const double CopyStart = FPlatformTime::Seconds();
 
-			if (bHasFreshPaint)
+			if (bHasFreshPaint && !bForceMemcpy)
 			{
-				// Zero-copy handoff: UploadData takes ownership of the latest painted
-				// buffer. BackingBuffer receives UploadData's pre-sized empty allocation
-				// for the next CEF OnPaint to fill.
 				::Swap(UploadData->PackedPixels, BackingBuffer);
 			}
 			else
 			{
-				// Only used by debug force-every-tick mode when no fresh CEF paint
-				// arrived. Keep memcpy so stale debug uploads do not upload an
-				// empty/uninitialized buffer.
 				FPlatformMemory::Memcpy(
 					UploadData->PackedPixels.GetData(),
 					BackingBuffer.GetData(),
@@ -932,7 +937,6 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 
 	if (!UploadData)
 	{
-		LogFullSurfaceStatsIfNeeded(Now);
 		return;
 	}
 
@@ -984,24 +988,19 @@ void USwuiView::TickFullSurfaceUpload(double Now)
 			PaintToUploadMs);
 		++Stat_FullSurfacePaintToUploadSamples;
 	}
-
-	LogFullSurfaceStatsIfNeeded(Now);
 }
 
-void USwuiView::PumpBrowserFrameIfDue(double Now, bool bForceFrame)
+void USwuiView::DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTick)
 {
 	const double DeltaSeconds = LastBrowserFrameTime > 0.0
 		? FMath::Max(0.0, Now - LastBrowserFrameTime)
 		: 1.0 / 60.0;
 
-	if (bForceFrame)
+	if (bDebugForceEveryTick)
 	{
-		FlushHudStateAndRequestBrowserFrame(
-			FString(),
-			static_cast<float>(DeltaSeconds),
-			true);
-
+		FlushHudStateAndRequestBrowserFrame(FString(), static_cast<float>(DeltaSeconds), true);
 		LastBrowserFrameTime = Now;
+		TargetFpsForLog = WindowlessFrameRate;
 		return;
 	}
 
@@ -1014,18 +1013,20 @@ void USwuiView::PumpBrowserFrameIfDue(double Now, bool bForceFrame)
 		1,
 		300);
 
-	const double MinFrameInterval = 1.0 / static_cast<double>(TargetHz);
+	TargetFpsForLog = TargetHz;
 
-	const bool bDueByRate = (Now - LastBrowserFrameTime) >= MinFrameInterval;
-	const bool bDueByTimeout = (Now - LastBrowserFrameTime) > BrowserFrameTimeout;
+	const double MinInterval = 1.0 / static_cast<double>(TargetHz);
 
-	if (bDueByRate || bDueByTimeout)
+	if (LastBrowserFrameTime <= 0.0 || (Now - LastBrowserFrameTime) >= MinInterval)
 	{
-		if (SendExternalBeginFrameIfDue(static_cast<float>(DeltaSeconds)))
-		{
-			LastBrowserFrameTime = Now;
-		}
+		FlushHudStateAndRequestBrowserFrame(FString(), static_cast<float>(DeltaSeconds), false);
+		LastBrowserFrameTime = Now;
 	}
+}
+
+void USwuiView::PumpBrowserFrameIfDue(double Now, bool bForceFrame)
+{
+	DriveContinuousBrowserFrame(Now, bForceFrame);
 }
 
 void USwuiView::InvalidateBrowserView()
@@ -1096,7 +1097,7 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		TEXT(" lockWaitMs=%.3f")
 		TEXT(" paintAfterBeginFrameAvgMs=%.3f paintAfterBeginFrameMaxMs=%.3f")
 		TEXT(" paintToUploadAvgMs=%.3f paintToUploadMaxMs=%.3f")
-		TEXT(" browserFpsCap=%d tex=%dx%d forceEveryTick=%d"),
+		TEXT(" targetFps=%d browserFpsCap=%d tex=%dx%d forceEveryTick=%d"),
 		PresetName,
 		Stat_SubsystemTicks,
 		Stat_ViewUploadTicks,
@@ -1128,6 +1129,7 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 		Stat_PaintAfterBeginFrameMsMax,
 		PaintToUploadAvgMs,
 		Stat_FullSurfacePaintToUploadMsMax,
+		TargetFpsForLog,
 		WindowlessFrameRate,
 		Texture ? Texture->GetSizeX() : 0,
 		Texture ? Texture->GetSizeY() : 0,

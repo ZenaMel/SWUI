@@ -136,6 +136,9 @@ private:
 
 	void TickFullSurfaceUpload(double Now);
 
+	void DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTick);
+	void UploadLatestFullSurface(bool bForceMemcpy);
+
 	void PumpBrowserFrameIfDue(double Now, bool bForceFrame);
 	void InvalidateBrowserView();
 
@@ -213,15 +216,14 @@ private:
 	int32 Stat_HudStateFlushes = 0;
 
 	int32 Stat_ExternalBeginFrames = 0;
-	int32 Stat_ExternalBeginFrameForced = 0;
-	int32 Stat_ExternalBeginFrameNonForced = 0;
-	int32 Stat_ExternalBeginFrameCoalescedPending = 0;
-	int32 Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	int32 Stat_ExternalBeginFrameSkipInactive = 0;
 	int32 Stat_ExternalBeginFrameSkipDisabled = 0;
 	int32 Stat_ExternalBeginFrameSkipNoBrowser = 0;
 	int32 Stat_ExternalBeginFrameSkipRateLimited = 0;
-
+	int32 Stat_ExternalBeginFrameForced = 0;
+	int32 Stat_ExternalBeginFrameNonForced = 0;
+	int32 Stat_ExternalBeginFrameCoalescedPending = 0;
+	int32 Stat_ExternalBeginFrameCoalescedTimeout = 0;
 	int32 Stat_InvalidateView = 0;
 	int32 Stat_BeginFramesWithoutPaint = 0;
 	int32 Stat_PaintsAfterInvalidate = 0;
@@ -231,6 +233,7 @@ private:
 	int32 Stat_PaintAfterBeginFrameSamples = 0;
 
 	double Stat_LastLogTime = 0.0;
+	int32 TargetFpsForLog = 0;
 
 	// ---- Full-surface upload stats ----
 

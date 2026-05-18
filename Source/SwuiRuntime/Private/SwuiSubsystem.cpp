@@ -600,25 +600,10 @@ void USwuiSubsystem::Tick(float DeltaTime)
 
 	View->NotifySubsystemTick();
 
-	const bool bUseHudLockstepMode =
-		View->InstanceSettings.bIsHUD &&
-		SwuiCVarBool(
-			CVarSwuiHudLockstep.GetValueOnGameThread(),
-			View->InstanceSettings.bUseUEFrameLockedBrowser);
-
-	// If CEF produced fresh paint since the previous UE frame, upload it
-	// immediately before requesting another browser frame. This keeps the
-	// newest available HUD pixels as close as possible to the current UE render.
-	const bool bForceFullFrame = SwuiCVarBool(
-		CVarSwuiDebugForceFullFrameUploadEveryFrame.GetValueOnGameThread(),
-		View->InstanceSettings.bDebugForceFullFrameUploadEveryFrame);
-	if (bForceFullFrame || View->HasFreshOnPaintDataPending())
-	{
-		View->TickDeferredUpload();
-	}
+	// Drive continuous browser frame + upload latest full surface if fresh paint exists.
+	View->TickDeferredUpload();
 
 	bForceBrowserFrameThisTick = false;
-	bLastFlushSentExternalBeginFrame = false;
 
 	const bool bCanFlushJs = !View->InstanceSettings.bPauseBrowserUpdates;
 	if (bCanFlushJs && FlushHudStateToJs(DeltaTime))
@@ -626,47 +611,12 @@ void USwuiSubsystem::Tick(float DeltaTime)
 		View->NotifyHudStateFlushed();
 	}
 
-	// FlushHudStateToJs may post the combined JS + Invalidate + BeginFrame task
-	// to the CEF UI thread. Pump immediately so that task can execute during
-	// this UE tick instead of waiting for a later/irregular CEF pump.
+	// Pump again after JS flush. This gives CEF a chance to process any
+	// ExecuteJavaScript posted tasks and produce OnPaint.
 	SwuiManager::DoSwuiMessageLoop();
 
-	const bool bUseCombinedHudFramePath =
-		bUseHudLockstepMode &&
-		View->IsExternalBeginFrameActive();
-
-	bool bSentExternalBeginFrame = bLastFlushSentExternalBeginFrame;
-	if (!bSentExternalBeginFrame && !bUseCombinedHudFramePath)
-	{
-		bSentExternalBeginFrame = SendExternalBeginFrameIfDue(DeltaTime);
-	}
-
-	// Pump again after an explicit begin-frame request. This gives CEF a chance
-	// to process Invalidate/BeginFrame and produce OnPaint in this UE tick.
+	// Final pump for lockstep mode to keep CEF responsive.
 	SwuiManager::DoSwuiMessageLoop();
-
-	// If the browser produced fresh paint from the frame request above, upload it.
-	// If no fresh paint is ready yet, the next tick's early upload path will pick it up.
-	if (bForceFullFrame || View->HasFreshOnPaintDataPending())
-	{
-		View->TickDeferredUpload();
-	}
-
-	// Keep animation active while pointer activity is recent.
-	const double Now = FPlatformTime::Seconds();
-	if (Now - LastUiInteractionTime < 0.5)
-	{
-		bForceBrowserFrameThisTick = true;
-		MarkHudAnimationActive(0.50);
-	}
-
-	if (bUseHudLockstepMode)
-	{
-		// Final HUD-only pump for responsiveness. This keeps browser/compositor
-		// work moving aggressively for lower perceived HUD latency.
-		SwuiManager::DoSwuiMessageLoop();
-
-	}
 }
 
 
@@ -847,11 +797,7 @@ bool USwuiSubsystem::FlushHudStateToJs(float DeltaTime)
 
 void USwuiSubsystem::RequestHudVisualRefresh(float DurationSeconds, bool bForceFullUpload)
 {
-	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI VISUAL REFRESH] RequestHudVisualRefresh  duration=%.3f  forceFullUpload=%d"),
-		DurationSeconds, bForceFullUpload ? 1 : 0);
-	bForceBrowserFrameThisTick = true;
-	MarkHudAnimationActive(DurationSeconds);
-	if (bForceFullUpload && View)
+	if (View)
 	{
 		View->RequestBrowserVisualRefresh(true);
 	}
