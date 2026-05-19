@@ -38,3 +38,14 @@ extern TAutoConsoleVariable<int32> CVarSwuiCustomUiHeight;
 // Profiling helpers
 extern TAutoConsoleVariable<int32> CVarSwuiNoTextureUpload;
 extern TAutoConsoleVariable<int32> CVarSwuiVerbosePaint;
+
+// HUD ROI
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiEnabled;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiX;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiY;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiW;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiH;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiCenterEnabled;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiCenterSize;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiOverlay;
+extern TAutoConsoleVariable<int32> CVarSwuiHudRoiShadeInactive;

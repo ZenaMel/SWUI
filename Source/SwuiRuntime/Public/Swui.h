@@ -277,6 +277,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance")
 	FSwuiDirtyUploadSettings DirtyUploadSettings;
 
+	/** HUD ROI — partial-surface rendering for HUD mode.
+	 *  When enabled and menu input is inactive, only configured ROI rects are
+	 *  copied and uploaded instead of the full CEF paint buffer.
+	 *  Use the debug overlay (bShowOverlay) to tune during PIE. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|Performance|HUD ROI",
+		meta=(EditCondition="bIsHUD"))
+	FSwuiHudRoiSettings HudRoiSettings;
+
 	// Stop syncing all observed properties/events for a source object.
 	// Call from PlayerController's OnUnPossess, passing the old pawn.
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI", meta=(DefaultToSelf="Source"))

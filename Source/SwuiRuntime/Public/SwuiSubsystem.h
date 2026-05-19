@@ -145,6 +145,9 @@ private:
 	UPROPERTY()
 	UUserWidget* Widget = nullptr;
 
+	UPROPERTY()
+	class USwuiHudRoiOverlayWidget* RoiOverlay = nullptr;
+
 	TArray<FSwuiObservedProperty> ObservedProperties;
 	TArray<FSwuiObservedDelegate> ObservedDelegates;
 	TArray<FSwuiBindingSource>    CachedBindingSources;
@@ -175,6 +178,12 @@ private:
 
 	/** Evaluates the LowLatencyFramePacingMode setting and applies/restores r.OneFrameThreadLag. */
 	void UpdateLowLatencyFramePacing();
+
+	// ---- HUD ROI Overlay ----
+
+	void UpdateRoiOverlay();
+	void CreateRoiOverlay();
+	void DestroyRoiOverlay();
 
 	/** Saved r.OneFrameThreadLag value; -1 = not yet saved. */
 	int32 SavedOneFrameThreadLag = -1;

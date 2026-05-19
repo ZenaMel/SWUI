@@ -4,6 +4,7 @@
 #include "Swui.h"
 #include "SwuiView.h"
 #include "SwuiInputPreprocessor.h"
+#include "SwuiHudRoiOverlayWidget.h"
 #include "SwuiCVars.h"
 #include "SwuiCVarHelpers.h"
 #include "ISwuiRuntime.h"
@@ -354,6 +355,8 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 
 void USwuiSubsystem::ShutdownRenderer()
 {
+	DestroyRoiOverlay();
+
 	if (Widget && Widget->IsInViewport())
 	{
 		Widget->RemoveFromParent();
@@ -362,6 +365,76 @@ void USwuiSubsystem::ShutdownRenderer()
 	View   = nullptr;
 	UpdateLowLatencyFramePacing();
 }
+
+// ── HUD ROI Overlay ─────────────────────────────────────────────────────
+
+void USwuiSubsystem::UpdateRoiOverlay()
+{
+	if (!View)
+	{
+		DestroyRoiOverlay();
+		return;
+	}
+
+	const FSwuiHudRoiOverlayState State = View->GetHudRoiOverlayState();
+
+	if (!State.bVisible && !RoiOverlay)
+	{
+		return;
+	}
+
+	if (!State.bVisible && RoiOverlay)
+	{
+		DestroyRoiOverlay();
+		return;
+	}
+
+	if (State.bVisible && !RoiOverlay)
+	{
+		CreateRoiOverlay();
+	}
+
+	if (RoiOverlay && View)
+	{
+		const bool bShade = SwuiCVarBool(
+			CVarSwuiHudRoiShadeInactive.GetValueOnGameThread(),
+			View->GetHudRoiSettings().bShadeInactiveArea);
+
+		RoiOverlay->UpdateOverlay(State, View->Width, View->Height, bShade);
+	}
+}
+
+void USwuiSubsystem::CreateRoiOverlay()
+{
+	if (RoiOverlay)
+	{
+		return;
+	}
+
+	UWorld* World = GetGameInstance()->GetWorld();
+	if (!World) return;
+
+	RoiOverlay = CreateWidget<USwuiHudRoiOverlayWidget>(World, USwuiHudRoiOverlayWidget::StaticClass());
+	if (RoiOverlay)
+	{
+		RoiOverlay->AddToViewport(10000); // High Z-order to stay on top
+		RoiOverlay->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+}
+
+void USwuiSubsystem::DestroyRoiOverlay()
+{
+	if (RoiOverlay)
+	{
+		if (RoiOverlay->IsInViewport())
+		{
+			RoiOverlay->RemoveFromParent();
+		}
+		RoiOverlay = nullptr;
+	}
+}
+
+// ── UpdateInstanceSettings ──────────────────────────────────────────────
 
 void USwuiSubsystem::UpdateInstanceSettings(const FSwuiInstanceSettings& NewSettings)
 {
@@ -382,6 +455,8 @@ void USwuiSubsystem::UpdateInstanceSettings(const FSwuiInstanceSettings& NewSett
 		Widget->SetVisibility(ESlateVisibility::Collapsed);
 	else if (!NewSettings.bHideDrawComponent && Widget)
 		Widget->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+	View->UpdateHudRoiSettings(NewSettings.HudRoiSettings);
 }
 
 void USwuiSubsystem::SetWidgetVisible(bool bVisible)
@@ -608,6 +683,9 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	{
 		View->NotifyHudStateFlushed();
 	}
+
+	// ── HUD ROI overlay ─────────────────────────────────────────────────
+	UpdateRoiOverlay();
 
 	// Pump again after JS flush. This gives CEF a chance to process any
 	// ExecuteJavaScript posted tasks and produce OnPaint.

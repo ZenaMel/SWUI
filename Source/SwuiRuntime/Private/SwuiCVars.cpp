@@ -163,3 +163,58 @@ TAutoConsoleVariable<int32> CVarSwuiVerbosePaint(
 	0,
 	TEXT("Debug: log per-paint upload strategy details. 0=off, 1=on."),
 	ECVF_Default);
+
+// HUD ROI
+TAutoConsoleVariable<int32> CVarSwuiHudRoiEnabled(
+	TEXT("swui.hud.Roi.Enabled"),
+	-1,
+	TEXT("Override HUD ROI mode. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiX(
+	TEXT("swui.hud.Roi.X"),
+	-1,
+	TEXT("Override HUD ROI X. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiY(
+	TEXT("swui.hud.Roi.Y"),
+	-1,
+	TEXT("Override HUD ROI Y. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiW(
+	TEXT("swui.hud.Roi.W"),
+	-1,
+	TEXT("Override HUD ROI width. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiH(
+	TEXT("swui.hud.Roi.H"),
+	-1,
+	TEXT("Override HUD ROI height. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiCenterEnabled(
+	TEXT("swui.hud.Roi.CenterEnabled"),
+	-1,
+	TEXT("Override center ROI. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiCenterSize(
+	TEXT("swui.hud.Roi.CenterSize"),
+	-1,
+	TEXT("Override center ROI size. -1 = use instance setting."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiOverlay(
+	TEXT("swui.hud.Roi.Overlay"),
+	-1,
+	TEXT("Override ROI overlay visibility. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);
+
+TAutoConsoleVariable<int32> CVarSwuiHudRoiShadeInactive(
+	TEXT("swui.hud.Roi.ShadeInactive"),
+	-1,
+	TEXT("Override inactive area shading. -1 = use instance setting, 0 = off, 1 = on."),
+	ECVF_Default);

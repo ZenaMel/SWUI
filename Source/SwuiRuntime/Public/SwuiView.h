@@ -91,6 +91,27 @@ public:
 	void NotifySubsystemTick();
 	void NotifyHudStateFlushed();
 
+	// ── HUD ROI ──────────────────────────────────────────────────────────
+
+	/** Update HUD ROI settings at runtime (e.g. from PostEditChangeProperty). */
+	void UpdateHudRoiSettings(const FSwuiHudRoiSettings& NewSettings);
+
+	/** Set menu input state. When active, forces full-surface updates and disables ROI. */
+	void SetMenuInputActive(bool bActive);
+
+	/** Build the list of active ROI rects for the current frame. Returns
+	 *  empty if full-surface mode should be used. */
+	TArray<FIntRect> BuildActiveHudRoiRects() const;
+
+	/** Build outer and center rects separately. Used by the renderer and overlay. */
+	void BuildHudRoiRects(TArray<FIntRect>& OutOuter, TArray<FIntRect>& OutCenter) const;
+
+	/** Returns overlay state for the debug widget. */
+	FSwuiHudRoiOverlayState GetHudRoiOverlayState() const;
+
+	/** Returns current HUD ROI settings (public read access for subsystem overlay). */
+	const FSwuiHudRoiSettings& GetHudRoiSettings() const { return HudRoiSettings; }
+
 	bool IsExternalBeginFrameActive() const { return bExternalBeginFrameActive; }
 	bool HasPaintAfterExternalBeginFrame() const { return bPaintArrivedAfterExternalBeginFrame; }
 
@@ -193,6 +214,12 @@ private:
 	double LastPaintArrivalTime = 0.0;
 	double PendingFreshPaintArrivalTime = 0.0;
 
+	// ---- HUD ROI state ----
+
+	FSwuiHudRoiSettings HudRoiSettings;
+	bool  bMenuInputActive = false;
+	int32 FullSurfaceSafetyFrames = 0;
+
 	// ---- General stats ----
 
 	int32 Stat_SubsystemTicks = 0;
@@ -211,6 +238,17 @@ private:
 	double Stat_PaintAfterBeginFrameMsSum = 0.0;
 	double Stat_PaintAfterBeginFrameMsMax = 0.0;
 	int32 Stat_PaintAfterBeginFrameSamples = 0;
+
+	// ---- HUD ROI stats ----
+
+	int32  Stat_RoiUploadRects = 0;
+	int32  Stat_RoiUploadedPx = 0;
+	int32  Stat_RoiUploads = 0;
+	double Stat_RoiEnqueueMsSum = 0.0;
+	double Stat_RoiEnqueueMsMax = 0.0;
+	int32  Stat_RoiEnqueueSamples = 0;
+	int32  Stat_RoiSkipsNoFreshFrame = 0;
+	int32  Stat_FullFallbacks = 0;
 
 	double Stat_LastLogTime = 0.0;
 	int32 TargetFpsForLog = 0;

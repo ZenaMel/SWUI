@@ -1,6 +1,7 @@
 #include "SwuiNavigation.h"
 #include "Swui.h"
 #include "SwuiSubsystem.h"
+#include "SwuiView.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -246,6 +247,12 @@ void USwuiNavigation::SetMenuInputActive(bool bActive)
 
 	const bool bDebugLog = bDebugMouseCapture || bLogNavigationEvents;
 	SwuiSub->SetInputDebugLoggingEnabled(bDebugLog);
+
+	// Forward menu input state to the view (controls ROI mode).
+	if (USwuiView* ActiveView = SwuiSub->GetActiveView())
+	{
+		ActiveView->SetMenuInputActive(bActive);
+	}
 
 	if (bActive)
 	{

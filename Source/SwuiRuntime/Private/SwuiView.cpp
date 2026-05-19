@@ -150,6 +150,7 @@ static const TCHAR* SwuiUiResolutionPresetName(ESwuiUiResolutionPreset Preset)
 void USwuiView::Init(const FSwuiInstanceSettings& InInstanceSettings)
 {
 	InstanceSettings = InInstanceSettings;
+	UpdateHudRoiSettings(InInstanceSettings.HudRoiSettings);
 
 	// Resolve UI resolution preset: override Width/Height with the internal
 	// render size chosen by the user, keeping the Subsystem-provided values
@@ -767,10 +768,20 @@ void USwuiView::OnPaint(
 		bHasPendingFullSurfacePaint = true;
 	}
 
-	// Stage the frame into the renderer's pool (latest-frame-wins).
+	// Stage the frame: either ROI direct path or full-surface pool.
 	if (bCanCopy)
 	{
-		FullSurfaceRenderer.StagePaint(Buffer, InWidth, InHeight, PaintNow);
+		const TArray<FIntRect> RoiRects = BuildActiveHudRoiRects();
+		if (!RoiRects.IsEmpty())
+		{
+			// ROI mode: copy only ROI rects directly from CEF buffer.
+			FullSurfaceRenderer.StageRoiPaint(Buffer, InWidth, InHeight, RoiRects, PaintNow);
+		}
+		else
+		{
+			// Full-surface mode: copy full CEF buffer into pool.
+			FullSurfaceRenderer.StagePaint(Buffer, InWidth, InHeight, PaintNow);
+		}
 	}
 
 	FMemory::Free(Regions);
@@ -801,22 +812,77 @@ void USwuiView::TickDeferredUpload()
 		return;
 	}
 
-	// Delegate to the renderer — it handles latest-frame-wins and the pool.
-	FullSurfaceRenderer.TickUpload(
-		static_cast<FTextureResource*>(Texture->GetResource()),
-		Now,
-		bDebugForceEveryTick);
+	const TArray<FIntRect> ActiveRects = BuildActiveHudRoiRects();
+	const bool bUseRoiMode = !ActiveRects.IsEmpty();
 
-	// In force-every-tick mode, the renderer handles re-upload; we just log once.
-	if (bDebugForceEveryTick)
+	if (bUseRoiMode)
 	{
-		static bool bForceModeLogged = false;
-		if (!bForceModeLogged)
+		if (FullSurfaceSafetyFrames > 0)
 		{
-			bForceModeLogged = true;
-			UE_LOG(LogSwuiRuntime, Log,
-				TEXT("[SwuiFullSurface] Force-every-tick mode ACTIVE — uploading full texture every tick, even without fresh CEF paint."));
+			--FullSurfaceSafetyFrames;
 		}
+
+		FSwuiRoiPayload Payload;
+
+		if (!FullSurfaceRenderer.ConsumeLatestRoiPayload(Payload) || Payload.Regions.IsEmpty() || Payload.Pixels.IsEmpty())
+		{
+			++Stat_RoiSkipsNoFreshFrame;
+		}
+		else
+		{
+			FTextureResource* TexRes = static_cast<FTextureResource*>(Texture->GetResource());
+
+			const int32 RoiRectCount = Payload.Regions.Num();
+			int64 RoiPx = 0;
+			for (const FUpdateTextureRegion2D& Rgn : Payload.Regions)
+			{
+				RoiPx += int64(Rgn.Width) * Rgn.Height;
+			}
+
+			const double EnqueueStart = FPlatformTime::Seconds();
+
+			ENQUEUE_RENDER_COMMAND(SwuiRoiUpload)(
+				[TexRes, Payload = MoveTemp(Payload)](FRHICommandList& RHICmdList) mutable
+				{
+					FRHITexture* Tex = TexRes ? TexRes->TextureRHI.GetReference() : nullptr;
+					if (!Tex)
+					{
+						return;
+					}
+
+					int32 DataOffset = 0;
+					for (const FUpdateTextureRegion2D& Region : Payload.Regions)
+					{
+						const int32 RectPitch = Region.Width * 4;
+						const int32 RectBytes = RectPitch * Region.Height;
+						RHIUpdateTexture2D(Tex, 0, Region, RectPitch,
+							Payload.Pixels.GetData() + DataOffset);
+						DataOffset += RectBytes;
+					}
+				});
+
+			const double EnqueueMs = (FPlatformTime::Seconds() - EnqueueStart) * 1000.0;
+
+			++Stat_RoiUploads;
+			Stat_RoiUploadRects += RoiRectCount;
+			Stat_RoiUploadedPx  += RoiPx;
+			Stat_RoiEnqueueSamples++;
+			Stat_RoiEnqueueMsSum += EnqueueMs;
+			if (EnqueueMs > Stat_RoiEnqueueMsMax)
+				Stat_RoiEnqueueMsMax = EnqueueMs;
+		}
+	}
+	else
+	{
+		if (FullSurfaceSafetyFrames > 0)
+		{
+			--FullSurfaceSafetyFrames;
+		}
+
+		FullSurfaceRenderer.TickUpload(
+			static_cast<FTextureResource*>(Texture->GetResource()),
+			Now,
+			bDebugForceEveryTick);
 	}
 
 	LogFullSurfaceStatsIfNeeded(Now);
@@ -859,6 +925,208 @@ void USwuiView::DriveContinuousBrowserFrame(double Now, bool bDebugForceEveryTic
 void USwuiView::PumpBrowserFrameIfDue(double Now, bool bForceFrame)
 {
 	DriveContinuousBrowserFrame(Now, bForceFrame);
+}
+
+// ── HUD ROI ───────────────────────────────────────────────────────────────
+
+void USwuiView::UpdateHudRoiSettings(const FSwuiHudRoiSettings& NewSettings)
+{
+	FSwuiHudRoiSettings Resolved = NewSettings;
+
+	const int32 OverrideEnabled = CVarSwuiHudRoiEnabled.GetValueOnGameThread();
+	if (OverrideEnabled >= 0)
+	{
+		Resolved.bEnabled = OverrideEnabled != 0;
+	}
+
+	const int32 OverrideCenter = CVarSwuiHudRoiCenterEnabled.GetValueOnGameThread();
+	if (OverrideCenter >= 0)
+	{
+		Resolved.bCenterRoiEnabled = OverrideCenter != 0;
+	}
+
+	const int32 OverrideOverlay = CVarSwuiHudRoiOverlay.GetValueOnGameThread();
+	if (OverrideOverlay >= 0)
+	{
+		Resolved.bShowOverlay = OverrideOverlay != 0;
+	}
+
+	const int32 OverrideShade = CVarSwuiHudRoiShadeInactive.GetValueOnGameThread();
+	if (OverrideShade >= 0)
+	{
+		Resolved.bShadeInactiveArea = OverrideShade != 0;
+	}
+
+	HudRoiSettings = Resolved;
+}
+
+void USwuiView::SetMenuInputActive(bool bActive)
+{
+	bMenuInputActive = bActive;
+
+	if (bActive)
+	{
+		// When opening a menu, ensure we use full-surface updates immediately.
+		FullSurfaceSafetyFrames = 0;
+		RequestBrowserVisualRefresh(true);
+	}
+	else
+	{
+		// When closing a menu, schedule safety frames to clear stale pixels
+		// outside ROI before resuming ROI-only mode.
+		FullSurfaceSafetyFrames = 2;
+		RequestBrowserVisualRefresh(true);
+	}
+}
+
+void USwuiView::BuildHudRoiRects(TArray<FIntRect>& OutOuter, TArray<FIntRect>& OutCenter) const
+{
+	OutOuter.Reset();
+	OutCenter.Reset();
+
+	const int32 FullW = Width;
+	const int32 FullH = Height;
+
+	float TopF = 0.0f, BottomF = 0.0f, LeftF = 0.0f, RightF = 0.0f;
+
+	if (HudRoiSettings.Mode == ESwuiHudRoiMode::UniformEdges)
+	{
+		TopF = BottomF = LeftF = RightF = FMath::Clamp(HudRoiSettings.UniformEdgePercent / 100.0f, 0.0f, 1.0f);
+	}
+	else
+	{
+		TopF    = FMath::Clamp(HudRoiSettings.TopPercent    / 100.0f, 0.0f, 1.0f);
+		BottomF = FMath::Clamp(HudRoiSettings.BottomPercent / 100.0f, 0.0f, 1.0f);
+		LeftF   = FMath::Clamp(HudRoiSettings.LeftPercent   / 100.0f, 0.0f, 1.0f);
+		RightF  = FMath::Clamp(HudRoiSettings.RightPercent  / 100.0f, 0.0f, 1.0f);
+	}
+
+	const int32 TopPx    = FMath::RoundToInt(FullH * TopF);
+	const int32 BottomPx = FMath::RoundToInt(FullH * BottomF);
+	const int32 LeftPx   = FMath::RoundToInt(FullW * LeftF);
+	const int32 RightPx  = FMath::RoundToInt(FullW * RightF);
+
+	const int32 InnerTop = FMath::Min(TopPx, FullH);
+	const int32 InnerBot = FMath::Max(FullH - BottomPx, InnerTop);
+
+	OutOuter.Add(FIntRect(0, 0, FullW, InnerTop));                                     // top
+	OutOuter.Add(FIntRect(0, InnerBot, FullW, FullH));                                  // bottom
+	OutOuter.Add(FIntRect(0, InnerTop, FMath::Min(LeftPx, FullW), InnerBot));           // left
+	OutOuter.Add(FIntRect(FMath::Max(FullW - RightPx, LeftPx), InnerTop, FullW, InnerBot)); // right
+
+	if (HudRoiSettings.bCenterRoiEnabled && HudRoiSettings.CenterRoiPercent > 0)
+	{
+		const float CenterCoverage = FMath::Clamp(HudRoiSettings.CenterRoiPercent / 100.0f, 0.0f, 1.0f);
+		const int32 Side = FMath::RoundToInt(FMath::Sqrt(CenterCoverage) * FMath::Min(FullW, FullH));
+		const int32 H = Side / 2;
+		FIntRect Center(FullW / 2 - H, FullH / 2 - H, FullW / 2 + H, FullH / 2 + H);
+		Center.Clip(FIntRect(0, 0, FullW, FullH));
+		if (Center.Area() > 0)
+		{
+			OutCenter.Add(Center);
+		}
+	}
+}
+
+TArray<FIntRect> USwuiView::BuildActiveHudRoiRects() const
+{
+	TArray<FIntRect> Rects;
+
+	if (!HudRoiSettings.bEnabled)
+	{
+		return Rects;
+	}
+
+	if (bMenuInputActive)
+	{
+		return Rects;
+	}
+
+	if (FullSurfaceSafetyFrames > 0)
+	{
+		return Rects;
+	}
+
+	if (IsForceFullFrameMode())
+	{
+		return Rects;
+	}
+
+	TArray<FIntRect> OuterRects, CenterRects;
+	BuildHudRoiRects(OuterRects, CenterRects);
+
+	Rects.Append(OuterRects);
+	Rects.Append(CenterRects);
+
+	if (Rects.IsEmpty())
+	{
+		UE_LOG(LogSwuiRuntime, Warning,
+			TEXT("[SwuiFullSurface] ROI enabled but all rects empty or invalid. Falling back to full surface."));
+	}
+
+	return Rects;
+}
+
+FSwuiHudRoiOverlayState USwuiView::GetHudRoiOverlayState() const
+{
+	FSwuiHudRoiOverlayState State;
+
+	State.bVisible = HudRoiSettings.bShowOverlay;
+
+	if (!HudRoiSettings.bEnabled)
+	{
+		State.bHudRoiModeActive = false;
+		State.ModeLabel = TEXT("ROI Disabled");
+		return State;
+	}
+
+	if (bMenuInputActive)
+	{
+		State.ModeLabel = TEXT("Menu Input Active");
+		return State;
+	}
+
+	if (FullSurfaceSafetyFrames > 0)
+	{
+		State.ModeLabel = TEXT("Safety Frames");
+		return State;
+	}
+
+	if (IsForceFullFrameMode())
+	{
+		State.ModeLabel = TEXT("Debug Force");
+		return State;
+	}
+
+	TArray<FIntRect> OuterRects, CenterRects;
+	BuildHudRoiRects(OuterRects, CenterRects);
+
+	State.OuterRoiRects   = OuterRects;
+	State.CenterRoiRects  = CenterRects;
+	State.ActiveRoiRects  = OuterRects;
+	State.ActiveRoiRects.Append(CenterRects);
+
+	State.bHudRoiModeActive = !State.ActiveRoiRects.IsEmpty();
+
+	if (State.bHudRoiModeActive)
+	{
+		State.ModeLabel = TEXT("Active");
+	}
+
+	const int32 TexArea = FMath::Max(1, Width * Height);
+
+	int64 TotalArea = 0;
+	for (const FIntRect& Rect : State.ActiveRoiRects)
+	{
+		TotalArea += Rect.Area();
+	}
+
+	State.RoiAreaPercent = FMath::Clamp(
+		(float(TotalArea) / float(TexArea)) * 100.0f,
+		0.0f,
+		100.0f);
+
+	return State;
 }
 
 void USwuiView::InvalidateBrowserView()
@@ -929,51 +1197,69 @@ void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 			R.StatInterval_Allocations);
 	}
 
+	const TArray<FIntRect> CurrentRoiRects = BuildActiveHudRoiRects();
+	const bool bRoiActive = !CurrentRoiRects.IsEmpty();
+	const TCHAR* RoiModeText = bRoiActive ? TEXT("HudRoi") : TEXT("Full");
+	const TCHAR* RoiReasonText = TEXT("N/A");
+
+	if (!HudRoiSettings.bEnabled)
+		RoiReasonText = TEXT("Disabled");
+	else if (bMenuInputActive)
+		RoiReasonText = TEXT("MenuInputActive");
+	else if (FullSurfaceSafetyFrames > 0)
+		RoiReasonText = TEXT("SafetyFrames");
+	else if (IsForceFullFrameMode())
+		RoiReasonText = TEXT("DebugForce");
+	else if (!bRoiActive)
+		RoiReasonText = TEXT("NoValidRoiRects");
+
+	const int32 TexArea = FMath::Max(1, Width * Height);
+	int64 RoiTotalPx = 0;
+	for (const FIntRect& Rect : CurrentRoiRects)
+	{
+		RoiTotalPx += Rect.Area();
+	}
+	const float RoiAreaPct = FMath::Clamp(
+		(float(RoiTotalPx) / float(TexArea)) * 100.0f, 0.0f, 100.0f);
+
 	UE_LOG(LogSwuiRuntime, Log,
-		TEXT("[SwuiFullSurface] preset=%s subsystemTicks/s=%d viewUploadTicks/s=%d")
-		TEXT(" cefPaints/s=%d uploads/s=%d skippedNoFreshPaint/s=%d uploadedPx/s=%lld droppedPaints/s=%d replacedReady/s=%d")
+		TEXT("[SwuiFullSurface] preset=%s targetFps=%d tex=%dx%d")
+		TEXT(" roiMode=%s roiReason=%s roiCurrentRects=%d roiAreaPct=%.1f roiOverlay=%d")
+		TEXT(" cefPaints/s=%d skippedNoFreshPaint/s=%d droppedPaints/s=%d replacedReady/s=%d")
 		TEXT(" pool{free=%d ready=%d inFlight=%d} allocs=%d")
-		TEXT(" externalBeginFrames/s=%d invalidateView/s=%d beginFramesWithoutPaint/s=%d paintsAfterInvalidate/s=%d")
-		TEXT(" extBeginSkip[inactive=%d disabled=%d noBrowser=%d rateLimited=%d]")
 		TEXT(" paintCopyAvgMs=%.3f paintCopyMaxMs=%.3f")
-		TEXT(" enqueueAvgMs=%.3f enqueueMaxMs=%.3f")
-		TEXT(" paintAfterBeginFrameAvgMs=%.3f paintAfterBeginFrameMaxMs=%.3f")
-		TEXT(" paintToUploadAvgMs=%.3f paintToUploadMaxMs=%.3f")
-		TEXT(" targetFps=%d browserFpsCap=%d tex=%dx%d forceEveryTick=%d"),
+		TEXT(" roiEnqueueAvgMs=%.4f roiEnqueueMaxMs=%.4f roiUploads/s=%d roiUploadRects/s=%d roiUploadedPx/s=%lld roiSkipsNoFresh/s=%d fullFallbacks/s=%d")
+		TEXT(" uploads/s=%d uploadedPx/s=%lld enqueueAvgMs=%.3f paintToUploadAvgMs=%.3f"),
 		PresetName,
-		Stat_SubsystemTicks,
-		Stat_ViewUploadTicks,
+		TargetFpsForLog,
+		Texture ? Texture->GetSizeX() : 0,
+		Texture ? Texture->GetSizeY() : 0,
+		RoiModeText,
+		RoiReasonText,
+		CurrentRoiRects.Num(),
+		RoiAreaPct,
+		SwuiCVarBool(CVarSwuiHudRoiOverlay.GetValueOnGameThread(), HudRoiSettings.bShowOverlay) ? 1 : 0,
 		R.StatInterval_CefPaints,
-		R.StatInterval_Uploads,
 		R.StatInterval_SkippedNoFreshPaint,
-		R.StatInterval_UploadedPx,
 		R.StatInterval_DroppedPaints,
 		R.StatInterval_ReplacedReadyFrames,
 		R.PoolFree,
 		R.PoolReady,
 		R.PoolInFlight,
 		R.StatInterval_Allocations,
-		Stat_ExternalBeginFrames,
-		Stat_InvalidateView,
-		Stat_BeginFramesWithoutPaint,
-		Stat_PaintsAfterInvalidate,
-		Stat_ExternalBeginFrameSkipInactive,
-		Stat_ExternalBeginFrameSkipDisabled,
-		Stat_ExternalBeginFrameSkipNoBrowser,
-		Stat_ExternalBeginFrameSkipRateLimited,
 		PaintCopyAvgMs,
 		R.StatInterval_PaintCopyMsMax,
+		Stat_RoiEnqueueSamples > 0 ? static_cast<float>(Stat_RoiEnqueueMsSum / Stat_RoiEnqueueSamples) : 0.f,
+		Stat_RoiEnqueueMsMax,
+		Stat_RoiUploads,
+		Stat_RoiUploadRects,
+		Stat_RoiUploadedPx,
+		Stat_RoiSkipsNoFreshFrame,
+		Stat_FullFallbacks,
+		R.StatInterval_Uploads,
+		R.StatInterval_UploadedPx,
 		EnqueueAvgMs,
-		R.StatInterval_EnqueueMsMax,
-		PaintAfterBeginFrameAvgMs,
-		Stat_PaintAfterBeginFrameMsMax,
-		PaintToUploadAvgMs,
-		R.StatInterval_PaintToUploadMsMax,
-		TargetFpsForLog,
-		WindowlessFrameRate,
-		Texture ? Texture->GetSizeX() : 0,
-		Texture ? Texture->GetSizeY() : 0,
-		IsForceFullFrameMode() ? 1 : 0);
+		PaintToUploadAvgMs);
 
 	ResetFullSurfaceStats();
 	Stat_LastLogTime = Now;
@@ -998,6 +1284,16 @@ void USwuiView::ResetFullSurfaceStats()
 	Stat_PaintAfterBeginFrameMsSum = 0.0;
 	Stat_PaintAfterBeginFrameMsMax = 0.0;
 	Stat_PaintAfterBeginFrameSamples = 0;
+
+	// ROI stats.
+	Stat_RoiUploadRects     = 0;
+	Stat_RoiUploadedPx      = 0;
+	Stat_RoiUploads         = 0;
+	Stat_RoiEnqueueMsSum    = 0.0;
+	Stat_RoiEnqueueMsMax    = 0.0;
+	Stat_RoiEnqueueSamples  = 0;
+	Stat_RoiSkipsNoFreshFrame = 0;
+	Stat_FullFallbacks      = 0;
 
 	// Reset renderer interval counters too.
 	FullSurfaceRenderer.ResetIntervalStats();

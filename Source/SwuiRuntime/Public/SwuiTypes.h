@@ -110,6 +110,57 @@ struct FSwuiNavigationEvent
 	}
 };
 
+UENUM(BlueprintType)
+enum class ESwuiHudRoiMode : uint8
+{
+	UniformEdges    UMETA(DisplayName = "Uniform Edges"),
+	IndividualEdges UMETA(DisplayName = "Individual Edges")
+};
+
+USTRUCT(BlueprintType)
+struct FSwuiHudRoiSettings
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI")
+	bool bEnabled = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI")
+	ESwuiHudRoiMode Mode = ESwuiHudRoiMode::UniformEdges;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::UniformEdges", ClampMin="0", ClampMax="100"))
+	int32 UniformEdgePercent = 25;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+	int32 TopPercent = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+	int32 BottomPercent = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+	int32 LeftPercent = 5;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+	int32 RightPercent = 5;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI")
+	bool bCenterRoiEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI", meta=(ClampMin="0", ClampMax="100"))
+	int32 CenterRoiPercent = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI|Debug")
+	bool bShowOverlay = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI|Debug")
+	bool bShadeInactiveArea = true;
+};
+
 // Per-instance rendering overrides forwarded from USwui → InitRenderer → USwuiView::Init().
 // A value of 0 / 0.f means "use the project-wide USwuiSettings default".
 struct FSwuiInstanceSettings
@@ -140,6 +191,9 @@ struct FSwuiInstanceSettings
 	bool  bHideDrawComponent        = false; // hide the UE widget/material draw surface
 	bool  bShowDirtyRectOverlay     = false; // push dirty rects + stats to __SWUI_DEBUG_RECTS__ at ~10 Hz
 	bool  bDebugForceFullFrameUploadEveryFrame = false; // bypass all optimisations, upload full texture every frame
+
+	// HUD ROI settings for partial-surface rendering.
+	FSwuiHudRoiSettings HudRoiSettings;
 
 	// UI resolution preset — internal render size before HUD scaling.
 	ESwuiUiResolutionPreset UiResolutionPreset = ESwuiUiResolutionPreset::Quality1080p;
@@ -184,6 +238,41 @@ struct FSwuiPaintUploadData
 	FTextureResource*           Texture2DResource = nullptr;
 	TArray<uint8>               PackedPixels;  // all rect data end-to-end
 	TArray<FSwuiPackedRectDesc> Rects;
+};
+
+// ---------------------------------------------------------------------------
+// HUD ROI overlay state — consumed by the debug overlay widget each frame.
+// Contains the same rects used by the renderer, plus display info.
+// ---------------------------------------------------------------------------
+USTRUCT(BlueprintType)
+struct FSwuiHudRoiOverlayState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bVisible = false;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bHudRoiModeActive = false;
+
+	/** All outer ROI rects (1 for manual, 4 edge bands for percentage frame). */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FIntRect> OuterRoiRects;
+
+	/** Center ROI rect (0 or 1). */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FIntRect> CenterRoiRects;
+
+	/** Combined active rects — same list the renderer uploads. */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FIntRect> ActiveRoiRects;
+
+	/** Union area of all active rects as percentage of total texture area. */
+	UPROPERTY(BlueprintReadOnly)
+	float RoiAreaPercent = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly)
+	FString ModeLabel;
 };
 
 class ISwuiRenderTarget

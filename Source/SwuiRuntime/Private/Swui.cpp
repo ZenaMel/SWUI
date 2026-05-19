@@ -146,6 +146,7 @@ void USwui::InitializeSwuiView()
 	InstSettings.bUseRotatingDeferredTileCursor       = DirtyUploadSettings.bUseRotatingDeferredTileCursor;
 	InstSettings.bLogSwuiPaintStats                   = DirtyUploadSettings.bLogSwuiPaintStats;
 	InstSettings.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
+	InstSettings.HudRoiSettings                       = HudRoiSettings;
 
 	Sub->InitRenderer(DefaultURI, InterfaceName, GetOwner(), bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
@@ -240,6 +241,7 @@ void USwui::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 	Rebuilt.bUseRotatingDeferredTileCursor       = DirtyUploadSettings.bUseRotatingDeferredTileCursor;
 	Rebuilt.bLogSwuiPaintStats                   = DirtyUploadSettings.bLogSwuiPaintStats;
 	Rebuilt.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
+	Rebuilt.HudRoiSettings                       = HudRoiSettings;
 	Sub->UpdateInstanceSettings(Rebuilt);
 }
 #endif

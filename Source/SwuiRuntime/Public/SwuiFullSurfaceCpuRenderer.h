@@ -27,19 +27,22 @@ struct FSwuiFullSurfaceFrame
 };
 
 // ---------------------------------------------------------------------------
+// ROI paint payload — packed pixel data for active ROI regions.
+// Produced by StageRoiPaint (CEF thread), consumed by ConsumeLatestRoiPayload
+// (game thread). Guarded by RoiPayloadMutex.
+// ---------------------------------------------------------------------------
+struct FSwuiRoiPayload
+{
+	TArray<uint8> Pixels;
+	TArray<FUpdateTextureRegion2D> Regions;
+	uint64 Generation = 0;
+	double PaintTime  = 0.0;
+	int32 FrameWidth  = 0;
+	int32 FrameHeight = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Dedicated full-surface CPU renderer.
-//
-// Thread model:
-//   InitializePool / HandleSizeChanged — game thread
-//   StagePaint   — CEF renderer thread
-//   TickUpload   — game thread
-//   ReturnFrameToFree — RHI thread
-//
-// Conventions:
-//   Top-level public methods lock PoolMutex if they touch shared state.
-//   _Locked helpers assume caller already holds PoolMutex.
-//   ReturnedFrames is MPSC TQueue — lock-free for producer (RHI thread),
-//     drained under PoolMutex by consumer (game/CEF threads).
 // ---------------------------------------------------------------------------
 class FSwuiFullSurfaceCpuRenderer
 {
@@ -47,17 +50,39 @@ public:
 	FSwuiFullSurfaceCpuRenderer();
 	~FSwuiFullSurfaceCpuRenderer();
 
+	// ── Full-surface pool (used in full-surface and fallback modes) ──────
+
 	void InitializePool(int32 Width, int32 Height);
 	void HandleTextureSizeChanged(int32 NewWidth, int32 NewHeight);
 
 	void StagePaint(const void* Buffer, int32 InWidth, int32 InHeight, double PaintArrivalTime);
-
 	void TickUpload(FTextureResource* InTextureResource, double Now, bool bForceEveryTick);
 
 	void Reset();
 
 	bool HasFreshPaintPending() const;
 	void ClearPendingPaint();
+
+	// ── ROI direct paint path (skips pool entirely) ──────────────────────
+	// Called from OnPaint (CEF thread): copies only ROI rects from raw
+	// CEF buffer into a standalone payload. No pool copy.
+	// Called from TickDeferredUpload (game thread): consumes payload for upload.
+
+	/** Copy only active ROI rects from the raw CEF OnPaint buffer. */
+	void StageRoiPaint(
+		const void* CefBuffer,
+		int32 BufferWidth,
+		int32 BufferHeight,
+		const TArray<FIntRect>& ActiveRects,
+		double PaintArrivalTime);
+
+	/** Returns true if a fresh ROI payload is available. */
+	bool HasRoiPaintPending() const;
+
+	/** Consume the latest ROI payload (game thread). Returns false if none. */
+	bool ConsumeLatestRoiPayload(FSwuiRoiPayload& OutPayload);
+
+	// ── Stats ────────────────────────────────────────────────────────────
 
 	struct FStats
 	{
@@ -98,7 +123,6 @@ private:
 
 	FSwuiFullSurfaceFrame OwnedFrames[PoolSize];
 
-	// All queues/sets are guarded by PoolMutex except ReturnedFrames.
 	FSwuiFullSurfaceFrame* FreeFrames[PoolSize];
 	int32 FreeCount = 0;
 
@@ -107,8 +131,6 @@ private:
 	FSwuiFullSurfaceFrame* InFlightFrames[PoolSize];
 	int32 InFlightCount = 0;
 
-	// MPSC queue: producer = RHI thread (ReturnFrameToFree), consumer =
-	// game/CEF threads (drained under PoolMutex in _Locked helpers).
 	TQueue<FSwuiFullSurfaceFrame*, EQueueMode::Mpsc> ReturnedFrames;
 
 	mutable FCriticalSection PoolMutex;
@@ -120,6 +142,15 @@ private:
 	bool bHasEverHadFrame = false;
 
 	mutable FStats Stats;
+
+	// ── ROI payload state ────────────────────────────────────────────────
+	// Guarded by RoiPayloadMutex.
+	mutable FCriticalSection RoiPayloadMutex;
+
+	FSwuiRoiPayload LatestRoiPayload;
+	FSwuiRoiPayload ConsumedRoiPayload; // staging area for ConsumeLatestRoiPayload
+	uint64 RoiGeneration = 0;
+	uint64 RoiUploadedGeneration = 0;
 
 	// _Locked helpers — caller must already hold PoolMutex.
 	void DrainReturnedQueue_Locked();

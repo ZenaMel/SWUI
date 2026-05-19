@@ -316,31 +316,125 @@ void FSwuiFullSurfaceCpuRenderer::ReturnFrameToFree(FSwuiFullSurfaceFrame* Frame
 	ReturnedFrames.Enqueue(Frame);
 }
 
+// ── ROI direct paint path ─────────────────────────────────────────────────
+
+void FSwuiFullSurfaceCpuRenderer::StageRoiPaint(
+	const void* CefBuffer,
+	int32 BufferWidth,
+	int32 BufferHeight,
+	const TArray<FIntRect>& ActiveRects,
+	double PaintArrivalTime)
+{
+	const double CopyStart = FPlatformTime::Seconds();
+	const int32 SrcPitch = BufferWidth * 4;
+	const uint8* Src = static_cast<const uint8*>(CefBuffer);
+
+	FSwuiRoiPayload Payload;
+	Payload.FrameWidth  = BufferWidth;
+	Payload.FrameHeight = BufferHeight;
+	Payload.PaintTime   = PaintArrivalTime;
+
+	Payload.Pixels.Reset();
+	Payload.Regions.Reset();
+
+	int32 TotalBytes = 0;
+	for (const FIntRect& Rect : ActiveRects)
+	{
+		TotalBytes += Rect.Width() * Rect.Height() * 4;
+	}
+	Payload.Pixels.Reserve(TotalBytes);
+
+	for (const FIntRect& Rect : ActiveRects)
+	{
+		const int32 RgnW = Rect.Width();
+		const int32 RgnH = Rect.Height();
+		const int32 DstPitch = RgnW * 4;
+
+		Payload.Regions.Add(FUpdateTextureRegion2D(Rect.Min.X, Rect.Min.Y, 0, 0, RgnW, RgnH));
+
+		for (int32 Row = 0; Row < RgnH; ++Row)
+		{
+			const int32 SrcOffset = (Rect.Min.Y + Row) * SrcPitch + Rect.Min.X * 4;
+			const int32 DstOffset = Payload.Pixels.Num();
+			Payload.Pixels.AddUninitialized(DstPitch);
+			FPlatformMemory::Memcpy(Payload.Pixels.GetData() + DstOffset, Src + SrcOffset, DstPitch);
+		}
+	}
+
+	const double CopyMs = (FPlatformTime::Seconds() - CopyStart) * 1000.0;
+
+	{
+		FScopeLock Lock(&RoiPayloadMutex);
+
+		Payload.Generation = ++RoiGeneration;
+		LatestRoiPayload = MoveTemp(Payload);
+	}
+
+	{
+		FScopeLock Lock(&PoolMutex);
+		Stats.StatInterval_CefPaints++;
+		Stats.StatInterval_PaintCopySamples++;
+		Stats.StatInterval_PaintCopyMsSum += CopyMs;
+		if (CopyMs > Stats.StatInterval_PaintCopyMsMax)
+			Stats.StatInterval_PaintCopyMsMax = CopyMs;
+	}
+}
+
+bool FSwuiFullSurfaceCpuRenderer::HasRoiPaintPending() const
+{
+	FScopeLock Lock(&RoiPayloadMutex);
+	return RoiGeneration > RoiUploadedGeneration && LatestRoiPayload.Regions.Num() > 0;
+}
+
+bool FSwuiFullSurfaceCpuRenderer::ConsumeLatestRoiPayload(FSwuiRoiPayload& OutPayload)
+{
+	FScopeLock Lock(&RoiPayloadMutex);
+
+	if (RoiGeneration <= RoiUploadedGeneration || LatestRoiPayload.Regions.IsEmpty())
+	{
+		return false;
+	}
+
+	OutPayload = MoveTemp(LatestRoiPayload);
+	RoiUploadedGeneration = OutPayload.Generation;
+	return true;
+}
+
 // ── Reset ───────────────────────────────────────────────────────────────────
 
 void FSwuiFullSurfaceCpuRenderer::Reset()
 {
-	FScopeLock Lock(&PoolMutex);
-
-	FSwuiFullSurfaceFrame* Discard = nullptr;
-	while (ReturnedFrames.Dequeue(Discard)) {}
-
-	FreeCount = 0;
-	for (int32 i = 0; i < PoolSize; ++i)
 	{
-		OwnedFrames[i].Pixels.Empty();
-		OwnedFrames[i].Width      = 0;
-		OwnedFrames[i].Height     = 0;
-		OwnedFrames[i].Generation = 0;
-		OwnedFrames[i].PaintTime  = 0.0;
+		FScopeLock Lock(&PoolMutex);
+
+		FSwuiFullSurfaceFrame* Discard = nullptr;
+		while (ReturnedFrames.Dequeue(Discard)) {}
+
+		FreeCount = 0;
+		for (int32 i = 0; i < PoolSize; ++i)
+		{
+			OwnedFrames[i].Pixels.Empty();
+			OwnedFrames[i].Width      = 0;
+			OwnedFrames[i].Height     = 0;
+			OwnedFrames[i].Generation = 0;
+			OwnedFrames[i].PaintTime  = 0.0;
+		}
+		LatestReadyFrame   = nullptr;
+		InFlightCount      = 0;
+		AllocatedWidth     = 0;
+		AllocatedHeight    = 0;
+		PaintGeneration    = 0;
+		UploadedGeneration = 0;
+		bHasEverHadFrame   = false;
 	}
-	LatestReadyFrame   = nullptr;
-	InFlightCount      = 0;
-	AllocatedWidth     = 0;
-	AllocatedHeight    = 0;
-	PaintGeneration    = 0;
-	UploadedGeneration = 0;
-	bHasEverHadFrame   = false;
+
+	{
+		FScopeLock Lock(&RoiPayloadMutex);
+		LatestRoiPayload = FSwuiRoiPayload();
+		ConsumedRoiPayload = FSwuiRoiPayload();
+		RoiGeneration = 0;
+		RoiUploadedGeneration = 0;
+	}
 
 	FStats Z = {};
 	Stats = Z;
