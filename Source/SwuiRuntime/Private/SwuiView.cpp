@@ -1001,10 +1001,10 @@ void USwuiView::BuildHudRoiRects(TArray<FIntRect>& OutOuter, TArray<FIntRect>& O
 		RightF  = FMath::Clamp(HudRoiSettings.RightPercent  / 100.0f, 0.0f, 1.0f);
 	}
 
-	const int32 TopPx    = FMath::RoundToInt(FullH * TopF);
-	const int32 BottomPx = FMath::RoundToInt(FullH * BottomF);
-	const int32 LeftPx   = FMath::RoundToInt(FullW * LeftF);
-	const int32 RightPx  = FMath::RoundToInt(FullW * RightF);
+	const int32 TopPx    = FMath::Max(1, FMath::RoundToInt(FullH * TopF));
+	const int32 BottomPx = FMath::Max(1, FMath::RoundToInt(FullH * BottomF));
+	const int32 LeftPx   = FMath::Max(1, FMath::RoundToInt(FullW * LeftF));
+	const int32 RightPx  = FMath::Max(1, FMath::RoundToInt(FullW * RightF));
 
 	const int32 InnerTop = FMath::Min(TopPx, FullH);
 	const int32 InnerBot = FMath::Max(FullH - BottomPx, InnerTop);

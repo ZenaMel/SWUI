@@ -129,23 +129,23 @@ struct FSwuiHudRoiSettings
 	ESwuiHudRoiMode Mode = ESwuiHudRoiMode::UniformEdges;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
-		meta=(EditCondition="Mode==ESwuiHudRoiMode::UniformEdges", ClampMin="0", ClampMax="100"))
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::UniformEdges", ClampMin="1", ClampMax="100"))
 	int32 UniformEdgePercent = 25;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
-		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="1", ClampMax="100"))
 	int32 TopPercent = 10;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
-		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="1", ClampMax="100"))
 	int32 BottomPercent = 10;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
-		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="1", ClampMax="100"))
 	int32 LeftPercent = 5;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI",
-		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="0", ClampMax="100"))
+		meta=(EditCondition="Mode==ESwuiHudRoiMode::IndividualEdges", ClampMin="1", ClampMax="100"))
 	int32 RightPercent = 5;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|HUD ROI")
