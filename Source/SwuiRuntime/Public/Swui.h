@@ -110,6 +110,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI")
 	bool bIsHUD = true;
 
+	// ---- Main Menu ---------------------------------------------------------
+
+	/** URI for the main menu page. Loaded when SetMainMenuVisible(true) is called.
+	 *  Bare paths resolve under Content/ (.html implicit). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SimpleWebUI|MainMenu")
+	FString MainMenuURI;
+
 	// ---------------------------------------------------------------------------
 	// Rendering Mode — selects the SWUI render backend for this component.
 	//
@@ -300,6 +307,15 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="SimpleWebUI")
 	void HideHUD() { SetHUDVisible(false); }
+
+	// ---- Main Menu ---------------------------------------------------------
+
+	/** Enable or disable the main menu.
+	 *  @param bEnabled  true = navigate to MainMenuURI, capture mouse, activate menu input;
+	 *                   false = navigate back to DefaultURI, restore game input.
+	 *  Does nothing when MainMenuURI is empty. */
+	UFUNCTION(BlueprintCallable, Category="SimpleWebUI|MainMenu")
+	void EnableMainMenu(bool bEnabled);
 
 private:
 	virtual void BeginPlay() override;

@@ -1,5 +1,6 @@
 ﻿#include "Swui.h"
 #include "SwuiSubsystem.h"
+#include "SwuiNavigation.h"
 #include "SwuiTypes.h"
 #include "Engine/GameInstance.h"
 
@@ -182,6 +183,33 @@ void USwui::SetHUDVisible(bool bVisible)
 	if (UGameInstance* GI = World->GetGameInstance())
 		if (USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>())
 			Sub->SetWidgetVisible(bVisible);
+}
+
+void USwui::EnableMainMenu(bool bEnabled)
+{
+	if (MainMenuURI.IsEmpty()) return;
+
+	UWorld* World = GetWorld();
+	if (!World) return;
+	UGameInstance* GI = World->GetGameInstance();
+	if (!GI) return;
+	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
+	if (!Sub) return;
+
+	if (bEnabled)
+	{
+		Sub->LoadURI(MainMenuURI);
+	}
+	else
+	{
+		if (DefaultURI.IsEmpty()) return;
+		Sub->LoadURI(DefaultURI);
+	}
+
+	if (USwuiNavigation* Nav = GetOwner()->FindComponentByClass<USwuiNavigation>())
+	{
+		Nav->SetMenuInputActive(bEnabled);
+	}
 }
 
 #if WITH_EDITOR
