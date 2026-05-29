@@ -22,6 +22,8 @@
 #include "K2Node_SwuiObserve.h"
 #include "K2Node_SwuiObserveEvent.h"
 
+#include "HAL/ConsoleManager.h"
+
 #define LOCTEXT_NAMESPACE "SwuiEditor"
 
 class FSwuiNodeFactory : public FGraphPanelNodeFactory
@@ -38,7 +40,7 @@ public:
 class FSwuiEditorModule : public IModuleInterface
 {
 public:
-	virtual void StartupModule() override
+		virtual void StartupModule() override
 	{
 		FPropertyEditorModule& PropertyModule =
 			FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
@@ -56,6 +58,13 @@ public:
 
 		NodeFactory = MakeShareable(new FSwuiNodeFactory);
 		FEdGraphUtilities::RegisterVisualNodeFactory(NodeFactory);
+
+		// Console command for code-only regeneration workflow.
+		IConsoleManager::Get().RegisterConsoleCommand(
+			TEXT("SwuiRegenerateBindings"),
+			TEXT("Regenerate all SWUI TypeScript bindings. Call from console, BP, or AS via ExecuteConsoleCommand."),
+			FConsoleCommandDelegate::CreateRaw(this, &FSwuiEditorModule::OnRefreshAllBindings),
+			ECVF_Default);
 
 		MaybeLaunchDevServer();
 		ExcludeContentUiFromAutoReimport();
@@ -81,6 +90,8 @@ public:
 	virtual void ShutdownModule() override
 	{
 		UToolMenus::UnRegisterStartupCallback(this);
+
+		IConsoleManager::Get().UnregisterConsoleObject(TEXT("SwuiRegenerateBindings"));
 
 		if (NodeFactory.IsValid())
 		{
