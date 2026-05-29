@@ -8,6 +8,18 @@
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "GameplayTagsManager.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<bool> CVarSwuiDebugCommands(
+	TEXT("swui.DebugCommands"),
+	false,
+	TEXT("Enable verbose logging for SWUI command (navigation event) dispatch."),
+	ECVF_Default);
+
+#define SWUI_CMD_LOG(Fmt, ...) \
+	do { if (CVarSwuiDebugCommands.GetValueOnGameThread()) { \
+		UE_LOG(LogTemp, Log, TEXT("[SWUI CMD] " Fmt), ##__VA_ARGS__); \
+	} } while(0)
 #include "JsonObjectConverter.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
@@ -485,6 +497,7 @@ void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& Js
 void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
 {
 	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS->UE NAV] ReceiveNavigationEventFromJs tag=%s payload=%s"), *Event.GetTagName().ToString(), *JsonPayload);
+	SWUI_CMD_LOG(TEXT("received: tag=%s payload_size=%d"), *Event.GetTagName().ToString(), JsonPayload.Len());
 
 	// ── Function-backed command dispatch ───────────────────────────────
 	USwuiSubsystem* Sub = GetSubsystem();
@@ -493,10 +506,16 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 		FSwuiFunctionCommand FnCmd;
 		if (Sub->TryResolveFunctionCommand(Event, FnCmd))
 		{
+			SWUI_CMD_LOG(TEXT("resolved UFUNCTION: %s::%s(%d params, hash=%d)"),
+				*FnCmd.OwnerClass->GetName(), *FnCmd.Function->GetName(),
+				FnCmd.Function->ParmsSize, FnCmd.Function->GetStructureSize());
+
 			UObject* Target = nullptr;
 			FString ResolveError;
 			if (!Sub->TryResolveActiveBindingTarget(FnCmd.OwnerClass, Target, ResolveError) || !Target)
 			{
+				SWUI_CMD_LOG(TEXT("target resolution FAILED: class=%s error=%s"),
+					*FnCmd.OwnerClass->GetName(), *ResolveError);
 				UE_LOG(LogTemp, Warning, TEXT("SWUI: Function-backed command '%s' (%s::%s) — %s"),
 					*Event.GetTagName().ToString(),
 					*FnCmd.OwnerClass->GetName(), *FnCmd.Function->GetName(),
@@ -510,6 +529,8 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 				Sub->QueueHudEventScript(ErrorScript);
 				return;
 			}
+
+			SWUI_CMD_LOG(TEXT("target resolved: %s (%s)"), *Target->GetName(), *Target->GetClass()->GetName());
 
 			// Allocate parameter buffer from the UFunction's parms size
 			uint8* Params = (uint8*)FMemory::Malloc(FMath::Max<int32>(FnCmd.Function->ParmsSize, 1));
@@ -530,15 +551,34 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 				FJsonObjectConverter::JsonObjectToUStruct(JsonObj.ToSharedRef(), FnCmd.Function, Params, 0, 0, false, nullptr);
 			}
 
+			SWUI_CMD_LOG(TEXT("calling ProcessEvent on %s::%s"), *Target->GetName(), *FnCmd.Function->GetName());
+
 			// Fire
 			Target->ProcessEvent(FnCmd.Function, Params);
 			FMemory::Free(Params);
 
+			SWUI_CMD_LOG(TEXT("ProcessEvent done, broadcasting OnSwuiCommandExecuted on %s"), *GetNameSafe(this));
+
 			// Broadcast hook so BP observers can react to successful command execution.
 			OnSwuiCommandExecuted.Broadcast(Event, JsonPayload);
+
+			// Always log binding diagnostic (not gated behind CVar) so we can
+			// immediately see if the BP hook node is connected.
+			if (!OnSwuiCommandExecuted.IsBound())
+			{
+				UE_LOG(LogTemp, Log, TEXT("[SWUI CMD] [BINDING-CHECK] OnSwuiCommandExecuted ZERO bound listeners on %s"),
+					*GetNameSafe(this));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Log, TEXT("[SWUI CMD] [BINDING-CHECK] OnSwuiCommandExecuted bound on %s — hook should fire"),
+					*GetNameSafe(this));
+			}
 			return;
 		}
 	}
+
+	SWUI_CMD_LOG(TEXT("no function-backed command for tag, falling through to standalone path"));
 
 	// ── Standalone / built-in tag routing (original path) ──────────────
 	const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;

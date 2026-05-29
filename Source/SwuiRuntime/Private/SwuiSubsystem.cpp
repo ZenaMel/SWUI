@@ -323,16 +323,20 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	View->Init(InstanceSettings);
 
 	// Inject focus-tracking JS so the runtime knows when an editable element has focus.
+	// Uses a generic bridge helper instead of hardcoding window.cefQuery — the bridge
+	// may be cefQuery, __SWUI__, Swui, or WebView2 postMessage depending on the runtime.
 	View->ExecuteJavaScript(
-		TEXT("(function(){var f=false;")
+		TEXT("(function(){")
+		TEXT("var f=false;")
+		TEXT("var swuiSend=window.cefQuery||window.__SWUI__?.send||window.Swui?.send||window.chrome?.webview?.postMessage||function(){};")
 		TEXT("document.addEventListener('focusin',function(e){")
 		TEXT("var el=e.target,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
-		TEXT("if(ed!==f){f=ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:ed}),onSuccess:function(){}});}")
+		TEXT("if(ed!==f){f=ed;swuiSend(JSON.stringify({type:'swui:focusInput',focused:ed}));}")
 		TEXT("});")
 		TEXT("document.addEventListener('focusout',function(){")
 		TEXT("setTimeout(function(){")
 		TEXT("var el=document.activeElement,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
-		TEXT("if(ed!==f){f=!!ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:!!ed}),onSuccess:function(){}});}")
+		TEXT("if(ed!==f){f=!!ed;swuiSend(JSON.stringify({type:'swui:focusInput',focused:!!ed}));}")
 		TEXT("},0);")
 		TEXT("});")
 		TEXT("})();")
@@ -714,15 +718,17 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	{
 		bFocusScriptInjected = true;
 		View->ExecuteJavaScript(
-			TEXT("(function(){var f=false;")
+			TEXT("(function(){")
+			TEXT("var f=false;")
+			TEXT("var swuiSend=window.cefQuery||window.__SWUI__?.send||window.Swui?.send||window.chrome?.webview?.postMessage||function(){};")
 			TEXT("document.addEventListener('focusin',function(e){")
 			TEXT("var el=e.target,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
-			TEXT("if(ed!==f){f=ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:ed}),onSuccess:function(){}});}")
+			TEXT("if(ed!==f){f=ed;swuiSend(JSON.stringify({type:'swui:focusInput',focused:ed}));}")
 			TEXT("});")
 			TEXT("document.addEventListener('focusout',function(){")
 			TEXT("setTimeout(function(){")
 			TEXT("var el=document.activeElement,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
-			TEXT("if(ed!==f){f=!!ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:!!ed}),onSuccess:function(){}});}")
+			TEXT("if(ed!==f){f=!!ed;swuiSend(JSON.stringify({type:'swui:focusInput',focused:!!ed}));}")
 			TEXT("},0);")
 			TEXT("});")
 			TEXT("})();")
@@ -1096,8 +1102,8 @@ void USwuiSubsystem::RebuildCommandRuntime()
 			const FString TagStr = FnIt->GetMetaData(TEXT("SwuiCommand"));
 			if (TagStr.IsEmpty()) continue;
 
-			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), /*bErrorIfNotFound=*/false);
-			if (!Tag.IsValid()) continue;
+		FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), /*bErrorIfNotFound=*/false);
+		if (!Tag.IsValid()) continue;
 
 			// Validate: no return value, no out params.
 			if (FnIt->GetReturnProperty() != nullptr)
@@ -1142,6 +1148,9 @@ void USwuiSubsystem::RebuildCommandRuntime()
 			Cmd.OwnerClass = Cls;
 			Cmd.Function = *FnIt;
 			FunctionCommands.Add(Tag, Cmd);
+
+			UE_LOG(LogTemp, Verbose, TEXT("SWUI: Command registered: '%s' → %s::%s(%d params)"),
+				*TagStr, *Cls->GetName(), *FnIt->GetName(), FnIt->ParmsSize);
 		}
 	}
 

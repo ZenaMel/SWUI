@@ -1617,7 +1617,7 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 			TEXT("\t\t\ttag: %s.%s,\n")
 			TEXT("\t\t\tcategory: %s,\n")
 			TEXT("\t\t\tdefaultEvent: %s,\n")
-			TEXT("\t\t\tpayloadType: %s,\n"),
+			TEXT("\t\t\tpayloadType: '%s',\n"),
 			*ObjectName, *Event.Identifier,
 			*SwuiQuotePreviewString(Event.Kind),
 			*SwuiQuotePreviewString(Event.Identifier),
@@ -1640,7 +1640,6 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 	ContractBody += TEXT("\t},\n} as const;\n\n");
 
 	FString ObjectBody = TagConstants + CommandsBody + StandaloneBody + ContractBody;
-	ObjectBody += FString::Printf(TEXT("export type { %s } from './%s.generated';\n"), *InterfaceName, *InterfaceName);
 	ObjectBody += FString::Printf(TEXT("export default %s;\n"), *ObjectName);
 
 	const FString Header = FString::Printf(

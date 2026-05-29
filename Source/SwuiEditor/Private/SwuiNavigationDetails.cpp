@@ -736,6 +736,22 @@ static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag
 }
 
 /**
+ * Resolve a SwuiCommand tag string into a FGameplayTag, registering it with
+ * the gameplay tag manager via INI persistence if it doesn't exist yet.
+ */
+static FGameplayTag SwuiResolveCommandTag(const FString& TagStr)
+{
+	FGameplayTag Tag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagStr), false);
+	if (!Tag.IsValid() && FGameplayTag::IsValidGameplayTagString(TagStr))
+	{
+		IGameplayTagsEditorModule::Get().AddNewGameplayTagToINI(TagStr, TEXT("SWUI function-backed command"));
+		UGameplayTagsManager::Get().EditorRefreshGameplayTagTree();
+		Tag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagStr), false);
+	}
+	return Tag;
+}
+
+/**
  * Collect all event tags declared via SwuiCommand metadata on UFUNCTIONs
  * across all loaded UClasses (C++ and AngelScript).
  * Used to exclude function-backed commands from the Custom Events group.
@@ -761,7 +777,7 @@ static TArray<FGameplayTag> GatherSwuiCommandTags()
 			if (Seen.Contains(TagFName)) continue;
 			Seen.Add(TagFName);
 
-			FGameplayTag Tag = UGameplayTagsManager::Get().RequestGameplayTag(TagFName, /*bErrorIfNotFound=*/false);
+			FGameplayTag Tag = SwuiResolveCommandTag(EventTag);
 			if (Tag.IsValid())
 			{
 				Result.Add(Tag);
@@ -1048,7 +1064,7 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			{
 				const FString TagStr = FnIt->GetMetaData(TEXT("SwuiCommand"));
 				if (TagStr.IsEmpty()) continue;
-				FGameplayTag Tag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagStr), false);
+				FGameplayTag Tag = SwuiResolveCommandTag(TagStr);
 				if (!Tag.IsValid()) continue;
 
 				FString ParamSummary;

@@ -1671,7 +1671,7 @@ bool USwuiView::ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp)
 	Event.native_key_code = 0;
 	Event.is_system_key = false;
 	Event.character = 0;
-	Event.unmodified_character = 0;
+	Event.unmodified_character = FChar::ToLower(KeyEvent.GetCharacter());
 	Event.focus_on_editable_field = bTextInputFocused ? 1 : 0;
 	Event.modifiers = 0;
 
