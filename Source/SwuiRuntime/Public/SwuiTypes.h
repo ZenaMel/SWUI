@@ -96,6 +96,13 @@ struct FSwuiNavigationEvent
 		meta=(DisplayName="Forward to JS", ToolTip="Forward this navigation event to the SWUI web view."))
 	bool bForwardToJS = true;
 
+	/** Optional UScriptStruct defining the payload schema for this navigation event.
+	 *  If set, the TS generator emits a typed payload interface, typed emit helper,
+	 *  and typed listener helper for this tag. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="SWUI|Navigation",
+		meta=(DisplayName="Payload Struct", ToolTip="Optional UScriptStruct that defines the JSON payload shape for this navigation event. Used for generated TS types."))
+	TSoftObjectPtr<UScriptStruct> PayloadStruct;
+
 	/** Trigger Blueprint callbacks for this event. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="SWUI|Navigation",
 		meta=(ToolTip="Trigger Blueprint callbacks for this navigation event."))
