@@ -1128,7 +1128,7 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 				];
 
 			// Add BP Event button
-			ValueBox.AddSlot()
+			ValueBox->AddSlot()
 				.AutoWidth()
 				.Padding(8.f, 0.f, 0.f, 0.f)
 				.VAlign(VAlign_Center)
