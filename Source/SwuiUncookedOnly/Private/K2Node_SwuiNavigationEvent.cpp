@@ -246,6 +246,42 @@ void UK2Node_SwuiNavigationEvent::ValidateNodeDuringCompilation(FCompilerResults
 		MessageLog.Error(*FString::Printf(TEXT("%s for @@"), *ErrorText.ToString()), this);
 	}
 
+	// Reject function-backed commands — these are dispatched directly
+	// by USwuiNavigation::ReceiveNavigationEventFromJs via ProcessEvent.
+	if (NavigationEventTag.IsValid())
+	{
+		bool bIsFunctionBacked = false;
+		for (TObjectIterator<UClass> It; It; ++It)
+		{
+			UClass* Cls = *It;
+			if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+			if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+			for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+			{
+				const FString Event = FnIt->GetMetaData(TEXT("SwuiEvent"));
+				if (!Event.IsEmpty())
+				{
+					FGameplayTag CmdTag = FGameplayTag::RequestGameplayTag(FName(*Event), false);
+					if (CmdTag == NavigationEventTag)
+					{
+						bIsFunctionBacked = true;
+						break;
+					}
+				}
+			}
+			if (bIsFunctionBacked) break;
+		}
+		if (bIsFunctionBacked)
+		{
+			MessageLog.Error(*FString::Printf(
+				TEXT("@@ : Tag '%s' is a function-backed command (UFUNCTION with SwuiEvent metadata). "
+					"Function-backed commands are dispatched directly at runtime via ProcessEvent — "
+					"a K2Node_SwuiNavigationEvent wrapper is not needed. "
+					"Remove this node and use the generated SwuiCommands helper from JS instead."),
+				*NavigationEventTag.GetTagName().ToString()), this);
+		}
+	}
+
 	// Every navigation event node MUST resolve a PayloadStruct.
 	// If none is configured, the tag lookup falls back to FSwuiEmptyPayload,
 	// but if even that fails, it's a hard error.

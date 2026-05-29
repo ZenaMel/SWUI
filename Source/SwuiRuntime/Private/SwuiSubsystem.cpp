@@ -16,6 +16,9 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
 #include "UObject/UnrealType.h"
 #include "UObject/Field.h"
@@ -641,6 +644,8 @@ void USwuiSubsystem::SetBindingSources(const TArray<FSwuiBindingSource>& Sources
 				ObserveDelegate(*It, TEXT(""), DelegateName);
 		}
 	}
+
+	RebuildCommandRuntime();
 }
 
 void USwuiSubsystem::ObserveSource(UObject* Instance, bool bWarnOnMiss)
@@ -1070,4 +1075,205 @@ void USwuiDelegateBridge::ProcessEvent(UFunction* Function, void* Parms)
 		*EscapedName, *Json);
 
 	Owner->QueueHudEventScript(Script);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Command Runtime — function-backed navigation events
+// ══════════════════════════════════════════════════════════════════════════════
+
+void USwuiSubsystem::RebuildCommandRuntime()
+{
+	FunctionCommands.Reset();
+
+	for (TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* Cls = *It;
+		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+
+		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+		{
+			const FString TagStr = FnIt->GetMetaData(TEXT("SwuiEvent"));
+			if (TagStr.IsEmpty()) continue;
+
+			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), /*bErrorIfNotFound=*/false);
+			if (!Tag.IsValid()) continue;
+
+			// Validate: no return value, no out params.
+			if (FnIt->GetReturnProperty() != nullptr)
+			{
+				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiEvent metadata but returns a value. "
+					"Function-backed commands must be void/delegate-returning."),
+					*Cls->GetName(), *FnIt->GetName());
+				continue;
+			}
+			bool bHasOutParam = false;
+			for (TFieldIterator<FProperty> ParamIt(*FnIt); ParamIt; ++ParamIt)
+			{
+				if (ParamIt->HasAnyPropertyFlags(CPF_OutParm) && !ParamIt->HasAnyPropertyFlags(CPF_ReturnParm))
+				{
+					bHasOutParam = true;
+					break;
+				}
+			}
+			if (bHasOutParam)
+			{
+				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiEvent but contains out params. "
+					"Function-backed commands must be fire-and-forget."),
+					*Cls->GetName(), *FnIt->GetName());
+				continue;
+			}
+
+			// Duplicate tag check across UFUNCTIONs.
+			if (FunctionCommands.Contains(Tag))
+			{
+				const FSwuiFunctionCommand& Existing = FunctionCommands[Tag];
+				UE_LOG(LogTemp, Error, TEXT("SWUI: Duplicate SwuiEvent tag '%s' — "
+					"already registered on %s::%s, now also found on %s::%s. "
+					"Each SwuiEvent tag must be unique."),
+					*TagStr,
+					*Existing.OwnerClass->GetName(), *Existing.Function->GetName(),
+					*Cls->GetName(), *FnIt->GetName());
+				continue;
+			}
+
+			FSwuiFunctionCommand Cmd;
+			Cmd.Tag = Tag;
+			Cmd.OwnerClass = Cls;
+			Cmd.Function = *FnIt;
+			FunctionCommands.Add(Tag, Cmd);
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("SWUI: Command runtime rebuilt — %d function-backed command(s) registered."),
+		FunctionCommands.Num());
+}
+
+bool USwuiSubsystem::TryResolveFunctionCommand(FGameplayTag Tag, FSwuiFunctionCommand& OutCommand) const
+{
+	if (const FSwuiFunctionCommand* Found = FunctionCommands.Find(Tag))
+	{
+		OutCommand = *Found;
+		return true;
+	}
+	return false;
+}
+
+bool USwuiSubsystem::TryResolveActiveBindingTarget(UClass* RequiredClass, UObject*& OutTarget, FString& OutError) const
+{
+	OutTarget = nullptr;
+	OutError.Empty();
+
+	if (!RequiredClass)
+	{
+		OutError = TEXT("RequiredClass is null.");
+		return false;
+	}
+
+	// ── Subsystem resolution ────────────────────────────────────────────
+	if (RequiredClass->IsChildOf<UGameInstanceSubsystem>())
+	{
+		UGameInstance* GI = GetGameInstance();
+		if (!GI)
+		{
+			OutError = TEXT("No GameInstance available.");
+			return false;
+		}
+		OutTarget = GI->GetSubsystemBase(RequiredClass);
+		if (!OutTarget)
+		{
+			OutError = FString::Printf(TEXT("GameInstance subsystem %s not found."), *RequiredClass->GetName());
+			return false;
+		}
+		return true;
+	}
+
+	if (RequiredClass->IsChildOf<UWorldSubsystem>())
+	{
+		UWorld* World = GetWorld();
+		if (!World)
+		{
+			OutError = TEXT("No World available.");
+			return false;
+		}
+		OutTarget = World->GetSubsystemBase(RequiredClass);
+		if (!OutTarget)
+		{
+			OutError = FString::Printf(TEXT("World subsystem %s not found."), *RequiredClass->GetName());
+			return false;
+		}
+		return true;
+	}
+
+	if (RequiredClass->IsChildOf<ULocalPlayerSubsystem>())
+	{
+		const UGameInstance* GI = GetGameInstance();
+		const ULocalPlayer* LP = GI ? GI->GetFirstGamePlayer() : nullptr;
+		if (!LP)
+		{
+			OutError = TEXT("No LocalPlayer available.");
+			return false;
+		}
+		OutTarget = LP->GetSubsystemBase(RequiredClass);
+		if (!OutTarget)
+		{
+			OutError = FString::Printf(TEXT("LocalPlayer subsystem %s not found."), *RequiredClass->GetName());
+			return false;
+		}
+		return true;
+	}
+
+	// ── Active binding source inst-ances ────────────────────────────────
+	int32 MatchCount = 0;
+	for (const FSwuiObservedProperty& Obs : ObservedProperties)
+	{
+		UObject* Obj = Obs.Source.Get();
+		if (!Obj) continue;
+		if (!Obj->IsA(RequiredClass)) continue;
+
+		if (OutTarget == nullptr)
+			OutTarget = Obj;
+		else if (OutTarget != Obj)
+			++MatchCount;
+	}
+
+	if (MatchCount > 1)
+	{
+		OutError = FString::Printf(TEXT("Multiple active instances found for %s — command dispatch is ambiguous."),
+			*RequiredClass->GetName());
+		OutTarget = nullptr;
+		return false;
+	}
+
+	if (!OutTarget)
+	{
+		// Also check ObservedDelegates for instances.
+		for (const FSwuiObservedDelegate& Obs : ObservedDelegates)
+		{
+			UObject* Obj = Obs.Source.Get();
+			if (!Obj) continue;
+			if (!Obj->IsA(RequiredClass)) continue;
+
+			if (OutTarget == nullptr)
+				OutTarget = Obj;
+			else if (OutTarget != Obj)
+				++MatchCount;
+		}
+
+		if (MatchCount > 1)
+		{
+			OutError = FString::Printf(TEXT("Multiple active instances found for %s — command dispatch is ambiguous."),
+				*RequiredClass->GetName());
+			OutTarget = nullptr;
+			return false;
+		}
+	}
+
+	if (!OutTarget)
+	{
+		OutError = FString::Printf(TEXT("No active binding-source instance found for %s."), *RequiredClass->GetName());
+		return false;
+	}
+
+	return true;
 }

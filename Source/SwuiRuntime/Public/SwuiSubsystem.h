@@ -155,6 +155,26 @@ public:
 	bool IsInputDebugLoggingEnabled() const { return bInputDebugLogging; }
 	void SetInputDebugLoggingEnabled(bool bEnabled) { bInputDebugLogging = bEnabled; }
 
+	// ---- Command Runtime (function-backed navigation events) ----
+
+	/** Re-scan binding sources for UFUNCTION(meta=(SwuiEvent="...")) and
+	 *  rebuild the function-command registry. Called at bindings refresh
+	 *  time (SetBindingSources) and on subsystem init. */
+	void RebuildCommandRuntime();
+
+	/** Look up a function-backed command by tag.
+	 *  @return true if a matching UFUNCTION was registered. */
+	bool TryResolveFunctionCommand(FGameplayTag Tag, FSwuiFunctionCommand& OutCommand) const;
+
+	/** Find exactly one active UObject instance for the given class from
+	 *  active binding sources and subsystem containers.
+	 *  @return true if exactly one instance was found.
+	 *  @param OutError Filled with a human-readable reason on failure. */
+	bool TryResolveActiveBindingTarget(UClass* RequiredClass, UObject*& OutTarget, FString& OutError) const;
+
+	/** Returns the cached command registry (used by details panel and validation). */
+	const TMap<FGameplayTag, FSwuiFunctionCommand>& GetCommandRegistry() const { return FunctionCommands; }
+
 	// ---- Public API ----
 
 	void ObserveProperty(UObject* Source, const FString& Namespace, const FName& PropertyName);
@@ -188,6 +208,9 @@ private:
 	TArray<FSwuiObservedProperty> ObservedProperties;
 	TArray<FSwuiObservedDelegate> ObservedDelegates;
 	TArray<FSwuiBindingSource>    CachedBindingSources;
+
+	/** Function-backed command registry — built by RebuildCommandRuntime. */
+	TMap<FGameplayTag, FSwuiFunctionCommand> FunctionCommands;
 
 	FString ResolveNamespace(UObject* Source, const FString& Namespace) const;
 

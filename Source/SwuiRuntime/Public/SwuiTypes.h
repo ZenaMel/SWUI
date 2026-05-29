@@ -117,6 +117,22 @@ struct FSwuiNavigationEvent
 	}
 };
 
+// ---------------------------------------------------------------------------
+// Function-backed navigation command — runtime registry, TS generation, dispatch.
+// ---------------------------------------------------------------------------
+
+/** A function-backed SWUI navigation command.
+ *  Resolved from UFUNCTION(meta=(SwuiEvent="swui.rooms.host")).
+ *  Runtime calls ProcessEvent on the resolved binding target with deserialized JSON. */
+struct FSwuiFunctionCommand
+{
+	FGameplayTag Tag;
+	UClass*      OwnerClass = nullptr;
+	UFunction*   Function = nullptr;
+
+	bool IsValid() const { return Tag.IsValid() && OwnerClass != nullptr && Function != nullptr; }
+};
+
 /** Default payload for navigation events that carry no data.
  *  Used implicitly by K2Node_SwuiNavigationEvent when no PayloadStruct is set. */
 USTRUCT(BlueprintType)

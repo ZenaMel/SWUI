@@ -8,6 +8,9 @@
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "GameplayTagsManager.h"
+#include "JsonObjectConverter.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonReader.h"
 
 
 #if WITH_EDITOR
@@ -482,6 +485,59 @@ void USwuiNavigation::EmitEventWithPayload(FGameplayTag Event, const FString& Js
 void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FString& JsonPayload)
 {
 	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI JS->UE NAV] ReceiveNavigationEventFromJs tag=%s payload=%s"), *Event.GetTagName().ToString(), *JsonPayload);
+
+	// ── Function-backed command dispatch ───────────────────────────────
+	USwuiSubsystem* Sub = GetSubsystem();
+	if (Sub)
+	{
+		FSwuiFunctionCommand FnCmd;
+		if (Sub->TryResolveFunctionCommand(Event, FnCmd))
+		{
+			UObject* Target = nullptr;
+			FString ResolveError;
+			if (!Sub->TryResolveActiveBindingTarget(FnCmd.OwnerClass, Target, ResolveError) || !Target)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SWUI: Function-backed command '%s' (%s::%s) — %s"),
+					*Event.GetTagName().ToString(),
+					*FnCmd.OwnerClass->GetName(), *FnCmd.Function->GetName(),
+					*ResolveError);
+
+				// Emit error event to JS
+				const FString ErrorScript = FString::Printf(
+					TEXT("window.dispatchEvent(new CustomEvent('swui:navigation-error',"
+						"{detail:{tag:'%s',reason:'%s'}}));"),
+					*Event.GetTagName().ToString(), *ResolveError);
+				Sub->QueueHudEventScript(ErrorScript);
+				return;
+			}
+
+			// Allocate parameter buffer from the UFunction's parms size
+			uint8* Params = (uint8*)FMemory::Malloc(FMath::Max<int32>(FnCmd.Function->ParmsSize, 1));
+			FMemory::Memzero(Params, FnCmd.Function->ParmsSize);
+
+			// Initialize out params if any (though they should not exist — validated at registry time)
+			for (TFieldIterator<FProperty> It(FnCmd.Function); It; ++It)
+			{
+				if (It->HasAnyPropertyFlags(CPF_OutParm))
+					It->InitializeValue_InContainer(Params);
+			}
+
+			// Deserialize JSON into the parameter buffer
+			TSharedPtr<FJsonObject> JsonObj;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonPayload);
+			if (FJsonSerializer::Deserialize(Reader, JsonObj) && JsonObj.IsValid())
+			{
+				FJsonObjectConverter::JsonObjectToUStruct(JsonObj.ToSharedRef(), FnCmd.Function, Params, 0, 0, false, nullptr);
+			}
+
+			// Fire
+			Target->ProcessEvent(FnCmd.Function, Params);
+			FMemory::Free(Params);
+			return;
+		}
+	}
+
+	// ── Standalone / built-in tag routing (original path) ──────────────
 	const FString Detail = JsonPayload.IsEmpty() ? TEXT("{}") : JsonPayload;
 	const FSwuiNavTags& Tags = FSwuiNavTags::Get();
 

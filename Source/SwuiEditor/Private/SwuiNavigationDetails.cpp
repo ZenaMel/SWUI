@@ -29,6 +29,7 @@
 #include "PropertyCustomizationHelpers.h"
 #include "GameplayTagsManager.h"
 #include "GameplayTagsEditorModule.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "ScopedTransaction.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "ToolMenus.h"
@@ -723,6 +724,7 @@ static void AddNavigationEvent(USwuiNavigation* Nav, const FGameplayTag& Tag)
 	Nav->Modify();
 	FSwuiNavigationEvent Evt;
 	Evt.Event = Tag;
+	Evt.PayloadStruct = FSwuiEmptyPayload::StaticStruct();
 	Nav->NavigationEvents.Add(Evt);
 }
 
@@ -956,6 +958,100 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 			return FReply::Handled();
 		})
 	];
+
+	// ---- Function-backed Commands (from UFUNCTION metadata) ----
+	struct FDiscoveredFunctionCommand
+	{
+		FGameplayTag Tag;
+		FString SourceClass;
+		FString FunctionName;
+		FString ParamSummary;
+	};
+	TArray<FDiscoveredFunctionCommand> FunctionCommands;
+	{
+		TArray<FDiscoveredFunctionCommand> Unsorted;
+		for (TObjectIterator<UClass> It; It; ++It)
+		{
+			UClass* Cls = *It;
+			if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+			if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+			for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+			{
+				const FString TagStr = FnIt->GetMetaData(TEXT("SwuiEvent"));
+				if (TagStr.IsEmpty()) continue;
+				FGameplayTag Tag = UGameplayTagsManager::Get().RequestGameplayTag(FName(*TagStr), false);
+				if (!Tag.IsValid()) continue;
+
+				FString ParamSummary;
+				for (TFieldIterator<FProperty> ParamIt(*FnIt); ParamIt; ++ParamIt)
+				{
+					if (ParamIt->HasAnyPropertyFlags(CPF_ReturnParm)) continue;
+					FString TypeStr = ParamIt->GetCPPType();
+					FString NameStr = ParamIt->GetName();
+					if (TypeStr.StartsWith(TEXT("const "))) TypeStr = TypeStr.RightChop(6);
+					if (ParamIt->HasAnyPropertyFlags(CPF_OutParm)) TypeStr += TEXT("&");
+					if (!ParamSummary.IsEmpty()) ParamSummary += TEXT(", ");
+					ParamSummary += TypeStr + TEXT(" ") + NameStr;
+				}
+
+				Unsorted.Add({Tag, Cls->GetName(), FnIt->GetName(), ParamSummary});
+			}
+		}
+		Unsorted.Sort([](const FDiscoveredFunctionCommand& A, const FDiscoveredFunctionCommand& B)
+			{ return A.Tag.GetTagName().LexicalLess(B.Tag.GetTagName()); });
+		FunctionCommands = Unsorted;
+	}
+
+	if (FunctionCommands.Num() > 0)
+	{
+		IDetailGroup& FnCmdGroup = Cat.AddGroup(
+			TEXT("SwuiFunctionCommands"),
+			LOCTEXT("FunctionCommandsHeader", "Function-backed Commands (from UFUNCTION metadata)"),
+			/*bForAdvanced=*/false, /*bStartExpanded=*/false);
+
+		FnCmdGroup.AddWidgetRow()
+		.WholeRowContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("FunctionCommandNote",
+				"Commands discovered from UFUNCTION(meta=(SwuiEvent=\"...\")). "
+				"These are dispatched directly via ProcessEvent at runtime — "
+				"no BP event node is needed. Payload shape comes from UFUNCTION params."))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.AutoWrapText(true)
+			.ColorAndOpacity(FLinearColor(0.5f, 0.7f, 1.0f))
+		];
+
+		for (const FDiscoveredFunctionCommand& Cmd : FunctionCommands)
+		{
+			const FString Line = FString::Printf(TEXT("%s → %s::%s(%s)"),
+				*Cmd.Tag.GetTagName().ToString(), *Cmd.SourceClass, *Cmd.FunctionName, *Cmd.ParamSummary);
+
+			FnCmdGroup.AddWidgetRow()
+			.WholeRowContent()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(Line))
+					.Font(IDetailLayoutBuilder::GetDetailFont())
+				]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f).VAlign(VAlign_Center)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("CopyTag", "Copy"))
+					.ToolTipText(LOCTEXT("CopyTagTip", "Copy tag to clipboard"))
+					.ContentPadding(FMargin(8.f, 2.f))
+					.OnClicked_Lambda([TagStr = Cmd.Tag.GetTagName().ToString()]()
+					{
+						FPlatformApplicationMisc::ClipboardCopy(*TagStr);
+						return FReply::Handled();
+					})
+				]
+			];
+		}
+	}
 
 	// ---- Gather tags ----
 	TArray<FGameplayTag> DefaultTags, CustomTags;
