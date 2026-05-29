@@ -165,15 +165,15 @@ FSwuiEffectiveBindings SwuiCollectEffectiveBindings(USwui* Bridge)
 		if (BoundClasses.Contains(Cls)) continue;
 		if (!Cls->IsChildOf<AActor>() && !Cls->IsChildOf<UActorComponent>()) continue;
 
-		// ── SwuiEvent on UFUNCTION ────────────────────────────
+		// ── SwuiCommand on UFUNCTION ────────────────────────────
 		// Collected by the navigation event generator separately.
-		// SwuiEvent="onev.rooms.host" declares the navigation event tag inline.
+		// SwuiCommand="onev.rooms.host" declares the navigation event tag inline.
 		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 		{
-			if (FnIt->HasMetaData(TEXT("SwuiEvent")))
+			if (FnIt->HasMetaData(TEXT("SwuiCommand")))
 			{
-				UE_LOG(LogTemp, Verbose, TEXT("SWUI: SwuiEvent='%s' on UFUNCTION '%s' — will emit as navigation event."),
-					*FnIt->GetMetaData(TEXT("SwuiEvent")), *FnIt->GetName());
+				UE_LOG(LogTemp, Verbose, TEXT("SWUI: SwuiCommand='%s' on UFUNCTION '%s' — will emit as navigation event."),
+					*FnIt->GetMetaData(TEXT("SwuiCommand")), *FnIt->GetName());
 			}
 		}
 
@@ -193,7 +193,7 @@ FSwuiEffectiveBindings SwuiCollectEffectiveBindings(USwui* Bridge)
 		for (TFieldIterator<FMulticastDelegateProperty> DIt(Cls); DIt && !bHasExpose; ++DIt)
 			if (DIt->HasMetaData(TEXT("SwuiExpose"))) bHasExpose = true;
 		for (TFieldIterator<UFunction> FIt(Cls, EFieldIteratorFlags::ExcludeSuper); FIt && !bHasExpose; ++FIt)
-			if (FIt->HasMetaData(TEXT("SwuiEvent"))) bHasExpose = true;
+			if (FIt->HasMetaData(TEXT("SwuiCommand"))) bHasExpose = true;
 
 		if (!bHasExpose) continue;
 

@@ -1093,7 +1093,7 @@ void USwuiSubsystem::RebuildCommandRuntime()
 
 		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 		{
-			const FString TagStr = FnIt->GetMetaData(TEXT("SwuiEvent"));
+			const FString TagStr = FnIt->GetMetaData(TEXT("SwuiCommand"));
 			if (TagStr.IsEmpty()) continue;
 
 			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), /*bErrorIfNotFound=*/false);
@@ -1102,7 +1102,7 @@ void USwuiSubsystem::RebuildCommandRuntime()
 			// Validate: no return value, no out params.
 			if (FnIt->GetReturnProperty() != nullptr)
 			{
-				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiEvent metadata but returns a value. "
+				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiCommand metadata but returns a value. "
 					"Function-backed commands must be void/delegate-returning."),
 					*Cls->GetName(), *FnIt->GetName());
 				continue;
@@ -1118,7 +1118,7 @@ void USwuiSubsystem::RebuildCommandRuntime()
 			}
 			if (bHasOutParam)
 			{
-				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiEvent but contains out params. "
+				UE_LOG(LogTemp, Error, TEXT("SWUI: UFUNCTION %s::%s has SwuiCommand but contains out params. "
 					"Function-backed commands must be fire-and-forget."),
 					*Cls->GetName(), *FnIt->GetName());
 				continue;
@@ -1128,9 +1128,9 @@ void USwuiSubsystem::RebuildCommandRuntime()
 			if (FunctionCommands.Contains(Tag))
 			{
 				const FSwuiFunctionCommand& Existing = FunctionCommands[Tag];
-				UE_LOG(LogTemp, Error, TEXT("SWUI: Duplicate SwuiEvent tag '%s' — "
+				UE_LOG(LogTemp, Error, TEXT("SWUI: Duplicate SwuiCommand tag '%s' — "
 					"already registered on %s::%s, now also found on %s::%s. "
-					"Each SwuiEvent tag must be unique."),
+					"Each SwuiCommand tag must be unique."),
 					*TagStr,
 					*Existing.OwnerClass->GetName(), *Existing.Function->GetName(),
 					*Cls->GetName(), *FnIt->GetName());

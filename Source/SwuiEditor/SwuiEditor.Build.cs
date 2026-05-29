@@ -17,6 +17,7 @@ public class SwuiEditor : ModuleRules
 			"SlateCore",
 			"LevelEditor",
 			"ToolMenus",
+			"ApplicationCore",
 			"SwuiRuntime",
 			"SwuiUncookedOnly",
 			// Custom K2 nodes

@@ -136,6 +136,9 @@ struct FSwuiGeneratedNavInfo
 	FString HandlerSuffix;
 	FString EventName;
 	FString Category;
+	FString Kind; // "function-command" or "standalone-event"
+	FString SourceClass;    // Owner class name (function-backed)
+	FString FunctionName;   // UFUNCTION name (function-backed)
 	bool bDefaultEvent = false;
 
 	/** Name of the TS interface for this event's payload, empty if no payload struct is configured. */
@@ -815,7 +818,12 @@ static TArray<FSwuiGeneratedNavInfo> SwuiCollectGeneratedNavigationEvents(const 
 			SwuiMakeNavigationIdentifier(EventName),
 			EventName,
 			SwuiGetNavigationCategory(EventName, true),
+			TEXT("standalone-event"),
+			FString(),
+			FString(),
 			true,
+			FString(),
+			FString(),
 		});
 	}
 
@@ -853,6 +861,9 @@ static TArray<FSwuiGeneratedNavInfo> SwuiCollectGeneratedNavigationEvents(const 
 			SwuiMakeNavigationIdentifier(EventName),
 			EventName,
 			TEXT("custom"),
+			TEXT("standalone-event"),
+			FString(),
+			FString(),
 			false,
 			PayloadTSType,
 			PayloadInterfaceName,
@@ -1363,7 +1374,7 @@ ${Fields}};
 
 // ---- Build TS interface from a UFunction's parameters ----
 // Used by SwuiCollectFunctionExposedNavInfos to generate typed payload interfaces for
-// UFUNCTION(meta=(SwuiEvent="...")) declarations. Each function parameter becomes a TS field.
+// UFUNCTION(meta=(SwuiCommand="...")) declarations. Each function parameter becomes a TS field.
 // The same property-iteration logic as SwuiBuildStructInterface but reads from UFunction
 // parameter properties instead of UScriptStruct properties. Parameters are skipped if
 // SwuiGetTSType returns empty (unsupported type).
@@ -1394,7 +1405,7 @@ static void SwuiBuildFunctionInterface(UFunction* Func, FString& OutName, FStrin
 
 // ---- Collect navigation infos from SwuiExpose UFUNCTIONs ----
 // Scans all loaded AActor + UActorComponent classes for UFUNCTIONs carrying
-// meta=(SwuiEvent="some.tag.string") and creates synthetic FSwuiGeneratedNavInfo
+// meta=(SwuiCommand="some.tag.string") and creates synthetic FSwuiGeneratedNavInfo
 // entries. Each entry derives its tag from the metadata value, its payload
 // interface from the function's parameter properties, and its identifier/handler
 // suffix from the tag name.
@@ -1415,7 +1426,7 @@ static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& Ou
 
 		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 		{
-			const FString EventTag = FnIt->GetMetaData(TEXT("SwuiEvent"));
+			const FString EventTag = FnIt->GetMetaData(TEXT("SwuiCommand"));
 			if (EventTag.IsEmpty()) continue;
 
 			// SwuiExpose="onev.rooms.join" — metadata value IS the event tag.
@@ -1437,6 +1448,9 @@ static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& Ou
 			Info.HandlerSuffix       = SwuiMakeNavigationIdentifier(EventName);
 			Info.EventName           = EventName;
 			Info.Category            = TEXT("exposed");
+			Info.Kind                = TEXT("function-command");
+			Info.SourceClass         = Cls->GetName();
+			Info.FunctionName        = FnIt->GetName();
 			Info.bDefaultEvent       = false;
 			Info.PayloadTSType       = InterfaceBody;
 			Info.PayloadInterfaceName = PayloadInterfaceName;
@@ -1464,44 +1478,58 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 	const FString ObjectName = TEXT("SwuiNavigationEvents");
 
 	// Merge regular nav events with SwuiExpose UFUNCTION-derived ones.
-	TArray<FSwuiGeneratedNavInfo> Events = SwuiCollectGeneratedNavigationEvents(NavigationEvents);
+	TArray<FSwuiGeneratedNavInfo> AllEvents = SwuiCollectGeneratedNavigationEvents(NavigationEvents);
 	{
 		TArray<FSwuiGeneratedNavInfo> Exposed;
 		SwuiCollectFunctionExposedNavInfos(Exposed);
 
 		TSet<FString> ExistingNames;
-		for (const auto& E : Events)
+		for (const auto& E : AllEvents)
 			ExistingNames.Add(E.EventName);
 
 		for (auto& E : Exposed)
 		{
-			if (!ExistingNames.Contains(E.EventName))
+			if (ExistingNames.Contains(E.EventName))
 			{
-				Events.Add(E);
-				ExistingNames.Add(E.EventName);
+				UE_LOG(LogTemp, Error, TEXT("SWUI: Duplicate SwuiCommand tag '%s' — already configured as a standalone navigation event. "
+					"Each tag must be either a function-backed command (UFUNCTION meta) or a standalone event, not both."),
+					*E.EventName);
+				continue;
 			}
+			AllEvents.Add(E);
+			ExistingNames.Add(E.EventName);
 		}
 	}
-	Events.Sort([](const FSwuiGeneratedNavInfo& A, const FSwuiGeneratedNavInfo& B)
+	AllEvents.Sort([](const FSwuiGeneratedNavInfo& A, const FSwuiGeneratedNavInfo& B)
 	{
 		return A.EventName < B.EventName;
 	});
 
+	// Split into function-backed commands and standalone events
+	TArray<FSwuiGeneratedNavInfo> FunctionCommands;
+	TArray<FSwuiGeneratedNavInfo> StandaloneEvents;
+	for (const FSwuiGeneratedNavInfo& E : AllEvents)
+	{
+		if (E.Kind == TEXT("function-command"))
+			FunctionCommands.Add(E);
+		else
+			StandaloneEvents.Add(E);
+	}
+
 	// ── Collect payload interface bodies ──
 	FString PayloadInterfaces;
 	TArray<FString> PayloadTypeEntries;
-	for (const FSwuiGeneratedNavInfo& Event : Events)
+	for (const FSwuiGeneratedNavInfo& Event : AllEvents)
 	{
 		if (!Event.PayloadInterfaceName.IsEmpty())
 		{
-			// Re-generate the interface body
-			PayloadInterfaces += Event.PayloadTSType; // already has interface body from SwuiBuildStructInterface
+			PayloadInterfaces += Event.PayloadTSType;
 		}
 	}
 
 	// ── Payload type map ──
 	FString PayloadMapBody = TEXT("export type SwuiNavigationPayloads = {\n");
-	for (const FSwuiGeneratedNavInfo& Event : Events)
+	for (const FSwuiGeneratedNavInfo& Event : AllEvents)
 	{
 		const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
 			? TEXT("Record<string, never>")
@@ -1510,77 +1538,108 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 	}
 	PayloadMapBody += TEXT("};\n\n");
 
-	// ── Tag constants ──
-	FString ObjectBody = FString::Printf(TEXT("export const %s = {\n"), *ObjectName);
-	for (const FSwuiGeneratedNavInfo& Event : Events)
-		ObjectBody += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *Event.Identifier, *SwuiEscapeTsStringLiteral(Event.EventName));
+	// ── SwuiNavigationEvents (tag constants only, no helpers) ──
+	FString TagConstants = FString::Printf(TEXT("export const %s = {\n"), *ObjectName);
+	for (const FSwuiGeneratedNavInfo& Event : AllEvents)
+		TagConstants += FString::Printf(TEXT("\t%s: '%s' as const,\n"), *Event.Identifier, *SwuiEscapeTsStringLiteral(Event.EventName));
+	TagConstants += TEXT("} as const;\n\n");
 
-	if (Events.Num() > 0)
-		ObjectBody += TEXT("\n");
-
-	// ── Typed emit helpers ──
-	for (const FSwuiGeneratedNavInfo& Event : Events)
+	// ── SwuiCommands (function-backed command emit helpers, no listeners) ──
+	FString CommandsBody;
+	if (FunctionCommands.Num() > 0)
 	{
-		const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
-			? TEXT("Record<string, never>")
-			: Event.PayloadInterfaceName;
-		ObjectBody += FString::Printf(
-			TEXT("\t%s(payload: %s): void {\n")
-			TEXT("\t\tSwui.emitNavigationEvent(%s.%s, payload);\n")
-			TEXT("\t},\n"),
-			*Event.Identifier,
-			*PayloadType,
-			*ObjectName,
-			*Event.Identifier);
+		CommandsBody += TEXT("export const SwuiCommands = {\n");
+		for (const FSwuiGeneratedNavInfo& Event : FunctionCommands)
+		{
+			const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
+				? TEXT("Record<string, never>")
+				: Event.PayloadInterfaceName;
+			CommandsBody += FString::Printf(
+				TEXT("\t%s(payload: %s): void {\n")
+				TEXT("\t\tSwui.emitNavigationEvent(%s.%s, payload);\n")
+				TEXT("\t},\n"),
+				*Event.Identifier, *PayloadType, *ObjectName, *Event.Identifier);
+		}
+		CommandsBody += TEXT("};\n\n");
+	}
+	else
+	{
+		CommandsBody += TEXT("export const SwuiCommands = {};\n\n");
 	}
 
-	if (Events.Num() > 0)
-		ObjectBody += TEXT("\n");
-
-	// ── Typed listener helpers ──
-	for (const FSwuiGeneratedNavInfo& Event : Events)
+	// ── SwuiStandaloneEvents (emit helpers + listener helpers) ──
+	FString StandaloneBody;
+	if (StandaloneEvents.Num() > 0)
 	{
-		const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
-			? TEXT("Record<string, never>")
-			: Event.PayloadInterfaceName;
-		ObjectBody += FString::Printf(
-			TEXT("\ton%s(fn: (detail: %s) => void): () => void {\n")
-			TEXT("\t\treturn Swui.onEvent(%s.%s, fn);\n")
-			TEXT("\t},\n"),
-			*Event.HandlerSuffix,
-			*PayloadType,
-			*ObjectName,
-			*Event.Identifier);
+		StandaloneBody += TEXT("export const SwuiStandaloneEvents = {\n");
+		for (const FSwuiGeneratedNavInfo& Event : StandaloneEvents)
+		{
+			const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
+				? TEXT("Record<string, never>")
+				: Event.PayloadInterfaceName;
+			StandaloneBody += FString::Printf(
+				TEXT("\t%s(payload: %s): void {\n")
+				TEXT("\t\tSwui.emitNavigationEvent(%s.%s, payload);\n")
+				TEXT("\t},\n"),
+				*Event.Identifier, *PayloadType, *ObjectName, *Event.Identifier);
+		}
+		if (StandaloneEvents.Num() > 0)
+			StandaloneBody += TEXT("\n");
+		for (const FSwuiGeneratedNavInfo& Event : StandaloneEvents)
+		{
+			const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
+				? TEXT("Record<string, never>")
+				: Event.PayloadInterfaceName;
+			StandaloneBody += FString::Printf(
+				TEXT("\ton%s(fn: (detail: %s) => void): () => void {\n")
+				TEXT("\t\treturn Swui.onEvent(%s.%s, fn);\n")
+				TEXT("\t},\n"),
+				*Event.HandlerSuffix, *PayloadType, *ObjectName, *Event.Identifier);
+		}
+		StandaloneBody += TEXT("};\n\n");
 	}
-	ObjectBody += TEXT("};\n\n");
+	else
+	{
+		StandaloneBody += TEXT("export const SwuiStandaloneEvents = {};\n\n");
+	}
 
-	// ── Contract ──
+	// ── Contract (with kind field) ──
 	FString ContractBody = TEXT("export const SwuiNavigationContract = {\n\tnavigation: {\n");
-	for (const FSwuiGeneratedNavInfo& Event : Events)
+	for (const FSwuiGeneratedNavInfo& Event : AllEvents)
 	{
 		const FString PayloadType = Event.PayloadInterfaceName.IsEmpty()
 			? TEXT("Record<string, never>")
 			: Event.PayloadInterfaceName;
 		ContractBody += FString::Printf(
 			TEXT("\t\t[%s.%s]: {\n")
+			TEXT("\t\t\tkind: %s,\n")
 			TEXT("\t\t\tlabel: %s,\n")
 			TEXT("\t\t\ttag: %s.%s,\n")
 			TEXT("\t\t\tcategory: %s,\n")
 			TEXT("\t\t\tdefaultEvent: %s,\n")
-			TEXT("\t\t\tpayloadType: %s,\n")
-			TEXT("\t\t},\n"),
-			*ObjectName,
-			*Event.Identifier,
+			TEXT("\t\t\tpayloadType: %s,\n"),
+			*ObjectName, *Event.Identifier,
+			*SwuiQuotePreviewString(Event.Kind),
 			*SwuiQuotePreviewString(Event.Identifier),
-			*ObjectName,
-			*Event.Identifier,
+			*ObjectName, *Event.Identifier,
 			*SwuiQuotePreviewString(Event.Category),
 			Event.bDefaultEvent ? TEXT("true") : TEXT("false"),
 			*PayloadType);
+
+		if (Event.Kind == TEXT("function-command"))
+		{
+			ContractBody += FString::Printf(
+				TEXT("\t\t\tsourceClass: %s,\n")
+				TEXT("\t\t\tfunctionName: %s,\n"),
+				*SwuiQuotePreviewString(Event.SourceClass),
+				*SwuiQuotePreviewString(Event.FunctionName));
+		}
+
+		ContractBody += TEXT("\t\t},\n");
 	}
 	ContractBody += TEXT("\t},\n} as const;\n\n");
 
-	ObjectBody += ContractBody;
+	FString ObjectBody = TagConstants + CommandsBody + StandaloneBody + ContractBody;
 	ObjectBody += FString::Printf(TEXT("export type { %s } from './%s.generated';\n"), *InterfaceName, *InterfaceName);
 	ObjectBody += FString::Printf(TEXT("export default %s;\n"), *ObjectName);
 
@@ -1605,7 +1664,8 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 	bool bOK = FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 	if (bOK)
 	{
-		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated navigation bindings '%s' with %d JS-forwarded event(s)."), *OutFile, Events.Num());
+		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated navigation bindings '%s' with %d function-command(s) and %d standalone event(s)."),
+		*OutFile, FunctionCommands.Num(), StandaloneEvents.Num());
 
 		// Also emit a stable default swui.navigation.generated.ts so TSX entry
 		// points can import @generated/swui.navigation.generated unconditionally.

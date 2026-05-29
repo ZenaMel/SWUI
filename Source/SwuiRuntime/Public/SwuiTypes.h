@@ -122,7 +122,7 @@ struct FSwuiNavigationEvent
 // ---------------------------------------------------------------------------
 
 /** A function-backed SWUI navigation command.
- *  Resolved from UFUNCTION(meta=(SwuiEvent="swui.rooms.host")).
+ *  Resolved from UFUNCTION(meta=(SwuiCommand="swui.rooms.host")).
  *  Runtime calls ProcessEvent on the resolved binding target with deserialized JSON. */
 struct FSwuiFunctionCommand
 {

@@ -157,7 +157,7 @@ public:
 
 	// ---- Command Runtime (function-backed navigation events) ----
 
-	/** Re-scan binding sources for UFUNCTION(meta=(SwuiEvent="...")) and
+	/** Re-scan binding sources for UFUNCTION(meta=(SwuiCommand="...")) and
 	 *  rebuild the function-command registry. Called at bindings refresh
 	 *  time (SetBindingSources) and on subsystem init. */
 	void RebuildCommandRuntime();

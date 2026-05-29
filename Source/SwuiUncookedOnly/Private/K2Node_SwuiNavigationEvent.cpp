@@ -258,7 +258,7 @@ void UK2Node_SwuiNavigationEvent::ValidateNodeDuringCompilation(FCompilerResults
 			if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
 			for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 			{
-				const FString Event = FnIt->GetMetaData(TEXT("SwuiEvent"));
+				const FString Event = FnIt->GetMetaData(TEXT("SwuiCommand"));
 				if (!Event.IsEmpty())
 				{
 					FGameplayTag CmdTag = FGameplayTag::RequestGameplayTag(FName(*Event), false);
@@ -274,7 +274,7 @@ void UK2Node_SwuiNavigationEvent::ValidateNodeDuringCompilation(FCompilerResults
 		if (bIsFunctionBacked)
 		{
 			MessageLog.Error(*FString::Printf(
-				TEXT("@@ : Tag '%s' is a function-backed command (UFUNCTION with SwuiEvent metadata). "
+				TEXT("@@ : Tag '%s' is a function-backed command (UFUNCTION with SwuiCommand metadata). "
 					"Function-backed commands are dispatched directly at runtime via ProcessEvent — "
 					"a K2Node_SwuiNavigationEvent wrapper is not needed. "
 					"Remove this node and use the generated SwuiCommands helper from JS instead."),
