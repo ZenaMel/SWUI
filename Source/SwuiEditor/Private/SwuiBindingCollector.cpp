@@ -162,16 +162,15 @@ FSwuiEffectiveBindings SwuiCollectEffectiveBindings(USwui* Bridge)
 		if (BoundClasses.Contains(Cls)) continue;
 		if (!Cls->IsChildOf<AActor>() && !Cls->IsChildOf<UActorComponent>()) continue;
 
-		// ── Validate: SwuiExpose on UFUNCTION is invalid ──────────────
+		// ── SwuiEvent on UFUNCTION ────────────────────────────
+		// Collected by the navigation event generator separately.
+		// SwuiEvent="onev.rooms.host" declares the navigation event tag inline.
 		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 		{
-			if (FnIt->HasMetaData(TEXT("SwuiExpose")))
+			if (FnIt->HasMetaData(TEXT("SwuiEvent")))
 			{
-				Result.Warnings.Add(FString::Printf(
-					TEXT("SWUI: SwuiExpose is not supported on UFUNCTION/BlueprintEvent '%s' ")
-					TEXT("in class '%s'. Use SwuiExpose on a UPROPERTY(BlueprintVisible) or ")
-					TEXT("multicast delegate property instead. Generation BLOCKED."),
-					*FnIt->GetName(), *Cls->GetName()));
+				UE_LOG(LogTemp, Verbose, TEXT("SWUI: SwuiEvent='%s' on UFUNCTION '%s' — will emit as navigation event."),
+					*FnIt->GetMetaData(TEXT("SwuiEvent")), *FnIt->GetName());
 			}
 		}
 
@@ -184,12 +183,14 @@ FSwuiEffectiveBindings SwuiCollectEffectiveBindings(USwui* Bridge)
 				*Cls->GetName()));
 		}
 
-		// Scan for any SwuiExpose member on supported item types (properties, delegates)
+		// Scan for any SwuiExpose member on supported item types (properties, delegates, functions)
 		bool bHasExpose = false;
 		for (TFieldIterator<FProperty> PIt(Cls); PIt && !bHasExpose; ++PIt)
 			if (PIt->HasMetaData(TEXT("SwuiExpose"))) bHasExpose = true;
 		for (TFieldIterator<FMulticastDelegateProperty> DIt(Cls); DIt && !bHasExpose; ++DIt)
 			if (DIt->HasMetaData(TEXT("SwuiExpose"))) bHasExpose = true;
+		for (TFieldIterator<UFunction> FIt(Cls, EFieldIteratorFlags::ExcludeSuper); FIt && !bHasExpose; ++FIt)
+			if (FIt->HasMetaData(TEXT("SwuiEvent"))) bHasExpose = true;
 
 		if (!bHasExpose) continue;
 

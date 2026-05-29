@@ -9,6 +9,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/PlatformFileManager.h"
+#include "GameplayTagsManager.h"
 
 static FString SwuiComputeNamespace(UClass* SourceClass)
 {
@@ -1345,6 +1346,78 @@ ${Fields}};
 	return false;
 }
 
+// ---- Build TS interface from a UFunction's parameters ----
+static void SwuiBuildFunctionInterface(UFunction* Func, FString& OutName, FString& OutBody)
+{
+	if (!Func) { OutName.Empty(); OutBody.Empty(); return; }
+	OutName = Func->GetName() + TEXT("Payload");
+
+	TArray<FString> Fields;
+	for (TFieldIterator<FProperty> It(Func); It; ++It)
+	{
+		if (!It->HasAnyPropertyFlags(CPF_Parm) || It->HasAnyPropertyFlags(CPF_ReturnParm))
+			continue;
+		const FString TSType = SwuiGetTSType(*It);
+		if (TSType.IsEmpty()) continue;
+		Fields.Add(FString::Printf(TEXT("\t%s: %s"), *It->GetName(), *TSType));
+	}
+
+	if (Fields.Num() == 0)
+	{
+		OutName = TEXT("Record<string, never>");
+		OutBody.Empty();
+		return;
+	}
+
+	OutBody = TEXT("export interface ") + OutName + TEXT(" {\n") + FString::Join(Fields, TEXT(";\n")) + TEXT(";\n}\n\n");
+}
+
+// ---- Collect navigation infos from SwuiExpose UFUNCTIONs ----
+static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& OutEvents)
+{
+	for (TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* Cls = *It;
+		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+		if (!Cls->IsChildOf<AActor>() && !Cls->IsChildOf<UActorComponent>()) continue;
+
+		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+		{
+			const FString EventTag = FnIt->GetMetaData(TEXT("SwuiEvent"));
+			if (EventTag.IsEmpty()) continue;
+
+			// SwuiExpose="onev.rooms.join" — metadata value IS the event tag.
+			// If tag contains invalid characters, skip.
+			if (!FGameplayTag::IsValidGameplayTagString(EventTag))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SWUI: SwuiExpose on '%s' has invalid gameplay tag '%s'. Skipping."),
+					*FnIt->GetName(), *EventTag);
+				continue;
+			}
+
+			const FString EventName = EventTag;
+
+			FString PayloadInterfaceName, InterfaceBody;
+			SwuiBuildFunctionInterface(*FnIt, PayloadInterfaceName, InterfaceBody);
+
+			// Ensure the tag exists in the tag manager
+			UGameplayTagsManager::Get().AddNativeGameplayTag(FName(*EventTag));
+
+			FSwuiGeneratedNavInfo Info;
+			Info.Identifier          = SwuiMakeNavigationConstantIdentifier(EventName);
+			Info.HandlerSuffix       = SwuiMakeNavigationIdentifier(EventName);
+			Info.EventName           = EventName;
+			Info.Category            = TEXT("exposed");
+			Info.bDefaultEvent       = false;
+			Info.PayloadTSType       = InterfaceBody;
+			Info.PayloadInterfaceName = PayloadInterfaceName;
+
+			OutEvents.Add(Info);
+		}
+	}
+}
+
 bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavigationEvent>& NavigationEvents)
 {
 	if (!Bridge)
@@ -1361,7 +1434,30 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 
 	const FString InterfaceName = Bridge->InterfaceName;
 	const FString ObjectName = TEXT("SwuiNavigationEvents");
-	const TArray<FSwuiGeneratedNavInfo> Events = SwuiCollectGeneratedNavigationEvents(NavigationEvents);
+
+	// Merge regular nav events with SwuiExpose UFUNCTION-derived ones.
+	TArray<FSwuiGeneratedNavInfo> Events = SwuiCollectGeneratedNavigationEvents(NavigationEvents);
+	{
+		TArray<FSwuiGeneratedNavInfo> Exposed;
+		SwuiCollectFunctionExposedNavInfos(Exposed);
+
+		TSet<FString> ExistingNames;
+		for (const auto& E : Events)
+			ExistingNames.Add(E.EventName);
+
+		for (auto& E : Exposed)
+		{
+			if (!ExistingNames.Contains(E.EventName))
+			{
+				Events.Add(E);
+				ExistingNames.Add(E.EventName);
+			}
+		}
+	}
+	Events.Sort([](const FSwuiGeneratedNavInfo& A, const FSwuiGeneratedNavInfo& B)
+	{
+		return A.EventName < B.EventName;
+	});
 
 	// ── Collect payload interface bodies ──
 	FString PayloadInterfaces;
