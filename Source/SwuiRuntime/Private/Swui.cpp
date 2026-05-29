@@ -2,6 +2,7 @@
 #include "SwuiSubsystem.h"
 #include "SwuiNavigation.h"
 #include "SwuiTypes.h"
+#include "ISwuiRuntime.h"
 #include "Engine/GameInstance.h"
 
 void USwui::EnsureOwnerBindingSource()
@@ -149,8 +150,29 @@ void USwui::InitializeSwuiView()
 	InstSettings.bShowSwuiDirtyRects                  = DirtyUploadSettings.bShowSwuiDirtyRects;
 	InstSettings.HudRoiSettings                       = HudRoiSettings;
 
-	Sub->InitRenderer(DefaultURI, InterfaceName, GetOwner(), bIsHUD,
+	// If a main menu request was cached before the view existed, load MainMenuURI
+	// directly to avoid loading/flashing hud.html before navigating away.
+	const FString InitURI = (bHasPendingMainMenu && bPendingMainMenuEnabled && !MainMenuURI.IsEmpty())
+		? MainMenuURI
+		: DefaultURI;
+
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI] InitURI=%s (Default=%s MainMenu=%s bPending=%d)"),
+		*InitURI, *DefaultURI, *MainMenuURI, bHasPendingMainMenu ? 1 : 0);
+
+	Sub->InitRenderer(InitURI, InterfaceName, GetOwner(), bIsHUD,
 		ViewWidth, ViewHeight, ZOrder, BaseMaterial, TextureParameterName, InstSettings);
+
+	// Apply any EnableMainMenu call that was made before the view was ready.
+	// The browser already loaded the correct URI above — just sync input mode.
+	if (bHasPendingMainMenu)
+	{
+		bHasPendingMainMenu = false;
+
+		if (USwuiNavigation* Nav = GetOwner()->FindComponentByClass<USwuiNavigation>())
+		{
+			Nav->SetMenuInputActive(bPendingMainMenuEnabled);
+		}
+	}
 }
 
 void USwui::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -187,7 +209,11 @@ void USwui::SetHUDVisible(bool bVisible)
 
 void USwui::EnableMainMenu(bool bEnabled)
 {
-	if (MainMenuURI.IsEmpty()) return;
+	if (MainMenuURI.IsEmpty())
+	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI EnableMainMenu] skipped — MainMenuURI is empty"));
+		return;
+	}
 
 	UWorld* World = GetWorld();
 	if (!World) return;
@@ -195,6 +221,19 @@ void USwui::EnableMainMenu(bool bEnabled)
 	if (!GI) return;
 	USwuiSubsystem* Sub = GI->GetSubsystem<USwuiSubsystem>();
 	if (!Sub) return;
+
+	// Deferred init may not have created the view yet — cache the request.
+	if (!Sub->GetActiveView())
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI] EnableMainMenu(%d) view null — caching"), bEnabled ? 1 : 0);
+		bPendingMainMenuEnabled = bEnabled;
+		bHasPendingMainMenu = true;
+		return;
+	}
+
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI] EnableMainMenu(%d) view ready — loading %s"), bEnabled ? 1 : 0, bEnabled ? *MainMenuURI : *DefaultURI);
+
+	bHasPendingMainMenu = false;
 
 	if (bEnabled)
 	{

@@ -341,6 +341,7 @@ void USwuiView::LoadURL(const FString& URI)
 {
 	if (!CefData || !CefData->Browser)
 	{
+		UE_LOG(LogSwuiRuntime, Warning, TEXT("[SWUI LoadURL] skipped — browser not ready URI=%s"), *URI);
 		return;
 	}
 
@@ -358,6 +359,7 @@ void USwuiView::LoadURL(const FString& URI)
 		URI.StartsWith(TEXT("localhost"), ESearchCase::IgnoreCase) ||
 		URI.StartsWith(TEXT("file:///"), ESearchCase::IgnoreCase))
 	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI LoadURL] %s"), *URI);
 		CefData->Browser->GetMainFrame()->LoadURL(*URI);
 		RequestBrowserVisualRefresh(true);
 		return;
@@ -377,6 +379,7 @@ void USwuiView::LoadURL(const FString& URI)
 	const FString ContentDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir());
 	const FString LocalFile = FString(TEXT("file:///")) + ContentDir + Relative;
 
+	UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI LoadURL] %s → %s"), *URI, *LocalFile);
 	CefData->Browser->GetMainFrame()->LoadURL(*LocalFile);
 	RequestBrowserVisualRefresh(true);
 }
@@ -1148,6 +1151,9 @@ void USwuiView::InvalidateBrowserView()
 
 void USwuiView::LogFullSurfaceStatsIfNeeded(double Now)
 {
+	if (!InstanceSettings.bVerbosePaintLog && CVarSwuiVerbosePaint.GetValueOnAnyThread() == 0)
+		return;
+
 	const bool bStatsEnabled =
 		IsForceFullFrameMode() ||
 		SwuiCVarBool(CVarSwuiDebugLogPaintStats.GetValueOnGameThread(), InstanceSettings.bLogSwuiPaintStats) ||

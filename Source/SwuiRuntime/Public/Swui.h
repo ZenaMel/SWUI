@@ -324,6 +324,9 @@ private:
 	// Deferred init: called on next tick (and retried) until viewport is ready.
 	void InitializeSwuiView();
 
+	bool bPendingMainMenuEnabled = false;
+	bool bHasPendingMainMenu = false;
+
 #if WITH_EDITOR
 	/** Push updated settings to the running view when a property is changed
 	 *  in the Details panel during PIE — no restart required. */

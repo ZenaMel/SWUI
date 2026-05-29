@@ -268,6 +268,12 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 {
 	if (bDisabledAtRuntime) return;
 
+	if (View)
+	{
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI InitRenderer] view already exists — skipping duplicate init (URI=%s)"), *URI);
+		return;
+	}
+
 	UWorld* World = GetGameInstance()->GetWorld();
 	if (!World) return;
 
