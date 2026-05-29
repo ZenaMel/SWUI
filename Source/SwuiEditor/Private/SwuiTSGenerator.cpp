@@ -1354,6 +1354,11 @@ ${Fields}};
 }
 
 // ---- Build TS interface from a UFunction's parameters ----
+// Used by SwuiCollectFunctionExposedNavInfos to generate typed payload interfaces for
+// UFUNCTION(meta=(SwuiEvent="...")) declarations. Each function parameter becomes a TS field.
+// The same property-iteration logic as SwuiBuildStructInterface but reads from UFunction
+// parameter properties instead of UScriptStruct properties. Parameters are skipped if
+// SwuiGetTSType returns empty (unsupported type).
 static void SwuiBuildFunctionInterface(UFunction* Func, FString& OutName, FString& OutBody)
 {
 	if (!Func) { OutName.Empty(); OutBody.Empty(); return; }

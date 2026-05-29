@@ -148,6 +148,11 @@ public:
 	void SetBrowserInputFocus(bool bFocused);
 
 	// ---- Keyboard Input Forwarding ----
+	// Forwards UE Slate key events to the CEF browser via CefBrowserHost::SendKeyEvent().
+	// The FSwuiInputPreprocessor catches HandleKeyDownEvent/HandleKeyUpEvent in the Slate
+	// input pump and routes them here. Without this, HTML <input>, <textarea>, and <select>
+	// elements receive no keyboard input at all — CEF's built-in text input is completely
+	// bypassed. See architecture/cef-input-forwarding.md.
 
 	bool ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp);
 	bool ForwardCharToBrowser(TCHAR Char, const FModifierKeysState& Modifiers);

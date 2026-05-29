@@ -1039,11 +1039,11 @@ void USwuiDelegateBridge::ProcessEvent(UFunction* Function, void* Parms)
 		return;
 	}
 
-	// Parms points to the delegate's broadcast parameter buffer laid out
-	// according to the delegate type's C++ ABI. For the standard UE types
-	// supported by Swui_SerializePropertyValue (bool, int, float, FString,
-	// FName, FText, UObject*, structs), the UProperty offsets from the
-	// signature function match the C++ ABI layout.
+	// When the observed delegate broadcasts, ProcessDelegate calls ProcessEvent
+	// on this bridge object with the real broadcast arguments in the Parms buffer.
+	// This buffer is a struct matching the delegate's SignatureFunction property
+	// layout — guaranteed by UHT generating both from the same declaration
+	// (_Script_Parms struct in _DelegateWrapper). No ABI-guessing needed.
 	FString Json = TEXT("{");
 	bool bFirst = true;
 

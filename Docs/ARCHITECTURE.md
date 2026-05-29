@@ -1,3 +1,6 @@
+> **MIGRATED**: This content has been split into architecture/navigation-events.md and adr/
+> Keep new architecture docs in architecture/ and adr/ — this file is preserved for reference.
+
 # SWUI Navigation Events — Typed Payload Architecture
 
 ## Overview
