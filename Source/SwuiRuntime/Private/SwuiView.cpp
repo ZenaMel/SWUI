@@ -26,6 +26,7 @@
 #include "Widgets/SViewport.h"
 
 #include "SwuiFullSurfaceCpuRenderer.h"
+#include "SwuiSettings.h"
 
 struct FSwuiViewCefData
 {

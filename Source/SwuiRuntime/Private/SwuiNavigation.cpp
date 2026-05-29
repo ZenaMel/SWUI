@@ -1,4 +1,5 @@
 #include "SwuiNavigation.h"
+#include "ISwuiRuntime.h"
 #include "Swui.h"
 #include "SwuiSubsystem.h"
 #include "SwuiView.h"

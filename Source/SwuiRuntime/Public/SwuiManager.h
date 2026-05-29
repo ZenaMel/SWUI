@@ -2,7 +2,7 @@
 
 #include "CEFInclude.h"
 
-class CefMessageRouterRendererSide;
+#include "include/wrapper/cef_message_router.h"
 
 class SWUIRUNTIME_API SwuiManager : public CefApp, public CefRenderProcessHandler
 {
