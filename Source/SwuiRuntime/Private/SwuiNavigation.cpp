@@ -557,23 +557,11 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			Target->ProcessEvent(FnCmd.Function, Params);
 			FMemory::Free(Params);
 
-			SWUI_CMD_LOG(TEXT("ProcessEvent done, broadcasting OnSwuiCommandExecuted on %s"), *GetNameSafe(this));
+			SWUI_CMD_LOG(TEXT("ProcessEvent done, OnSwuiCommandExecuted bound=%d on %s"),
+				OnSwuiCommandExecuted.IsBound() ? 1 : 0, *GetNameSafe(this));
 
 			// Broadcast hook so BP observers can react to successful command execution.
 			OnSwuiCommandExecuted.Broadcast(Event, JsonPayload);
-
-			// Always log binding diagnostic (not gated behind CVar) so we can
-			// immediately see if the BP hook node is connected.
-			if (!OnSwuiCommandExecuted.IsBound())
-			{
-				UE_LOG(LogTemp, Log, TEXT("[SWUI CMD] [BINDING-CHECK] OnSwuiCommandExecuted ZERO bound listeners on %s"),
-					*GetNameSafe(this));
-			}
-			else
-			{
-				UE_LOG(LogTemp, Log, TEXT("[SWUI CMD] [BINDING-CHECK] OnSwuiCommandExecuted bound on %s — hook should fire"),
-					*GetNameSafe(this));
-			}
 			return;
 		}
 	}

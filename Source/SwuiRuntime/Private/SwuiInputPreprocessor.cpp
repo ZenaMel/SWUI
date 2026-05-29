@@ -166,12 +166,38 @@ bool FSwuiInputPreprocessor::HandleKeyDownEvent(FSlateApplication& SlateApp, con
 	USwuiSubsystem* Sub = Subsystem.Get();
 	USwuiView* View = Sub->GetActiveView();
 
+	// Send KEYEVENT_KEYDOWN to CEF.
 	View->ForwardKeyEventToBrowser(InKeyEvent, false);
 
-	const TCHAR Char = InKeyEvent.GetCharacter();
-	if (Char != 0 && !InKeyEvent.GetKey().IsModifierKey())
+	// Synthesize KEYEVENT_CHAR from the physical key press using Win32 ToUnicode.
+	// FKeyEvent::GetCharacter() returns 0 for KEYDOWN on Windows — the character
+	// cannot be derived from the key event alone. ToUnicode maps the virtual key
+	// code + current keyboard state to the actual Unicode character the user typed.
+	const uint32 VK = InKeyEvent.GetKeyCode();
+	if (VK != 0 && !InKeyEvent.GetKey().IsModifierKey())
 	{
-		View->ForwardCharToBrowser(Char, InKeyEvent.GetModifierKeys());
+		BYTE KeyState[256] = {};
+		::GetKeyboardState(KeyState);
+
+		wchar_t Buf[8] = {};
+		const int32 Ret = ::ToUnicode(
+			VK,
+			::MapVirtualKeyW(VK, MAPVK_VK_TO_VSC),
+			KeyState,
+			Buf,
+			8,
+			0);
+
+		// Ret > 0  → produced character(s), forward each one
+		// Ret == 0 → no character (function key, etc.)
+		// Ret == -1 → dead key (e.g. ^, ~), wait for next keystroke
+		if (Ret > 0)
+		{
+			for (int32 i = 0; i < Ret; ++i)
+			{
+				View->ForwardCharToBrowser(Buf[i], InKeyEvent.GetModifierKeys());
+			}
+		}
 	}
 
 	UpdateInteractionTime();
