@@ -533,6 +533,9 @@ void USwuiNavigation::ReceiveNavigationEventFromJs(FGameplayTag Event, const FSt
 			// Fire
 			Target->ProcessEvent(FnCmd.Function, Params);
 			FMemory::Free(Params);
+
+			// Broadcast hook so BP observers can react to successful command execution.
+			OnSwuiCommandExecuted.Broadcast(Event, JsonPayload);
 			return;
 		}
 	}

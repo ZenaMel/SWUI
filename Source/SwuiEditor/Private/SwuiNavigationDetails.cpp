@@ -1,5 +1,6 @@
 #include "SwuiNavigationDetails.h"
 #include "K2Node_SwuiNavigationEvent.h"
+#include "K2Node_SwuiCommandHook.h"
 #include "SwuiNavigation.h"
 #include "SwuiTSGenerator.h"
 #include "Swui.h"
@@ -606,6 +607,84 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 	return true;
 }
 
+static bool AddBlueprintCommandHookNode(USwuiNavigation* Nav, const FGameplayTag& Tag)
+{
+	UBlueprint* Blueprint = nullptr;
+	TSharedPtr<IBlueprintEditor> BlueprintEditor;
+	TSharedPtr<FBlueprintEditor> ConcreteBlueprintEditor;
+	UEdGraph* TargetGraph = nullptr;
+
+	if (!ResolveBlueprintGraphContext(Nav, Blueprint, BlueprintEditor, ConcreteBlueprintEditor, TargetGraph))
+		return false;
+
+	FName ComponentVariableName;
+	if (!ResolveNavigationComponentVariableName(Blueprint, Nav, ComponentVariableName))
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("ResolveSwuiNavComponentForHookFailed", "Could not resolve SwuiNavigation component variable in Blueprint."), false);
+		return false;
+	}
+
+	// Check for duplicate hook node
+	TArray<UK2Node_SwuiCommandHook*> ExistingNodes;
+	FBlueprintEditorUtils::GetAllNodesOfClass(Blueprint, ExistingNodes);
+	for (UK2Node_SwuiCommandHook* N : ExistingNodes)
+	{
+		if (N && N->ComponentPropertyName == ComponentVariableName && N->CommandTag == Tag)
+		{
+			if (UEdGraph* G = N->GetGraph())
+				BlueprintEditor->OpenGraphAndBringToFront(G, true);
+			BlueprintEditor->AddToSelection(N);
+			if (ConcreteBlueprintEditor.IsValid())
+				ConcreteBlueprintEditor->JumpToNode(N, false);
+			else
+				FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(N, false);
+			return false;
+		}
+	}
+
+	BlueprintEditor->OpenGraphAndBringToFront(TargetGraph, true);
+
+	FVector2D NodePosition = TargetGraph->GetGoodPlaceForNewNode();
+	if (ConcreteBlueprintEditor.IsValid() && BlueprintEditor->GetFocusedGraph() == TargetGraph)
+	{
+		float ZoomAmount = 1.f;
+		ConcreteBlueprintEditor->GetViewLocation(NodePosition, ZoomAmount);
+		NodePosition += FVector2D(96.f, 96.f);
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT("AddSwuiCommandHookNodeTransaction", "Add SWUI Command Hook"));
+	Blueprint->Modify();
+	TargetGraph->Modify();
+
+	UK2Node_SwuiCommandHook* NewNode = FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_SwuiCommandHook>(
+		TargetGraph, NodePosition, EK2NewNodeFlags::SelectNewNode,
+		[ComponentVariableName, Tag](UK2Node_SwuiCommandHook* NewInstance)
+		{
+			NewInstance->ComponentPropertyName = ComponentVariableName;
+			NewInstance->CommandTag = Tag;
+		});
+
+	if (!NewNode)
+	{
+		ShowNavigationEventNotification(
+			LOCTEXT("CreateSwuiCommandHookNodeFailed", "Could not create SWUI command hook node."), false);
+		return false;
+	}
+
+	BlueprintEditor->AddToSelection(NewNode);
+	if (ConcreteBlueprintEditor.IsValid())
+		ConcreteBlueprintEditor->JumpToNode(NewNode, false);
+	else
+		FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(NewNode, false);
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	ShowNavigationEventNotification(
+		FText::Format(LOCTEXT("AddedCommandHookNode", "Added command hook for {0}"),
+			FText::FromString(Tag.GetTagName().ToString())), true);
+	return true;
+}
+
 // Forward declaration for GatherSwuiTags exclusion.
 static TArray<FGameplayTag> GatherSwuiCommandTags();
 
@@ -1027,12 +1106,14 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 				+ SHorizontalBox::Slot().AutoWidth().Padding(4.f, 0.f).VAlign(VAlign_Center)
 				[
 					SNew(SButton)
-					.Text(LOCTEXT("CopyTag", "Copy"))
-					.ToolTipText(LOCTEXT("CopyTagTip", "Copy tag to clipboard"))
+					.Text(LOCTEXT("AddBPHook", "+ BP Hook"))
+					.ToolTipText(LOCTEXT("AddBPHookTip", "Add a Blueprint hook node that fires after this command executes."))
 					.ContentPadding(FMargin(8.f, 2.f))
-					.OnClicked_Lambda([TagStr = Cmd.Tag.GetTagName().ToString()]()
+					.ButtonColorAndOpacity(FLinearColor(0.3f, 0.55f, 0.9f))
+					.OnClicked_Lambda([this, Tag = Cmd.Tag]()
 					{
-						FPlatformApplicationMisc::ClipboardCopy(*TagStr);
+						if (NavPtr.IsValid())
+							AddBlueprintCommandHookNode(NavPtr.Get(), Tag);
 						return FReply::Handled();
 					})
 				]

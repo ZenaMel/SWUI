@@ -37,3 +37,50 @@ FInstancedStruct USwuiJsonBlueprintLibrary::JsonToStruct(const FString& JsonPayl
 
 	return Result;
 }
+
+// ── Per-field JSON extractors ──────────────────────────────────────────────
+
+static TSharedPtr<FJsonObject> SwuiParseJsonObject(const FString& JsonPayload)
+{
+	TSharedPtr<FJsonObject> JsonObj;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonPayload);
+	if (FJsonSerializer::Deserialize(Reader, JsonObj) && JsonObj.IsValid())
+		return JsonObj;
+	return nullptr;
+}
+
+FString USwuiJsonBlueprintLibrary::ExtractStringField(const FString& JsonPayload, const FString& FieldName)
+{
+	TSharedPtr<FJsonObject> JsonObj = SwuiParseJsonObject(JsonPayload);
+	if (!JsonObj) return FString();
+	FString Value;
+	JsonObj->TryGetStringField(FieldName, Value);
+	return Value;
+}
+
+int32 USwuiJsonBlueprintLibrary::ExtractIntField(const FString& JsonPayload, const FString& FieldName)
+{
+	TSharedPtr<FJsonObject> JsonObj = SwuiParseJsonObject(JsonPayload);
+	if (!JsonObj) return 0;
+	if (JsonObj->HasTypedField<EJson::Number>(FieldName))
+		return (int32)JsonObj->GetNumberField(FieldName);
+	return FCString::Atoi(*JsonObj->GetStringField(FieldName));
+}
+
+float USwuiJsonBlueprintLibrary::ExtractFloatField(const FString& JsonPayload, const FString& FieldName)
+{
+	TSharedPtr<FJsonObject> JsonObj = SwuiParseJsonObject(JsonPayload);
+	if (!JsonObj) return 0.f;
+	if (JsonObj->HasTypedField<EJson::Number>(FieldName))
+		return (float)JsonObj->GetNumberField(FieldName);
+	return 0.f;
+}
+
+bool USwuiJsonBlueprintLibrary::ExtractBoolField(const FString& JsonPayload, const FString& FieldName)
+{
+	TSharedPtr<FJsonObject> JsonObj = SwuiParseJsonObject(JsonPayload);
+	if (!JsonObj) return false;
+	bool Value = false;
+	JsonObj->TryGetBoolField(FieldName, Value);
+	return Value;
+}

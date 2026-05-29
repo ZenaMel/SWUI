@@ -27,4 +27,22 @@ public:
 		meta=(BlueprintInternalUseOnly="true",
 			ToolTip="Deserialize a JSON string into a UScriptStruct. For internal SWUI node use."))
 	static FInstancedStruct JsonToStruct(const FString& JsonPayload, const FString& StructPath);
+
+	// ── Per-field JSON extractors (used by K2Node_SwuiCommandHook) ──
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Internal",
+		meta=(BlueprintInternalUseOnly="true"))
+	static FString ExtractStringField(const FString& JsonPayload, const FString& FieldName);
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Internal",
+		meta=(BlueprintInternalUseOnly="true"))
+	static int32 ExtractIntField(const FString& JsonPayload, const FString& FieldName);
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Internal",
+		meta=(BlueprintInternalUseOnly="true"))
+	static float ExtractFloatField(const FString& JsonPayload, const FString& FieldName);
+
+	UFUNCTION(BlueprintCallable, Category="SWUI|Internal",
+		meta=(BlueprintInternalUseOnly="true"))
+	static bool ExtractBoolField(const FString& JsonPayload, const FString& FieldName);
 };

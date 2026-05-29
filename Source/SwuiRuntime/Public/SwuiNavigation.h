@@ -15,6 +15,8 @@ class USwuiSubsystem;
 
 /** Fired for every navigation event (generic). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSwuiNavigationEventDelegate, FGameplayTag, Event, const FString&, JsonPayload);
+/** Fired when a function-backed SwuiCommand UFUNCTION is successfully executed. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FSwuiCommandExecutedDelegate, FGameplayTag, CommandTag, const FString&, JsonPayload);
 /** Fired for directional navigation. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSwuiOnNavigate, ESwuiNavDirection, Direction);
 /** Fired for simple actions (confirm/cancel/next tab/previous tab). */
@@ -354,6 +356,11 @@ public:
 	/** Fired for every navigation event with payload. */
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiNavigationEventDelegate OnNavigationEventWithPayload;
+
+	/** Fired after a function-backed SwuiCommand UFUNCTION is successfully
+	 *  executed. Hook for BP side-effects (sounds, anims, debug, analytics). */
+	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
+	FSwuiCommandExecutedDelegate OnSwuiCommandExecuted;
 
 	UPROPERTY(BlueprintAssignable, Category="SWUI|Event Dispatchers")
 	FSwuiOnNavigate OnNavigate;
