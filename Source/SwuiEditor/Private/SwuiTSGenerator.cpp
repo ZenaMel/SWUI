@@ -877,11 +877,6 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 
 	// Single source of truth: SwuiBindingCollector merges manual + code-exposed (SwuiExpose)
 	FSwuiEffectiveBindings Effective = SwuiCollectEffectiveBindings(Bridge);
-	if (Effective.Sources.IsEmpty())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("SWUI: No effective bindings to generate for '%s'. Skipping."), *Bridge->InterfaceName);
-		return false;
-	}
 
 	for (const FString& W : Effective.Warnings)
 	{
@@ -985,12 +980,6 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 		}
 
 		Sources.Add(MoveTemp(Entry));
-	}
-
-	if (Sources.IsEmpty())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("SWUI: No supported properties or events to generate for '%s'. Skipping."), *Bridge->InterfaceName);
-		return false;
 	}
 
 	// ── Resolve enums: short-name collisions, canonical names ─────────────
@@ -1289,9 +1278,18 @@ ${Fields}};
 	if (!PlatformFile.DirectoryExists(*OutDir))
 		PlatformFile.CreateDirectoryTree(*OutDir);
 
-	if (FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	bool bOK = FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	if (bOK)
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated '%s'"), *OutFile);
+
+		// Also emit a stable default swui.generated.ts so TSX entry points can
+		// always import @generated/swui.generated regardless of InterfaceName.
+		if (IName != TEXT("swui"))
+		{
+			const FString DefaultFile = OutDir / TEXT("swui.generated.ts");
+			FFileHelper::SaveStringToFile(Output, *DefaultFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
 		return true;
 	}
 
@@ -1376,9 +1374,18 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 		PlatformFile.CreateDirectoryTree(*OutDir);
 	}
 
-	if (FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	bool bOK = FFileHelper::SaveStringToFile(Output, *OutFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	if (bOK)
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Generated navigation bindings '%s' with %d JS-forwarded event(s)."), *OutFile, Events.Num());
+
+		// Also emit a stable default swui.navigation.generated.ts so TSX entry
+		// points can import @generated/swui.navigation.generated unconditionally.
+		if (InterfaceName != TEXT("swui"))
+		{
+			const FString DefaultFile = OutDir / TEXT("swui.navigation.generated.ts");
+			FFileHelper::SaveStringToFile(Output, *DefaultFile, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
 		return true;
 	}
 

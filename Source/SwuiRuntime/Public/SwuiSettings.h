@@ -91,6 +91,21 @@ public:
 	// Debug | Profiling
 	// -----------------------------------------------------------------------
 
+	// -----------------------------------------------------------------------
+	// Quality of Life
+	// -----------------------------------------------------------------------
+
+	/**
+	 * Automatically launch the Vite dev server for Content/UI on editor startup.
+	 * Disable this if you manage your own vite console window.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Quality of Life")
+	bool bAutoLaunchDevServer = false;
+
+	// -----------------------------------------------------------------------
+	// Debug | Profiling
+	// -----------------------------------------------------------------------
+
 	/**
 	 * Log upload strategy and timing details for every paint call:
 	 * dirty rects, strategy chosen, dirty/upload area, ratio, memcpy time.

@@ -1,5 +1,6 @@
 #include "SwuiBindingCollector.h"
 #include "Swui.h"
+#include "SwuiNavigation.h"
 #include "SwuiBindingSource.h"
 #include "SwuiTSGenerator.h"
 
@@ -281,11 +282,17 @@ FSwuiGenerationResult SwuiRegenerateAsset(USwui* Bridge)
 	R.bHadWarnings = !B.Warnings.IsEmpty();
 	R.Messages = B.Warnings;
 
-	// Also generate navigation bindings if applicable
+	// Also generate navigation bindings for any sibling USwuiNavigation
 	if (Bridge->GetOwner())
 	{
-		// Navigation generation requires the Bridge + navigation events.
-		// For now, rely on the manual navigation refresh path.
+		if (USwuiNavigation* Nav = Bridge->GetOwner()->FindComponentByClass<USwuiNavigation>())
+		{
+			bool bNavOK = FSwuiTSGenerator::GenerateNavigation(Bridge, Nav->NavigationEvents);
+			if (bNavOK)
+			{
+				UE_LOG(LogTemp, Log, TEXT("SWUI: Generated navigation bindings for '%s'."), *Nav->GetPathName());
+			}
+		}
 	}
 
 	R.bSuccess = bOK;
@@ -342,6 +349,33 @@ bool SwuiRegenerateAllBindings()
 	else
 	{
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Regenerated %d assets successfully."), SuccessCount);
+	}
+
+	// ── Navigation bindings: iterate all USwuiNavigation instances ─────────
+	for (TObjectIterator<USwuiNavigation> It; It; ++It)
+	{
+		USwuiNavigation* Nav = *It;
+		if (Nav->IsTemplate()) continue;
+		if (Nav->HasAnyFlags(RF_ClassDefaultObject)) continue;
+		if (Nav->GetOutermost()->GetName().StartsWith(TEXT("/Temp/"))) continue;
+
+		// Find the sibling USwui for this navigation component
+		USwui* Swui = nullptr;
+		if (AActor* Owner = Nav->GetOwner())
+		{
+			Swui = Owner->FindComponentByClass<USwui>();
+		}
+
+		if (!Swui || Swui->InterfaceName.IsEmpty()) continue;
+
+		// Skip if already generated via SwuiRegenerateAsset sibling path
+		if (AllAssets.Contains(Swui)) continue;
+
+		bool bNavOK = FSwuiTSGenerator::GenerateNavigation(Swui, Nav->NavigationEvents);
+		if (bNavOK)
+		{
+			UE_LOG(LogTemp, Log, TEXT("SWUI: Generated navigation bindings for '%s'."), *Nav->GetPathName());
+		}
 	}
 
 	return FailCount == 0;
