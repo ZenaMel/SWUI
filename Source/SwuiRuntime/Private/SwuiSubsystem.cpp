@@ -250,6 +250,7 @@ void USwuiSubsystem::Deinitialize()
 	LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;
 	ObservedProperties.Empty();
 	ObservedDelegates.Empty();
+	DelegateBridges.Empty();
 	Super::Deinitialize();
 }
 
@@ -318,6 +319,22 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 	View->SetOwningActor(OwnerActor);
 	View->Init(InstanceSettings);
 
+	// Inject focus-tracking JS so the runtime knows when an editable element has focus.
+	View->ExecuteJavaScript(
+		TEXT("(function(){var f=false;")
+		TEXT("document.addEventListener('focusin',function(e){")
+		TEXT("var el=e.target,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
+		TEXT("if(ed!==f){f=ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:ed}),onSuccess:function(){}});}")
+		TEXT("});")
+		TEXT("document.addEventListener('focusout',function(){")
+		TEXT("setTimeout(function(){")
+		TEXT("var el=document.activeElement,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
+		TEXT("if(ed!==f){f=!!ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:!!ed}),onSuccess:function(){}});}")
+		TEXT("},0);")
+		TEXT("});")
+		TEXT("})();")
+	);
+
 	UpdateLowLatencyFramePacing();
 
 	Widget = CreateWidget<UUserWidget>(World, USwuiWidget::StaticClass());
@@ -362,6 +379,7 @@ void USwuiSubsystem::InitRenderer(const FString& URI, const FString& InterfaceNa
 void USwuiSubsystem::ShutdownRenderer()
 {
 	DestroyRoiOverlay();
+	bFocusScriptInjected = false;
 
 	if (Widget && Widget->IsInViewport())
 	{
@@ -573,18 +591,25 @@ void USwuiSubsystem::ObserveDelegate(UObject* Source, const FString& Namespace, 
 		}
 	}
 
+	const FString NsKey = ResolveNamespace(Source, Namespace) + TEXT(".") + DelegateName.ToString();
+
 	FSwuiObservedDelegate Entry;
 	Entry.Source        = Source;
 	Entry.DelegateName  = DelegateName;
-	Entry.NamespacedKey = ResolveNamespace(Source, Namespace) + TEXT(".") + DelegateName.ToString();
+	Entry.NamespacedKey = NsKey;
 	Entry.PayloadFields = PayloadFields;
 
 	ObservedDelegates.Add(Entry);
 
-	// Bind a dynamic handler via the base-class AddDelegate API.
-	// FMulticastDelegateProperty::AddDelegate works for both inline and sparse delegates.
+	// Create a generic bridge that intercepts ProcessEvent and serializes the
+	// delegate's actual broadcast parameters using the SignatureFunction's
+	// property names and layout. Works for any delegate signature.
+	USwuiDelegateBridge* Bridge = NewObject<USwuiDelegateBridge>(this);
+	Bridge->Init(NsKey, this, SignatureFunc);
+	DelegateBridges.Add(Bridge);
+
 	FScriptDelegate ScriptDelegate;
-	ScriptDelegate.BindUFunction(this, GET_FUNCTION_NAME_CHECKED(USwuiSubsystem, OnObservedDelegateFired));
+	ScriptDelegate.BindUFunction(Bridge, GET_FUNCTION_NAME_CHECKED(USwuiDelegateBridge, DelegateHook));
 	MCProp->AddDelegate(ScriptDelegate, Source);
 }
 
@@ -678,6 +703,29 @@ void USwuiSubsystem::Tick(float DeltaTime)
 	SwuiManager::DoSwuiMessageLoop();
 
 	if (!View) return;
+
+	// Retry focus-tracking script injection on first tick after browser is ready.
+	if (!bFocusScriptInjected && View->HasBrowserHost())
+	{
+		bFocusScriptInjected = true;
+		View->ExecuteJavaScript(
+			TEXT("(function(){var f=false;")
+			TEXT("document.addEventListener('focusin',function(e){")
+			TEXT("var el=e.target,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
+			TEXT("if(ed!==f){f=ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:ed}),onSuccess:function(){}});}")
+			TEXT("});")
+			TEXT("document.addEventListener('focusout',function(){")
+			TEXT("setTimeout(function(){")
+			TEXT("var el=document.activeElement,ed=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT'||el.isContentEditable);")
+			TEXT("if(ed!==f){f=!!ed;window.cefQuery({request:JSON.stringify({type:'swui:focusInput',focused:!!ed}),onSuccess:function(){}});}")
+			TEXT("},0);")
+			TEXT("});")
+			TEXT("})();")
+		);
+	}
+
+	// Sync focus state from CEF browser to subsystem-level flag.
+	bTextInputFocused = View->IsTextInputFocused();
 
 	View->NotifySubsystemTick();
 
@@ -950,14 +998,10 @@ bool USwuiSubsystem::SendExternalBeginFrameIfDue(float DeltaTime)
 }
 
 // ---- Delegate fire trampoline ----
-// This is called whenever any observed delegate fires.
-// We read all currently live observed delegates, serialize what we can from the
-// delegate payload via the signature function's parameter layout.
+// This is called whenever any observed delegate fires using the OLD shared path.
+// Only used as a fallback; per-delegate bridges (USwuiDelegateBridge) are preferred.
 void USwuiSubsystem::OnObservedDelegateFired()
 {
-	// Without per-binding context we dispatch a generic ping for all live delegates
-	// whose source is still valid. For rich payload dispatch the caller uses
-	// ObserveDelegate which caches payload fields — future work.
 	for (const FSwuiObservedDelegate& Entry : ObservedDelegates)
 	{
 		if (!Entry.Source.IsValid()) continue;
@@ -967,13 +1011,63 @@ void USwuiSubsystem::OnObservedDelegateFired()
 			TEXT("var ev=new CustomEvent('%s',{detail:{}});document.dispatchEvent(ev);})();"),
 			*Entry.NamespacedKey);
 		QueueHudEventScript(Script);
-
-		if (Entry.NamespacedKey.Contains(TEXT("fired"), ESearchCase::IgnoreCase)
-			|| Entry.NamespacedKey.Contains(TEXT("hit"), ESearchCase::IgnoreCase)
-			|| Entry.NamespacedKey.Contains(TEXT("reload"), ESearchCase::IgnoreCase)
-			|| Entry.NamespacedKey.Contains(TEXT("ability"), ESearchCase::IgnoreCase))
-		{
-			QueueHudEventScript(TEXT("if(window.__SWUI_HUD__&&window.__SWUI_HUD__.weaponFired)window.__SWUI_HUD__.weaponFired({});"));
-		}
 	}
+}
+
+// ---- USwuiDelegateBridge ----
+// Generic bridge: ProcessEvent is overridden so that when the observed delegate
+// broadcasts, we intercept the call, read ALL parameters from the delegate's
+// Parms buffer using the stored SignatureFunction's property layout, serialize
+// each param by its original name, and dispatch the SWUI CustomEvent.
+// No per-type Fire* functions needed — this handles any delegate signature.
+
+void USwuiDelegateBridge::Init(const FString& InNsKey, USwuiSubsystem* InOwner, UFunction* InDelegateSignature)
+{
+	NamespacedKey = InNsKey;
+	Owner = InOwner;
+	DelegateSignature = InDelegateSignature;
+	HookFunction = FindFunctionChecked(TEXT("DelegateHook"));
+}
+
+void USwuiDelegateBridge::ProcessEvent(UFunction* Function, void* Parms)
+{
+	if (Function != HookFunction || !Owner || !DelegateSignature)
+	{
+		// Not our delegate hook — chain to base class so normal UObject
+		// events (Serialize, FinishDestroy, etc.) still work.
+		Super::ProcessEvent(Function, Parms);
+		return;
+	}
+
+	// Parms points to the delegate's broadcast parameter buffer laid out
+	// according to the delegate type's C++ ABI. For the standard UE types
+	// supported by Swui_SerializePropertyValue (bool, int, float, FString,
+	// FName, FText, UObject*, structs), the UProperty offsets from the
+	// signature function match the C++ ABI layout.
+	FString Json = TEXT("{");
+	bool bFirst = true;
+
+	for (TFieldIterator<FProperty> It(DelegateSignature); It; ++It)
+	{
+		if (!It->HasAnyPropertyFlags(CPF_Parm) || It->HasAnyPropertyFlags(CPF_ReturnParm))
+			continue;
+
+		if (!bFirst) Json += TEXT(",");
+		bFirst = false;
+
+		const FString FieldName = It->GetName();
+		Json += Swui_QuoteJsonString(FieldName) + TEXT(":");
+
+		void* ValuePtr = It->ContainerPtrToValuePtr<void>(Parms);
+		Json += Swui_SerializePropertyValue(*It, ValuePtr);
+	}
+
+	Json += TEXT("}");
+
+	const FString EscapedName = Swui_QuoteJsonString(NamespacedKey);
+	const FString Script = FString::Printf(
+		TEXT("document.dispatchEvent(new CustomEvent(%s,{detail:%s}));"),
+		*EscapedName, *Json);
+
+	Owner->QueueHudEventScript(Script);
 }

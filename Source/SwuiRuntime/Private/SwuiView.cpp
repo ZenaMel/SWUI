@@ -13,6 +13,7 @@
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameplayTagsManager.h"
+#include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -429,6 +430,15 @@ bool USwuiView::HandleIncomingMessage(const FString& MessageJson)
 	}
 
 	UE_LOG(LogSwuiRuntime, Verbose, TEXT("[SWUI JS BUS] type=%s"), *MessageType);
+
+	if (MessageType == TEXT("swui:focusInput"))
+	{
+		bool bFocused = false;
+		MessageObject->TryGetBoolField(TEXT("focused"), bFocused);
+		SetTextInputFocused(bFocused);
+		UE_LOG(LogSwuiRuntime, Log, TEXT("[SWUI Focus] textInputFocused=%s"), bFocused ? TEXT("true") : TEXT("false"));
+		return true;
+	}
 
 	if (MessageType != TEXT("navigation"))
 	{
@@ -1635,6 +1645,57 @@ void USwuiView::SetBrowserInputFocus(bool bFocused)
 			TEXT("[SwuiPointer] BrowserHost->SetFocus(%s)"),
 			bFocused ? TEXT("true") : TEXT("false"));
 	}
+}
+
+bool USwuiView::ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp)
+{
+	if (!CefData || !CefData->Browser) return false;
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return false;
+
+	CefKeyEvent Event;
+	Event.type = bKeyUp ? KEYEVENT_KEYUP : KEYEVENT_KEYDOWN;
+	Event.windows_key_code = KeyEvent.GetKeyCode();
+	Event.native_key_code = 0;
+	Event.is_system_key = false;
+	Event.character = 0;
+	Event.unmodified_character = 0;
+	Event.focus_on_editable_field = bTextInputFocused ? 1 : 0;
+	Event.modifiers = 0;
+
+	const FModifierKeysState& Mods = KeyEvent.GetModifierKeys();
+	if (Mods.IsShiftDown())    Event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+	if (Mods.IsControlDown())  Event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+	if (Mods.IsAltDown())      Event.modifiers |= EVENTFLAG_ALT_DOWN;
+	if (Mods.IsCommandDown())  Event.modifiers |= EVENTFLAG_COMMAND_DOWN;
+
+	Host->SendKeyEvent(Event);
+	return true;
+}
+
+bool USwuiView::ForwardCharToBrowser(TCHAR Char, const FModifierKeysState& Modifiers)
+{
+	if (!CefData || !CefData->Browser) return false;
+	CefRefPtr<CefBrowserHost> Host = CefData->Browser->GetHost();
+	if (!Host) return false;
+
+	CefKeyEvent Event;
+	Event.type = KEYEVENT_CHAR;
+	Event.windows_key_code = static_cast<int32>(Char);
+	Event.native_key_code = 0;
+	Event.is_system_key = false;
+	Event.character = Char;
+	Event.unmodified_character = Char;
+	Event.focus_on_editable_field = bTextInputFocused ? 1 : 0;
+	Event.modifiers = 0;
+
+	if (Modifiers.IsShiftDown())   Event.modifiers |= EVENTFLAG_SHIFT_DOWN;
+	if (Modifiers.IsControlDown()) Event.modifiers |= EVENTFLAG_CONTROL_DOWN;
+	if (Modifiers.IsAltDown())     Event.modifiers |= EVENTFLAG_ALT_DOWN;
+	if (Modifiers.IsCommandDown()) Event.modifiers |= EVENTFLAG_COMMAND_DOWN;
+
+	Host->SendKeyEvent(Event);
+	return true;
 }
 
 void USwuiView::BeginDestroy()

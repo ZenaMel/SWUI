@@ -18,10 +18,14 @@ public:
 	virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication& SlateApp, const FPointerEvent& InWheelEvent, const FPointerEvent* InGestureEvent) override;
 	virtual bool HandleMouseButtonDoubleClickEvent(FSlateApplication& SlateApp, const FPointerEvent& MouseEvent) override;
 
+	virtual bool HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent) override;
+	virtual bool HandleKeyUpEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent) override;
+
 	virtual const TCHAR* GetDebugName() const override { return TEXT("FSwuiInputPreprocessor"); }
 
 private:
 	bool ShouldForwardEvent(const FPointerEvent& MouseEvent) const;
+	bool ShouldForwardKeyboard() const;
 	void UpdateInteractionTime() const;
 
 	TWeakObjectPtr<USwuiSubsystem> Subsystem;

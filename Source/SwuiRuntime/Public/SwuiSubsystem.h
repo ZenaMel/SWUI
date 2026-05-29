@@ -12,6 +12,33 @@ class USwuiView;
 class UUserWidget;
 class FSwuiInputPreprocessor;
 
+// Generic bridge object — binds to any observed delegate, intercepts ProcessEvent,
+// and serializes the actual broadcast parameters into the JS CustomEvent detail
+// using the delegate's own SignatureFunction property layout + param names.
+UCLASS()
+class USwuiDelegateBridge : public UObject
+{
+	GENERATED_BODY()
+public:
+	void Init(const FString& InNsKey, USwuiSubsystem* InOwner, UFunction* InDelegateSignature);
+
+	// Single no-op UFUNCTION that gets bound to the observed delegate.
+	// When the delegate fires, ProcessEvent intercepts the call and serializes Parms.
+	UFUNCTION()
+	void DelegateHook() {}
+
+	virtual void ProcessEvent(UFunction* Function, void* Parms) override;
+
+protected:
+	FString NamespacedKey;
+	UPROPERTY()
+	USwuiSubsystem* Owner = nullptr;
+	UPROPERTY()
+	UFunction* HookFunction = nullptr;
+	UPROPERTY()
+	UFunction* DelegateSignature = nullptr;
+};
+
 // ---- Internal registry entries ----
 
 struct FSwuiObservedProperty
@@ -165,6 +192,21 @@ private:
 	TArray<FString> QueuedHudEventScripts;
 	TMap<FString, FString> LastObservedValues;
 
+	// Per-delegate bridge objects created by ObserveDelegate.
+	UPROPERTY()
+	TArray<USwuiDelegateBridge*> DelegateBridges;
+
+	/** True when a DOM input/textarea/select/contenteditable element has focus inside the CEF browser. */
+	bool bTextInputFocused = false;
+
+public:
+	/** Whether the CEF browser currently has focus on an editable text element. */
+	UFUNCTION(BlueprintPure, Category="SimpleWebUI")
+	bool IsTextInputFocused() const { return bTextInputFocused; }
+
+	/** Resets the focus script injection flag (called when browser is destroyed). */
+	void ResetFocusScriptInjection() { bFocusScriptInjected = false; }
+
 	/** Last interaction time, used to keep the animation window active after pointer events. */
 	double LastUiInteractionTime = 0.0;
 
@@ -190,4 +232,6 @@ private:
 
 	/** Last mode that was applied, to avoid repeated CVar sets. */
 	ESwuiLowLatencyFramePacingMode LastAppliedFramePacingMode = ESwuiLowLatencyFramePacingMode::Disabled;
+
+	bool bFocusScriptInjected = false;
 };

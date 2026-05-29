@@ -15,6 +15,8 @@
 struct FSwuiViewCefData;
 struct FUpdateTextureRegion2D;
 struct FKey;
+class FKeyEvent;
+class FModifierKeysState;
 
 class AActor;
 class UTexture2D;
@@ -145,6 +147,15 @@ public:
 
 	void SetBrowserInputFocus(bool bFocused);
 
+	// ---- Keyboard Input Forwarding ----
+
+	bool ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp);
+	bool ForwardCharToBrowser(TCHAR Char, const FModifierKeysState& Modifiers);
+
+	/** Set by HandleIncomingMessage when JS reports focus on editable elements. */
+	void SetTextInputFocused(bool bFocused) { bTextInputFocused = bFocused; }
+	bool IsTextInputFocused() const { return bTextInputFocused; }
+
 private:
 	AActor* ResolveOwningActor() const;
 
@@ -178,6 +189,7 @@ private:
 	// ---- Pointer input ----
 
 	bool bPointerInputEnabled = false;
+	bool bTextInputFocused = false;
 
 	// ---- Browser frame pacing ----
 

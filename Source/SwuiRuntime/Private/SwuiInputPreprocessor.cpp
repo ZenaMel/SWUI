@@ -138,6 +138,49 @@ bool FSwuiInputPreprocessor::HandleMouseWheelOrGestureEvent(FSlateApplication& S
 	return true;
 }
 
+bool FSwuiInputPreprocessor::ShouldForwardKeyboard() const
+{
+	USwuiSubsystem* Sub = Subsystem.Get();
+	if (!Sub) return false;
+	USwuiView* View = Sub->GetActiveView();
+	if (!View) return false;
+	if (!View->IsPointerInputEnabled()) return false;
+	if (!View->HasBrowserHost()) return false;
+	return true;
+}
+
+bool FSwuiInputPreprocessor::HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent)
+{
+	if (!ShouldForwardKeyboard()) return false;
+
+	USwuiSubsystem* Sub = Subsystem.Get();
+	USwuiView* View = Sub->GetActiveView();
+
+	View->ForwardKeyEventToBrowser(InKeyEvent, false);
+
+	const TCHAR Char = InKeyEvent.GetCharacter();
+	if (Char != 0 && !InKeyEvent.GetKey().IsModifierKey())
+	{
+		View->ForwardCharToBrowser(Char, InKeyEvent.GetModifierKeys());
+	}
+
+	UpdateInteractionTime();
+	return true;
+}
+
+bool FSwuiInputPreprocessor::HandleKeyUpEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent)
+{
+	if (!ShouldForwardKeyboard()) return false;
+
+	USwuiSubsystem* Sub = Subsystem.Get();
+	USwuiView* View = Sub->GetActiveView();
+
+	View->ForwardKeyEventToBrowser(InKeyEvent, true);
+
+	UpdateInteractionTime();
+	return true;
+}
+
 bool FSwuiInputPreprocessor::HandleMouseButtonDoubleClickEvent(FSlateApplication& SlateApp, const FPointerEvent& MouseEvent)
 {
 	if (!ShouldForwardEvent(MouseEvent)) return false;
