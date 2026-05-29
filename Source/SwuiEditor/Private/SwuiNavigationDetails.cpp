@@ -672,6 +672,9 @@ static bool AddBlueprintCommandHookNode(USwuiNavigation* Nav, const FGameplayTag
 		return false;
 	}
 
+	// Store the command signature so pin layout is deterministic.
+	NewNode->ResolveAndStoreSignature();
+
 	BlueprintEditor->AddToSelection(NewNode);
 	if (ConcreteBlueprintEditor.IsValid())
 		ConcreteBlueprintEditor->JumpToNode(NewNode, false);

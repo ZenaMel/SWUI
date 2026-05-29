@@ -13,6 +13,7 @@
 #include "Engine/ComponentDelegateBinding.h"
 #include "Engine/DynamicBlueprintBinding.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_ComponentBoundEvent.h"
 #include "K2Node_IfThenElse.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -25,126 +26,135 @@
 
 #define LOCTEXT_NAMESPACE "K2Node_SwuiCommandHook"
 
-// ── Pin names ───────────────────────────────────────────────────────────────
 namespace SwuiCmdHookPins
 {
 	static const FName Exec(UEdGraphSchema_K2::PN_Then);
-	static const FName CmdTag(TEXT("CommandTag"));
-	static const FName JsonPayload(TEXT("JsonPayload"));
 }
 
-// ── Title helpers ───────────────────────────────────────────────────────────
 static FString HumanizeTagSegment(const FString& Segment)
 {
 	FString Result;
 	Result.Reserve(Segment.Len() * 2);
-	for (int32 Index = 0; Index < Segment.Len(); ++Index)
+	for (int32 i = 0; i < Segment.Len(); ++i)
 	{
-		const TCHAR Char = Segment[Index];
-		const bool bIsSeparator = (Char == TEXT('_')) || (Char == TEXT('-'));
-		const bool bInsertSpace = Index > 0 && !bIsSeparator
-			&& FChar::IsUpper(Char) && FChar::IsLower(Segment[Index - 1]);
-		if (bIsSeparator)
-		{
-			if (!Result.IsEmpty() && Result[Result.Len() - 1] != TEXT(' '))
-				Result.AppendChar(TEXT(' '));
-			continue;
-		}
-		if (bInsertSpace && Result[Result.Len() - 1] != TEXT(' '))
-			Result.AppendChar(TEXT(' '));
-		Result.AppendChar(Index == 0 ? FChar::ToUpper(Char) : Char);
+		const TCHAR Ch = Segment[i];
+		const bool bSep = (Ch == TEXT('_')) || (Ch == TEXT('-'));
+		const bool bIns = i > 0 && !bSep && FChar::IsUpper(Ch) && FChar::IsLower(Segment[i - 1]);
+		if (bSep) { if (!Result.IsEmpty() && Result[Result.Len()-1] != ' ') Result.AppendChar(' '); continue; }
+		if (bIns && Result[Result.Len()-1] != ' ') Result.AppendChar(' ');
+		Result.AppendChar(i == 0 ? FChar::ToUpper(Ch) : Ch);
 	}
 	return Result.TrimStartAndEnd();
 }
 
 static FText MakeNodeTitle(const FGameplayTag& Tag)
 {
-	if (!Tag.IsValid())
-		return LOCTEXT("UnsetNodeTitle", "On Command Hook");
-	TArray<FString> Segments;
-	Tag.GetTagName().ToString().ParseIntoArray(Segments, TEXT("."), true);
-	if (Segments.Num() > 0 && Segments[0].Equals(TEXT("swui"), ESearchCase::IgnoreCase))
-		Segments.RemoveAt(0);
+	if (!Tag.IsValid()) return LOCTEXT("UnsetTitle", "On Command Hook");
+	TArray<FString> Segs;
+	Tag.GetTagName().ToString().ParseIntoArray(Segs, TEXT("."), true);
+	if (Segs.Num() > 0 && Segs[0].Equals(TEXT("swui"), ESearchCase::IgnoreCase)) Segs.RemoveAt(0);
 	FString Title = TEXT("On");
-	for (const FString& Segment : Segments)
-		Title += TEXT(" ") + HumanizeTagSegment(Segment);
+	for (const FString& S : Segs) Title += TEXT(" ") + HumanizeTagSegment(S);
 	Title += TEXT(" Hook");
 	return FText::FromString(Title);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Deterministic UFUNCTION resolution from stored class path + name
+// ══════════════════════════════════════════════════════════════════════════════
+
+UFunction* UK2Node_SwuiCommandHook::ResolveCommandFunction() const
+{
+	if (StoredClassPath.IsEmpty() || StoredFunctionName.IsNone()) return nullptr;
+	UClass* Cls = FindObject<UClass>(nullptr, *StoredClassPath);
+	if (!Cls) return nullptr;
+	return Cls->FindFunctionByName(StoredFunctionName, EIncludeSuperFlag::ExcludeSuper);
+}
+
+int32 UK2Node_SwuiCommandHook::ComputeFunctionParamHash(UFunction* Fn)
+{
+	if (!Fn) return 0;
+	int32 Hash = 0;
+	for (TFieldIterator<FProperty> It(Fn); It; ++It)
+	{
+		if (It->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm)) continue;
+		Hash = HashCombine(Hash, GetTypeHash(It->GetFName()));
+		Hash = HashCombine(Hash, GetTypeHash(It->GetCPPType()));
+	}
+	return Hash;
+}
+
+void UK2Node_SwuiCommandHook::ResolveAndStoreSignature()
+{
+	if (!CommandTag.IsValid()) { ParamSignatureHash = 0; ReconstructNode(); return; }
+
+	for (TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* Cls = *It;
+		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+		for (TFieldIterator<UFunction> Fi(Cls, EFieldIteratorFlags::ExcludeSuper); Fi; ++Fi)
+		{
+			const FString Cmd = Fi->GetMetaData(TEXT("SwuiCommand"));
+			if (Cmd.IsEmpty()) continue;
+			if (FGameplayTag::RequestGameplayTag(FName(*Cmd), false) != CommandTag) continue;
+			StoredClassPath = Cls->GetPathName();
+			StoredFunctionName = Fi->GetFName();
+			ParamSignatureHash = ComputeFunctionParamHash(*Fi);
+			ReconstructNode();
+			return;
+		}
+	}
+	ParamSignatureHash = 0;
+	ReconstructNode();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Lifecycle
 // ══════════════════════════════════════════════════════════════════════════════
 
-bool UK2Node_SwuiCommandHook::Modify(bool bAlwaysMarkDirty)
-{
-	CachedNodeTitle.MarkDirty();
-	return Super::Modify(bAlwaysMarkDirty);
-}
-
-void UK2Node_SwuiCommandHook::InitializeDelegateSignature()
-{
-	if (FMulticastDelegateProperty* DelegateProperty = GetTargetDelegateProperty())
-	{
-		EventReference.SetFromField<UFunction>(DelegateProperty->SignatureFunction, false);
-		bOverrideFunction = false;
-		bInternalEvent = true;
-		if (CustomFunctionName.IsNone())
-			CustomFunctionName = BuildCustomFunctionName();
-	}
-}
-
 void UK2Node_SwuiCommandHook::AllocateDefaultPins()
 {
-	InitializeDelegateSignature();
-	Super::AllocateDefaultPins();
+	// Create the then-exec output pin.
+	CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_Exec, SwuiCmdHookPins::Exec);
 
-	// Hide the delegate-signature pins — they're internal to ExpandNode.
-	if (UEdGraphPin* CmdPin = FindPin(SwuiCmdHookPins::CmdTag))
-		CmdPin->bHidden = true;
-	if (UEdGraphPin* JsonPin = FindPin(SwuiCmdHookPins::JsonPayload))
-		JsonPin->bHidden = true;
-
-	// Create typed output pins from the resolved UFUNCTION params.
-	UFunction* Fn = ResolveCommandFunction();
-	if (!Fn) return;
-
+	// Create typed output pins from the stored command signature.
 	const UEdGraphSchema_K2* Schema = GetDefault<UEdGraphSchema_K2>();
-	for (TFieldIterator<FProperty> It(Fn); It; ++It)
+	UFunction* Fn = ResolveCommandFunction();
+	if (Fn)
 	{
-		if (It->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm)) continue;
-		const FName PinName = It->GetFName();
-		FEdGraphPinType PinType;
-		bool bSupported = Schema->ConvertPropertyToPinType(*It, PinType);
-		if (!bSupported)
+		for (TFieldIterator<FProperty> It(Fn); It; ++It)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("SWUI: Command hook '%s' has unsupported param type '%s' for '%s'."),
-				*CommandTag.ToString(), *It->GetCPPType(), *PinName.ToString());
-			continue;
+			if (It->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm)) continue;
+			const FName PinName = It->GetFName();
+			FEdGraphPinType PinType;
+			if (!Schema->ConvertPropertyToPinType(*It, PinType))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SWUI: Command hook '%s' unsupported param type '%s'."),
+					*CommandTag.ToString(), *It->GetCPPType());
+				continue;
+			}
+			UEdGraphPin* OutPin = CreatePin(EGPD_Output, PinType, PinName);
+			OutPin->PinFriendlyName = FText::FromName(PinName);
 		}
-		UEdGraphPin* OutPin = CreatePin(EGPD_Output, PinType, PinName);
-		OutPin->PinFriendlyName = FText::FromName(PinName);
 	}
 }
 
 void UK2Node_SwuiCommandHook::ReconstructNode()
 {
-	InitializeDelegateSignature();
 	CachedNodeTitle.MarkDirty();
 	Super::ReconstructNode();
 }
 
 FText UK2Node_SwuiCommandHook::GetNodeTitle(ENodeTitleType::Type TitleType) const
 {
-	if (TitleType == ENodeTitleType::MenuTitle)
-		return LOCTEXT("MenuTitle", "SWUI Command Hook");
+	if (TitleType == ENodeTitleType::MenuTitle) return LOCTEXT("MenuTitle", "SWUI Command Hook");
 	return MakeNodeTitle(CommandTag);
 }
 
 FText UK2Node_SwuiCommandHook::GetTooltipText() const
 {
-	if (!CommandTag.IsValid())
-		return LOCTEXT("TooltipUnset", "Observes a function-backed SWUI command and provides its typed params.");
+	if (!CommandTag.IsValid()) return LOCTEXT("TooltipUnset", "Observes a function-backed SWUI command and provides its typed params.");
 	return FText::Format(LOCTEXT("Tooltip", "Hooks into the function-backed command '{0}' after it is executed."),
 		FText::FromString(CommandTag.GetTagName().ToString()));
 }
@@ -153,128 +163,6 @@ FText UK2Node_SwuiCommandHook::GetMenuCategory() const
 {
 	return LOCTEXT("Category", "SimpleWebUI|Commands");
 }
-
-UClass* UK2Node_SwuiCommandHook::GetDynamicBindingClass() const
-{
-	return UComponentDelegateBinding::StaticClass();
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Binding
-// ══════════════════════════════════════════════════════════════════════════════
-
-void UK2Node_SwuiCommandHook::RegisterDynamicBinding(UDynamicBlueprintBinding* BindingObject) const
-{
-	UComponentDelegateBinding* ComponentBinding = Cast<UComponentDelegateBinding>(BindingObject);
-	if (!ComponentBinding)
-	{
-		FMessageLog("Blueprint").Error(LOCTEXT("RegBindFailed",
-			"SWUI command hook failed to register dynamic binding."));
-		return;
-	}
-	if (ComponentPropertyName.IsNone())
-	{
-		FMessageLog("Blueprint").Error(LOCTEXT("RegBindMissingComp",
-			"SWUI command hook: ComponentPropertyName is missing."));
-		return;
-	}
-	if (!CommandTag.IsValid())
-	{
-		FMessageLog("Blueprint").Error(LOCTEXT("RegBindMissingTag",
-			"SWUI command hook: CommandTag is invalid."));
-		return;
-	}
-	if (!GetTargetDelegateProperty())
-	{
-		FMessageLog("Blueprint").Error(LOCTEXT("RegBindMissingDel",
-			"SWUI command hook: OnSwuiCommandExecuted could not be resolved."));
-		return;
-	}
-
-	FBlueprintComponentDelegateBinding Binding;
-	Binding.ComponentPropertyName = ComponentPropertyName;
-	Binding.DelegatePropertyName = GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnSwuiCommandExecuted);
-	Binding.FunctionNameToBind = CustomFunctionName;
-	ComponentBinding->ComponentDelegateBindings.Add(Binding);
-}
-
-void UK2Node_SwuiCommandHook::HandleVariableRenamed(
-	UBlueprint* InBlueprint, UClass* InVariableClass, UEdGraph* InGraph,
-	const FName& InOldVarName, const FName& InNewVarName)
-{
-	if (InVariableClass && InBlueprint && InBlueprint->GeneratedClass &&
-		InVariableClass->IsChildOf(InBlueprint->GeneratedClass) &&
-		InOldVarName == ComponentPropertyName)
-	{
-		Modify();
-		ComponentPropertyName = InNewVarName;
-	}
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Validation
-// ══════════════════════════════════════════════════════════════════════════════
-
-bool UK2Node_SwuiCommandHook::HasValidBindingData(FText* OutError) const
-{
-	auto E = [OutError](const FText& M) { if (OutError) *OutError = M; return false; };
-	if (ComponentPropertyName.IsNone())
-		return E(LOCTEXT("MissingComponentProperty", "Missing SWUI navigation component property"));
-	if (!CommandTag.IsValid())
-		return E(LOCTEXT("MissingCommandTag", "Missing valid CommandTag"));
-	if (!GetTargetDelegateProperty())
-		return E(LOCTEXT("MissingDelegate", "Could not resolve OnSwuiCommandExecuted"));
-	if (!ResolveCommandFunction())
-		return E(LOCTEXT("MissingFunction", "Could not resolve the SwuiCommand UFUNCTION for this tag"));
-
-	const UBlueprint* BP = GetBlueprint();
-	if (!BP) return E(LOCTEXT("MissingBlueprint", "Could not resolve owning Blueprint"));
-
-	const FObjectProperty* Prop = nullptr;
-	if (BP->SkeletonGeneratedClass)
-		Prop = FindFProperty<FObjectProperty>(BP->SkeletonGeneratedClass, ComponentPropertyName);
-	if (!Prop && BP->GeneratedClass)
-		Prop = FindFProperty<FObjectProperty>(BP->GeneratedClass, ComponentPropertyName);
-	if (!Prop || !Prop->PropertyClass || !Prop->PropertyClass->IsChildOf(USwuiNavigation::StaticClass()))
-		return E(LOCTEXT("MissingBoundComponent", "Missing matching USwuiNavigation component property"));
-	if (CustomFunctionName.IsNone())
-		return E(LOCTEXT("MissingBindingFunction", "Could not generate binding function name"));
-	return true;
-}
-
-void UK2Node_SwuiCommandHook::ValidateNodeDuringCompilation(FCompilerResultsLog& MessageLog) const
-{
-	FText ErrorText;
-	if (!HasValidBindingData(&ErrorText))
-		MessageLog.Error(*FString::Printf(TEXT("%s for @@"), *ErrorText.ToString()), this);
-
-	UFunction* Fn = ResolveCommandFunction();
-	if (!Fn)
-	{
-		MessageLog.Error(*LOCTEXT("NoFunction",
-			"@@ could not resolve the SwuiCommand UFUNCTION for this tag.").ToString(), this);
-	}
-	else
-	{
-		for (TFieldIterator<FProperty> It(Fn); It; ++It)
-		{
-			if (It->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm)) continue;
-			FEdGraphPinType Tmp;
-			if (!GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(*It, Tmp))
-			{
-				MessageLog.Error(*FString::Printf(
-					TEXT("@@ : UFUNCTION param '%s' (type '%s') is not supported as a command-hook output pin."),
-					*It->GetName(), *It->GetCPPType()), this);
-			}
-		}
-	}
-
-	Super::ValidateNodeDuringCompilation(MessageLog);
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Menu actions
-// ══════════════════════════════════════════════════════════════════════════════
 
 void UK2Node_SwuiCommandHook::GetMenuActions(FBlueprintActionDatabaseRegistrar& ActionRegistrar) const
 {
@@ -288,41 +176,51 @@ void UK2Node_SwuiCommandHook::GetMenuActions(FBlueprintActionDatabaseRegistrar& 
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Helpers
+// Validation
 // ══════════════════════════════════════════════════════════════════════════════
 
-FMulticastDelegateProperty* UK2Node_SwuiCommandHook::GetTargetDelegateProperty() const
+void UK2Node_SwuiCommandHook::ValidateNodeDuringCompilation(FCompilerResultsLog& MessageLog) const
 {
-	return FindFProperty<FMulticastDelegateProperty>(USwuiNavigation::StaticClass(),
-		GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnSwuiCommandExecuted));
-}
+	if (ComponentPropertyName.IsNone())
+		MessageLog.Error(*LOCTEXT("MissingComponent", "@@ has no component property.").ToString(), this);
+	if (!CommandTag.IsValid())
+		MessageLog.Error(*LOCTEXT("MissingTag", "@@ has no valid CommandTag.").ToString(), this);
 
-FName UK2Node_SwuiCommandHook::BuildCustomFunctionName() const
-{
-	const UBlueprint* BP = GetBlueprint();
-	const FString BPName = BP ? BP->GetName() : TEXT("SwuiBlueprint");
-	const FName DelName = GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnSwuiCommandExecuted);
-	return FName(*FString::Printf(TEXT("BndEvt__%s_%s_%s"), *BPName, *GetName(), *DelName.ToString()));
-}
-
-UFunction* UK2Node_SwuiCommandHook::ResolveCommandFunction() const
-{
-	if (!CommandTag.IsValid()) return nullptr;
-	for (TObjectIterator<UClass> It; It; ++It)
+	UFunction* Fn = ResolveCommandFunction();
+	if (!Fn)
 	{
-		UClass* Cls = *It;
-		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
-		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
-		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+		MessageLog.Error(*LOCTEXT("NoFunction",
+			"@@ could not resolve the SwuiCommand UFUNCTION for the stored signature.").ToString(), this);
+		return;
+	}
+
+	const int32 CurHash = ComputeFunctionParamHash(Fn);
+	if (CurHash != ParamSignatureHash)
+	{
+		MessageLog.Error(*FString::Printf(
+			TEXT("@@ : SWUI command signature changed (stored %d, current %d). Refresh this node."),
+			ParamSignatureHash, CurHash), this);
+		return;
+	}
+
+	for (TFieldIterator<FProperty> It(Fn); It; ++It)
+	{
+		if (It->HasAnyPropertyFlags(CPF_ReturnParm | CPF_OutParm)) continue;
+		FEdGraphPinType Tmp;
+		if (!GetDefault<UEdGraphSchema_K2>()->ConvertPropertyToPinType(*It, Tmp))
 		{
-			const FString CmdStr = FnIt->GetMetaData(TEXT("SwuiCommand"));
-			if (CmdStr.IsEmpty()) continue;
-			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*CmdStr), false);
-			if (Tag == CommandTag) return *FnIt;
+			MessageLog.Error(*FString::Printf(
+				TEXT("@@ : param '%s' (type '%s') not supported as output pin."),
+				*It->GetName(), *It->GetCPPType()), this);
 		}
 	}
-	return nullptr;
+
+	Super::ValidateNodeDuringCompilation(MessageLog);
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════════════════════
 
 UEdGraphPin* UK2Node_SwuiCommandHook::GetOutputPinForField(FName FieldName) const
 {
@@ -337,14 +235,6 @@ void UK2Node_SwuiCommandHook::ExpandNode(FKismetCompilerContext& CompilerContext
 {
 	Super::ExpandNode(CompilerContext, SourceGraph);
 
-	FText ErrorText;
-	if (!HasValidBindingData(&ErrorText))
-	{
-		CompilerContext.MessageLog.Error(*FString::Printf(TEXT("%s for @@"), *ErrorText.ToString()), this);
-		BreakAllNodeLinks();
-		return;
-	}
-
 	UFunction* CmdFn = ResolveCommandFunction();
 	if (!CmdFn)
 	{
@@ -353,14 +243,74 @@ void UK2Node_SwuiCommandHook::ExpandNode(FKismetCompilerContext& CompilerContext
 		return;
 	}
 
+	const int32 CurHash = ComputeFunctionParamHash(CmdFn);
+	if (CurHash != ParamSignatureHash)
+	{
+		CompilerContext.MessageLog.Error(*FString::Printf(
+			TEXT("@@ : SWUI command signature changed. Refresh this node.")), this);
+		BreakAllNodeLinks();
+		return;
+	}
+
 	const UEdGraphSchema_K2* Schema = CompilerContext.GetSchema();
 
-	// ── Tag literal + equality + branch ──────────────────────────────────
-	UFunction* LiteralFn = UBlueprintGameplayTagLibrary::StaticClass()->FindFunctionByName(
+	// ── 1. Spawn intermediate UK2Node_ComponentBoundEvent ───────────────
+	FMulticastDelegateProperty* DelegateProp = FindFProperty<FMulticastDelegateProperty>(
+		USwuiNavigation::StaticClass(), GET_MEMBER_NAME_CHECKED(USwuiNavigation, OnSwuiCommandExecuted));
+	if (!DelegateProp)
+	{
+		CompilerContext.MessageLog.Error(TEXT("@@ : Could not find OnSwuiCommandExecuted delegate."), this);
+		BreakAllNodeLinks();
+		return;
+	}
+
+	UBlueprint* BP = GetBlueprint();
+	FObjectProperty* ComponentProp = nullptr;
+	if (BP && BP->SkeletonGeneratedClass)
+		ComponentProp = FindFProperty<FObjectProperty>(BP->SkeletonGeneratedClass, ComponentPropertyName);
+	if (!ComponentProp && BP && BP->GeneratedClass)
+		ComponentProp = FindFProperty<FObjectProperty>(BP->GeneratedClass, ComponentPropertyName);
+	if (!ComponentProp)
+	{
+		CompilerContext.MessageLog.Error(TEXT("@@ : Could not find component property."), this);
+		BreakAllNodeLinks();
+		return;
+	}
+
+	UK2Node_ComponentBoundEvent* BoundEvent = CompilerContext.SpawnIntermediateNode<UK2Node_ComponentBoundEvent>(this, SourceGraph);
+	BoundEvent->InitializeComponentBoundEventParams(ComponentProp, DelegateProp);
+	BoundEvent->bInternalEvent = true;
+	BoundEvent->bOverrideFunction = false;
+	BoundEvent->CustomFunctionName = FName(*FString::Printf(
+		TEXT("BndEvt__%s_SwuiCommandHook_%s"), *BP->GetName(), *CommandTag.GetTagName().ToString()));
+	BoundEvent->ComponentPropertyName = ComponentPropertyName;
+	BoundEvent->AllocateDefaultPins();
+
+	// ── 2. Find the event node's output pins by iterating its properties ──
+	// The delegate signature has (FGameplayTag, FString). Find pins by type/name.
+	UEdGraphPin* EvtCmdTag = nullptr;
+	UEdGraphPin* EvtJsonPayload = nullptr;
+	for (UEdGraphPin* Pin : BoundEvent->Pins)
+	{
+		if (Pin->Direction != EGPD_Output || Pin->PinName == SwuiCmdHookPins::Exec) continue;
+		if (Pin->PinType.PinCategory == Schema->PC_Struct && Pin->PinType.PinSubCategoryObject == FGameplayTag::StaticStruct())
+			EvtCmdTag = Pin;
+		else if (Pin->PinType.PinCategory == Schema->PC_String)
+			EvtJsonPayload = Pin;
+	}
+	if (!EvtCmdTag || !EvtJsonPayload)
+	{
+		CompilerContext.MessageLog.Error(TEXT("@@ : Could not find (FGameplayTag, FString) output pins on intermediate event node."), this);
+		BreakAllNodeLinks();
+		return;
+	}
+
+	// ── 3. Tag compare + branch ────────────────────────────────────────
+	UFunction* LitFn = UBlueprintGameplayTagLibrary::StaticClass()->FindFunctionByName(
 		GET_FUNCTION_NAME_CHECKED(UBlueprintGameplayTagLibrary, MakeLiteralGameplayTag));
-	UFunction* EqualFn = UBlueprintGameplayTagLibrary::StaticClass()->FindFunctionByName(
+	UFunction* EqFn = UBlueprintGameplayTagLibrary::StaticClass()->FindFunctionByName(
 		GET_FUNCTION_NAME_CHECKED(UBlueprintGameplayTagLibrary, EqualEqual_GameplayTag));
-	if (!LiteralFn || !EqualFn)
+	if (!LitFn || !EqFn)
 	{
 		CompilerContext.MessageLog.Error(TEXT("@@ could not resolve GameplayTag BP helpers."), this);
 		BreakAllNodeLinks();
@@ -368,33 +318,25 @@ void UK2Node_SwuiCommandHook::ExpandNode(FKismetCompilerContext& CompilerContext
 	}
 
 	UK2Node_CallFunction* LitNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(this, SourceGraph);
-	LitNode->SetFromFunction(LiteralFn);
+	LitNode->SetFromFunction(LitFn);
 	LitNode->AllocateDefaultPins();
-	{
-		FString DefVal;
-		FGameplayTag::StaticStruct()->ExportText(DefVal, &CommandTag, nullptr, nullptr, PPF_None, nullptr);
-		Schema->TrySetDefaultValue(*LitNode->FindPinChecked(TEXT("Value")), DefVal);
-	}
+	FString DefVal;
+	FGameplayTag::StaticStruct()->ExportText(DefVal, &CommandTag, nullptr, nullptr, PPF_None, nullptr);
+	Schema->TrySetDefaultValue(*LitNode->FindPinChecked(TEXT("Value")), DefVal);
 
 	UK2Node_CallFunction* EqNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(this, SourceGraph);
-	EqNode->SetFromFunction(EqualFn);
+	EqNode->SetFromFunction(EqFn);
 	EqNode->AllocateDefaultPins();
 
 	UK2Node_IfThenElse* Branch = CompilerContext.SpawnIntermediateNode<UK2Node_IfThenElse>(this, SourceGraph);
 	Branch->AllocateDefaultPins();
 
-	// Wire: CommandTag → A, Literal → B, Equal → Condition
-	Schema->TryCreateConnection(FindPinChecked(SwuiCmdHookPins::CmdTag),
-		EqNode->FindPinChecked(TEXT("A")));
-	Schema->TryCreateConnection(LitNode->GetReturnValuePin(),
-		EqNode->FindPinChecked(TEXT("B")));
-	Schema->TryCreateConnection(EqNode->GetReturnValuePin(),
-		Branch->FindPinChecked(UEdGraphSchema_K2::PN_Condition));
+	Schema->TryCreateConnection(EvtCmdTag, EqNode->FindPinChecked(TEXT("A")));
+	Schema->TryCreateConnection(LitNode->GetReturnValuePin(), EqNode->FindPinChecked(TEXT("B")));
+	Schema->TryCreateConnection(EqNode->GetReturnValuePin(), Branch->FindPinChecked(UEdGraphSchema_K2::PN_Condition));
 
-	// ── Extract each parameter field from JSON ─────────────────────────
-	UEdGraphPin* JsonPayloadPin = FindPinChecked(SwuiCmdHookPins::JsonPayload);
-	UEdGraphPin* ThenPin = Branch->FindPinChecked(UEdGraphSchema_K2::PN_Then);
-	UEdGraphPin* LastExecPin = ThenPin;
+	// ── 4. Extract each parameter field from JSON ──────────────────────
+	UEdGraphPin* LastExecPin = Branch->FindPinChecked(UEdGraphSchema_K2::PN_Then);
 
 	for (TFieldIterator<FProperty> It(CmdFn); It; ++It)
 	{
@@ -404,7 +346,6 @@ void UK2Node_SwuiCommandHook::ExpandNode(FKismetCompilerContext& CompilerContext
 		UEdGraphPin* OutPin = GetOutputPinForField(FieldName);
 		if (!OutPin) continue;
 
-		// Pick the extractor function based on type
 		FName ExtractorFnName;
 		if (It->IsA<FStrProperty>() || It->IsA<FNameProperty>() || It->IsA<FTextProperty>())
 			ExtractorFnName = GET_FUNCTION_NAME_CHECKED(USwuiJsonBlueprintLibrary, ExtractStringField);
@@ -417,33 +358,28 @@ void UK2Node_SwuiCommandHook::ExpandNode(FKismetCompilerContext& CompilerContext
 		else
 		{
 			CompilerContext.MessageLog.Error(*FString::Printf(
-				TEXT("@@ : UFUNCTION param '%s' (type '%s') has no JSON extractor."),
-				*FieldName.ToString(), *It->GetCPPType()), this);
+				TEXT("@@ : param '%s' (type '%s') has no JSON extractor."), *FieldName.ToString(), *It->GetCPPType()), this);
 			continue;
 		}
 
 		UFunction* ExtractorFn = USwuiJsonBlueprintLibrary::StaticClass()->FindFunctionByName(ExtractorFnName);
 		if (!ExtractorFn) continue;
 
-		UK2Node_CallFunction* ExtractNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(this, SourceGraph);
-		ExtractNode->SetFromFunction(ExtractorFn);
-		ExtractNode->AllocateDefaultPins();
+		UK2Node_CallFunction* ExNode = CompilerContext.SpawnIntermediateNode<UK2Node_CallFunction>(this, SourceGraph);
+		ExNode->SetFromFunction(ExtractorFn);
+		ExNode->AllocateDefaultPins();
 
-		// Wire: JsonPayload → extractor.JsonPayload, field name literal → FieldName
-		Schema->TryCreateConnection(JsonPayloadPin, ExtractNode->FindPinChecked(TEXT("JsonPayload")));
-		Schema->TrySetDefaultValue(*ExtractNode->FindPinChecked(TEXT("FieldName")), FieldName.ToString());
+		Schema->TryCreateConnection(EvtJsonPayload, ExNode->FindPinChecked(TEXT("JsonPayload")));
+		Schema->TrySetDefaultValue(*ExNode->FindPinChecked(TEXT("FieldName")), FieldName.ToString());
 
-		// Wire exec: last → extractor → extractor.Then
-		Schema->TryCreateConnection(LastExecPin, ExtractNode->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
-		LastExecPin = ExtractNode->FindPinChecked(UEdGraphSchema_K2::PN_Then);
+		Schema->TryCreateConnection(LastExecPin, ExNode->FindPinChecked(UEdGraphSchema_K2::PN_Execute));
+		LastExecPin = ExNode->FindPinChecked(UEdGraphSchema_K2::PN_Then);
 
-		// Route output pin through extractor's return value
-		CompilerContext.MovePinLinksToIntermediate(*OutPin, *ExtractNode->GetReturnValuePin());
+		CompilerContext.MovePinLinksToIntermediate(*OutPin, *ExNode->GetReturnValuePin());
 	}
 
-	// Route node's exec through the last extractor's then-exec
-	CompilerContext.MovePinLinksToIntermediate(
-		*FindPinChecked(SwuiCmdHookPins::Exec), *LastExecPin);
+	// Route the public node's exec through the final extractor's then-exec.
+	CompilerContext.MovePinLinksToIntermediate(*FindPinChecked(SwuiCmdHookPins::Exec), *LastExecPin);
 }
 
 #undef LOCTEXT_NAMESPACE
