@@ -1647,6 +1647,18 @@ void USwuiView::SetBrowserInputFocus(bool bFocused)
 	}
 }
 
+// Maps a UE Slate FKeyEvent to a CefKeyEvent and forwards it to the CEF browser.
+// Called from FSwuiInputPreprocessor::HandleKeyDownEvent / HandleKeyUpEvent.
+//
+// The windows_key_code comes from FKeyEvent::GetKeyCode() which returns the Windows
+// virtual key code (VK_*). CEF handles its own key-to-char mapping, IME, and
+// composition internally once it receives the raw key events — we don't need to
+// interpret the meaning of each key.
+//
+// focus_on_editable_field is set from the DOM focus bridge state (bTextInputFocused),
+// which is updated by injected JS watching focusin/focusout on INPUT/TEXTAREA/SELECT
+// elements. When true, CEF enables standard browser keyboard handling (Tab, Enter,
+// Ctrl+A/C/V shortcuts). When false, keys are treated as UI navigation.
 bool USwuiView::ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp)
 {
 	if (!CefData || !CefData->Browser) return false;
@@ -1673,6 +1685,15 @@ bool USwuiView::ForwardKeyEventToBrowser(const FKeyEvent& KeyEvent, bool bKeyUp)
 	return true;
 }
 
+// Sends a KEYEVENT_CHAR to CEF for printable characters.
+// CEF needs BOTH KEYDOWN and KEYEVENT_CHAR for each printable keystroke — the
+// KEYDOWN identifies the physical key, the CHAR specifies the resulting character
+// (accounting for Shift, Caps Lock, keyboard layout). Without this separate CHAR
+// event, HTML <input> elements receive the key press but never the character.
+//
+// This function exists because IInputProcessor exposes HandleKeyDownEvent but
+// NOT HandleKeyCharEvent. The CHAR event is synthesized from the same FKeyEvent
+// by reading FKeyEvent::GetCharacter().
 bool USwuiView::ForwardCharToBrowser(TCHAR Char, const FModifierKeysState& Modifiers)
 {
 	if (!CefData || !CefData->Browser) return false;

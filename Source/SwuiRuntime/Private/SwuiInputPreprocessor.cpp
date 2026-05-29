@@ -138,6 +138,9 @@ bool FSwuiInputPreprocessor::HandleMouseWheelOrGestureEvent(FSlateApplication& S
 	return true;
 }
 
+// Gate: only forward keyboard when the view exists, pointer input is enabled
+// (meaning the SWUI menu/screen is active), and the CEF browser has a host.
+// Identical conditions to mouse forwarding — keyboard follows the same on/off.
 bool FSwuiInputPreprocessor::ShouldForwardKeyboard() const
 {
 	USwuiSubsystem* Sub = Subsystem.Get();
@@ -149,6 +152,13 @@ bool FSwuiInputPreprocessor::ShouldForwardKeyboard() const
 	return true;
 }
 
+// IInputProcessor exposes HandleKeyDownEvent and HandleKeyUpEvent but NOT
+// HandleKeyCharEvent (character/IME events). CEF needs both KEYDOWN and KEYEVENT_CHAR
+// for printable keystrokes. We synthesize the CHAR from FKeyEvent::GetCharacter()
+// on every regular key press. Modifier-only keys (Ctrl, Shift, Alt) skip the CHAR event.
+//
+// Without this, HTML <input>, <textarea>, and contenteditable elements never receive
+// text — CEF has no other path to know what character was typed.
 bool FSwuiInputPreprocessor::HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent)
 {
 	if (!ShouldForwardKeyboard()) return false;

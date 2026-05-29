@@ -895,6 +895,14 @@ static TArray<FSwuiGeneratedNavInfo> SwuiCollectGeneratedNavigationEvents(const 
 
 // ---- Struct-to-TS-interface helper ----
 
+// Iterates a UScriptStruct's UPROPERTY fields and emits a TypeScript interface
+// declaration. Each field is mapped via SwuiGetTSType(). Fields with unsupported
+// types (returns empty string) are silently skipped. If no fields survive, the
+// type becomes Record<string, never> (empty object) with no interface emitted.
+//
+// Used during navigation event binding generation (GenerateNavigation) to produce
+// typed payload interfaces for FSwuiNavigationEvent entries that have a
+// PayloadStruct assigned.
 static void SwuiBuildStructInterface(const UScriptStruct* Struct, FString& OutName, FString& OutBody)
 {
 	if (!Struct) { OutName.Empty(); OutBody.Empty(); return; }
@@ -1385,6 +1393,18 @@ static void SwuiBuildFunctionInterface(UFunction* Func, FString& OutName, FStrin
 }
 
 // ---- Collect navigation infos from SwuiExpose UFUNCTIONs ----
+// Scans all loaded AActor + UActorComponent classes for UFUNCTIONs carrying
+// meta=(SwuiEvent="some.tag.string") and creates synthetic FSwuiGeneratedNavInfo
+// entries. Each entry derives its tag from the metadata value, its payload
+// interface from the function's parameter properties, and its identifier/handler
+// suffix from the tag name.
+//
+// These entries are merged with the manually configured navigation events in
+// GenerateNavigation. If a manual entry has the same tag as a code-exposed one,
+// the manual entry wins (code-exposed is deduplicated by tag).
+//
+// This avoids manual NavigationEvents config for simple command declarations.
+// No struct definition needed — the function prototype IS the payload schema.
 static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& OutEvents)
 {
 	for (TObjectIterator<UClass> It; It; ++It)
