@@ -117,6 +117,14 @@ struct FSwuiNavigationEvent
 	}
 };
 
+/** Default payload for navigation events that carry no data.
+ *  Used implicitly by K2Node_SwuiNavigationEvent when no PayloadStruct is set. */
+USTRUCT(BlueprintType)
+struct FSwuiEmptyPayload
+{
+	GENERATED_BODY()
+};
+
 UENUM(BlueprintType)
 enum class ESwuiHudRoiMode : uint8
 {

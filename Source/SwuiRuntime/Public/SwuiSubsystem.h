@@ -15,6 +15,12 @@ class FSwuiInputPreprocessor;
 // Generic bridge object — binds to any observed delegate, intercepts ProcessEvent,
 // and serializes the actual broadcast parameters into the JS CustomEvent detail
 // using the delegate's own SignatureFunction property layout + param names.
+// This avoids per-type Fire* functions by hooking into UObject::ProcessEvent at
+// the base level. When the delegate broadcasts, ProcessDelegate calls ProcessEvent
+// on this object with the real param data. We read it using the delegate's
+// SignatureFunction property offsets — which are guaranteed to match because UHT
+// generates both the _Script_Parms struct and the property metadata from the same
+// source. See architecture/delegate-payloads.md.
 UCLASS()
 class USwuiDelegateBridge : public UObject
 {
@@ -22,8 +28,9 @@ class USwuiDelegateBridge : public UObject
 public:
 	void Init(const FString& InNsKey, USwuiSubsystem* InOwner, UFunction* InDelegateSignature);
 
-	// Single no-op UFUNCTION that gets bound to the observed delegate.
-	// When the delegate fires, ProcessEvent intercepts the call and serializes Parms.
+	// Single no-op UFUNCTION that gets bound to the observed delegate via AddDelegate.
+	// When the delegate fires, ProcessEvent intercepts the call before it reaches
+	// the function body, serializes Parms, and never calls the no-op body.
 	UFUNCTION()
 	void DelegateHook() {}
 

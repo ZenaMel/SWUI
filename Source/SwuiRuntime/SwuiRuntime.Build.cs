@@ -36,7 +36,9 @@ public class SwuiRuntime : ModuleRules
 				"Json",
 				"RenderCore",
 				"DeveloperSettings",
-				"GameplayTags"
+				"GameplayTags",
+				"StructUtils",
+				"JsonUtilities"
 			});
 
 		PrivateIncludePaths.AddRange(
