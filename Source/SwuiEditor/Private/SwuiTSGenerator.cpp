@@ -1342,7 +1342,14 @@ ${Fields}};
 		return true;
 	}
 
+	// Capture detailed failure info
+	TCHAR ErrorBuf[512] = {};
+	FPlatformMisc::GetSystemErrorMessage(ErrorBuf, 512, 0);
 	UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write '%s'"), *OutFile);
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Output size = %d bytes"), Output.Len());
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Target dir  = '%s'"), *OutDir);
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Dir exists = %s"), PlatformFile.DirectoryExists(*OutDir) ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   OS Error   = %s"), ErrorBuf);
 	return false;
 }
 
@@ -1380,7 +1387,6 @@ static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& Ou
 		UClass* Cls = *It;
 		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
 		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
-		if (!Cls->IsChildOf<AActor>() && !Cls->IsChildOf<UActorComponent>()) continue;
 
 		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
 		{
@@ -1400,9 +1406,6 @@ static void SwuiCollectFunctionExposedNavInfos(TArray<FSwuiGeneratedNavInfo>& Ou
 
 			FString PayloadInterfaceName, InterfaceBody;
 			SwuiBuildFunctionInterface(*FnIt, PayloadInterfaceName, InterfaceBody);
-
-			// Ensure the tag exists in the tag manager
-			UGameplayTagsManager::Get().AddNativeGameplayTag(FName(*EventTag));
 
 			FSwuiGeneratedNavInfo Info;
 			Info.Identifier          = SwuiMakeNavigationConstantIdentifier(EventName);
@@ -1589,6 +1592,13 @@ bool FSwuiTSGenerator::GenerateNavigation(USwui* Bridge, const TArray<FSwuiNavig
 		return true;
 	}
 
+	// Capture detailed failure info
+	TCHAR ErrorBuf[512] = {};
+	FPlatformMisc::GetSystemErrorMessage(ErrorBuf, 512, 0);
 	UE_LOG(LogTemp, Error, TEXT("SWUI: Failed to write navigation bindings '%s'."), *OutFile);
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Output size = %d bytes"), Output.Len());
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Target dir  = '%s'"), *OutDir);
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   Dir exists = %s"), PlatformFile.DirectoryExists(*OutDir) ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogTemp, Error, TEXT("SWUI:   OS Error   = %s"), ErrorBuf);
 	return false;
 }

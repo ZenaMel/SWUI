@@ -605,11 +605,20 @@ static bool AddBlueprintNavigationEventNode(USwuiNavigation* Nav, const FGamepla
 	return true;
 }
 
+// Forward declaration for GatherSwuiTags exclusion.
+static TArray<FGameplayTag> GatherSwuiEventTags();
+
 /** Gather all registered Gameplay Tags that start with "swui." */
 static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag>& OutCustom)
 {
 	const TSet<FName>& BuiltIn = FSwuiNavTags::GetAllBuiltInTagNames();
 	UGameplayTagsManager& TagManager = UGameplayTagsManager::Get();
+
+	// Tags discovered via SwuiEvent metadata — these appear in their own
+	// "Events from C++ / AngelScript Metadata" section; exclude from Custom.
+	TSet<FName> SwuiEventTagNames;
+	for (const FGameplayTag& ET : GatherSwuiEventTags())
+		SwuiEventTagNames.Add(ET.GetTagName());
 
 	FGameplayTagContainer AllTags;
 	TagManager.RequestAllGameplayTags(AllTags, /*bOnlyIncludeDictionaryTags=*/false);
@@ -623,7 +632,7 @@ static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag
 		{
 			OutDefault.Add(Tag);
 		}
-		else if (!IsExcludedCustomNamespaceTag(Tag))
+		else if (!IsExcludedCustomNamespaceTag(Tag) && !SwuiEventTagNames.Contains(Tag.GetTagName()))
 		{
 			OutCustom.Add(Tag);
 		}
@@ -641,6 +650,60 @@ static void GatherSwuiTags(TArray<FGameplayTag>& OutDefault, TArray<FGameplayTag
 	{
 		return A.GetTagName().LexicalLess(B.GetTagName());
 	});
+}
+
+/**
+ * Collect all event tags declared via SwuiEvent metadata on UFUNCTIONs
+ * across all loaded UClasses (C++ and AngelScript).
+ * Registers any missing tags via the editor tag module (persists to INI).
+ */
+static TArray<FGameplayTag> GatherSwuiEventTags()
+{
+	TArray<FGameplayTag> Result;
+	TSet<FName> Seen;
+
+	UGameplayTagsManager& TagMgr = UGameplayTagsManager::Get();
+
+	for (TObjectIterator<UClass> It; It; ++It)
+	{
+		UClass* Cls = *It;
+		if (Cls->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)) continue;
+		if (Cls->GetName().StartsWith(TEXT("SKEL_")) || Cls->GetName().StartsWith(TEXT("REINST_"))) continue;
+
+		for (TFieldIterator<UFunction> FnIt(Cls, EFieldIteratorFlags::ExcludeSuper); FnIt; ++FnIt)
+		{
+			const FString EventTag = FnIt->GetMetaData(TEXT("SwuiEvent"));
+			if (EventTag.IsEmpty()) continue;
+			if (!FGameplayTag::IsValidGameplayTagString(EventTag)) continue;
+
+			const FName TagFName(*EventTag);
+			if (Seen.Contains(TagFName)) continue;
+			Seen.Add(TagFName);
+
+			FGameplayTag Tag = TagMgr.RequestGameplayTag(TagFName, /*bErrorIfNotFound=*/false);
+			if (!Tag.IsValid())
+			{
+				// Tag doesn't exist yet — register it via the editor module.
+				IGameplayTagsEditorModule& TagEditor = IGameplayTagsEditorModule::Get();
+				if (TagEditor.AddNewGameplayTagToINI(EventTag, TEXT("SWUI navigation event from C++/AS metadata")))
+				{
+					TagMgr.EditorRefreshGameplayTagTree();
+					Tag = TagMgr.RequestGameplayTag(TagFName, /*bErrorIfNotFound=*/false);
+				}
+			}
+
+			if (Tag.IsValid())
+			{
+				Result.Add(Tag);
+			}
+		}
+	}
+
+	Result.Sort([](const FGameplayTag& A, const FGameplayTag& B)
+	{
+		return A.GetTagName().LexicalLess(B.GetTagName());
+	});
+	return Result;
 }
 
 /** Check if a Navigation Event entry exists for the given tag. */
@@ -1013,6 +1076,79 @@ void FSwuiNavigationDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilde
 	];
 
 	AddTagRows(CustomGroup, CustomTags, Nav, CachedDetailBuilder, /*bAllowRemove=*/true);
+
+	// ---- SwuiEvent (C++/AS metadata) Events group ----
+	// Events discovered from SwuiEvent metadata on UFUNCTIONs across all loaded
+	// UClasses. Read-only except for the enable/disable checkbox.
+	TArray<FGameplayTag> SwuiEventTags = GatherSwuiEventTags();
+	if (!SwuiEventTags.IsEmpty())
+	{
+		IDetailGroup& MetadataGroup = Cat.AddGroup(
+			TEXT("SwuiMetadataEvents"),
+			LOCTEXT("SwuiMetadataEventsHeader", "Events from C++ / AngelScript Metadata"),
+			/*bForAdvanced=*/false, /*bStartExpanded=*/true);
+
+		// Explanation text
+		MetadataGroup.AddWidgetRow()
+		.WholeRowContent()
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("MetadataEventsNote",
+				"Navigation events declared via SwuiEvent metadata on UFUNCTIONs in C++ or AngelScript code. "
+				"Check to enable as a runtime Navigation Event."))
+			.Font(IDetailLayoutBuilder::GetDetailFont())
+			.AutoWrapText(true)
+		];
+
+		for (const FGameplayTag& Tag : SwuiEventTags)
+		{
+			const FString TagStr = Tag.GetTagName().ToString();
+
+			auto NameWidget = SNew(STextBlock)
+				.Text(FText::FromString(TagStr))
+				.Font(IDetailLayoutBuilder::GetDetailFont());
+
+			auto ValueBox = SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SCheckBox)
+					.IsChecked(TAttribute<ECheckBoxState>::CreateLambda([Nav, Tag]()
+					{
+						return HasNavigationEvent(Nav, Tag)
+							? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+					}))
+					.OnCheckStateChanged_Lambda([Nav, Tag, Builder = CachedDetailBuilder](ECheckBoxState NewState)
+					{
+						if (NewState == ECheckBoxState::Checked)
+							AddNavigationEvent(Nav, Tag);
+						else
+							RemoveNavigationEvent(Nav, Tag);
+						if (Builder) Builder->ForceRefreshDetails();
+					})
+				];
+
+			// Add BP Event button
+			ValueBox.AddSlot()
+				.AutoWidth()
+				.Padding(8.f, 0.f, 0.f, 0.f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("AddBPEventCompact", "+"))
+					.ToolTipText(LOCTEXT("AddBPEventTip", "Add BP Event"))
+					.ContentPadding(FMargin(8.f, 0.f))
+					.OnClicked_Lambda([Nav, Tag]()
+					{
+						AddBlueprintNavigationEventNode(Nav, Tag);
+						return FReply::Handled();
+					})
+				];
+
+			MetadataGroup.AddWidgetRow()
+				.NameContent()[NameWidget]
+				.ValueContent()[ValueBox];
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

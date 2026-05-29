@@ -10,6 +10,9 @@
 #include "HAL/PlatformFileManager.h"
 #include "Misc/Paths.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 static FString SwuiNS(UClass* Src)
@@ -258,6 +261,31 @@ TArray<USwui*> SwuiFindAllSwuiAssets()
 		if (Seen.Contains(C)) continue;
 		Seen.Add(C);
 		Results.Add(C);
+	}
+
+	// 3. Discover USwui Blueprint assets via AssetRegistry (covers commandlet mode)
+	FAssetRegistryModule& RegModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	{
+		IAssetRegistry& Registry = RegModule.Get();
+		FARFilter Filter;
+		Filter.ClassPaths.Add(USwui::StaticClass()->GetClassPathName());
+		Filter.bRecursiveClasses = true;
+
+		TArray<FAssetData> AssetList;
+		Registry.GetAssets(Filter, AssetList);
+
+		for (const FAssetData& Asset : AssetList)
+		{
+			UObject* Obj = Asset.GetAsset();
+			if (USwui* Swui = Cast<USwui>(Obj))
+			{
+				if (!Seen.Contains(Swui))
+				{
+					Seen.Add(Swui);
+					Results.Add(Swui);
+				}
+			}
+		}
 	}
 
 	return Results;

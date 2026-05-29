@@ -11,6 +11,7 @@ public class SwuiEditor : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"UnrealEd",
+			"AssetRegistry",
 			"PropertyEditor",
 			"Slate",
 			"SlateCore",

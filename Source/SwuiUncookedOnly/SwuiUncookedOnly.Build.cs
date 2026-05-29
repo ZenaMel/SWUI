@@ -25,6 +25,5 @@ public class SwuiUncookedOnly : ModuleRules
 			"Slate",
 			"SlateCore",
 		});
-
 	}
 }
