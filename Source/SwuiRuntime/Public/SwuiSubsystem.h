@@ -160,6 +160,9 @@ public:
 	const TArray<FSwuiObservedDelegate>& GetObservedDelegates() const { return ObservedDelegates; }
 	const TArray<FSwuiObservedProperty>& GetObservedProperties() const { return ObservedProperties; }
 
+	// Internal — called by USwuiDelegateBridge::ProcessEvent to enqueue JS.
+	void QueueHudEventScript(const FString& Script);
+
 private:
 	bool  bDisabledAtRuntime = false;
 	float TickAccumulator    = 0.f; // throttles JS pushes to CEF frame rate
@@ -186,7 +189,6 @@ private:
 	void OnObservedDelegateFired();
 
 	bool FlushHudStateToJs(float DeltaTime);
-	void QueueHudEventScript(const FString& Script);
 	bool SendExternalBeginFrameIfDue(float DeltaTime);
 
 	TArray<FString> QueuedHudEventScripts;

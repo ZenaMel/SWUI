@@ -15,7 +15,7 @@
 struct FSwuiViewCefData;
 struct FUpdateTextureRegion2D;
 struct FKey;
-class FKeyEvent;
+struct FKeyEvent;
 class FModifierKeysState;
 
 class AActor;
