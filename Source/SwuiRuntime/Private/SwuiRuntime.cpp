@@ -115,7 +115,7 @@ class FSwuiRuntime : public ISwuiRuntime
 		       UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF log_file: %s"), *CefLogPath);
 		SwuiSetCefString(SwuiManager::Settings.cache_path, CachePath);
 		SwuiSetCefString(SwuiManager::Settings.log_file, CefLogPath);
-		SwuiManager::Settings.log_severity = LOGSEVERITY_VERBOSE;
+		SwuiManager::Settings.log_severity = LOGSEVERITY_WARNING;
 
 		UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF root: %s exists=%s"), *CefRoot, FPaths::DirectoryExists(CefRoot) ? TEXT("true") : TEXT("false"));
 		UE_LOG(LogSwuiRuntime, Log, TEXT("SWUI CEF browser_subprocess_path: %s exists=%s"), *ExecutablePath, FPaths::FileExists(ExecutablePath) ? TEXT("true") : TEXT("false"));

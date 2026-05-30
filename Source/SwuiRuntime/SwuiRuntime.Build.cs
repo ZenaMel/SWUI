@@ -37,7 +37,6 @@ public class SwuiRuntime : ModuleRules
 				"RenderCore",
 				"DeveloperSettings",
 				"GameplayTags",
-				"StructUtils",
 				"JsonUtilities"
 			});
 

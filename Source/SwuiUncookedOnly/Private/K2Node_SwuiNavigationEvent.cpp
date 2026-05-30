@@ -20,7 +20,6 @@
 #include "UObject/Field.h"
 #include "UObject/UnrealType.h"
 
-#include "Kismet/BlueprintInstancedStructLibrary.h"
 #include "SwuiJsonBlueprintLibrary.h"
 #include "SwuiNavigation.h"
 #include "SwuiTypes.h"
@@ -441,7 +440,7 @@ void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerCon
 	Schema->TryCreateConnection(EqNode->GetReturnValuePin(),
 		Branch->FindPinChecked(UEdGraphSchema_K2::PN_Condition));
 
-	// ── Step 1: Deserialize JsonPayload into FInstancedStruct ───────────
+	// ── Step 1: Deserialize JsonPayload into FSwuiInstancedStruct ────────
 	UFunction* J2SFn = USwuiJsonBlueprintLibrary::StaticClass()->FindFunctionByName(
 		GET_FUNCTION_NAME_CHECKED(USwuiJsonBlueprintLibrary, JsonToStruct));
 	if (!J2SFn)
@@ -465,12 +464,12 @@ void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerCon
 	Schema->TrySetDefaultValue(*J2S->FindPinChecked(TEXT("StructPath")),
 		PayloadStructDef->GetPathName());
 
-	// ── Step 2: Extract typed struct from FInstancedStruct ──────────────
-	UFunction* GetValFn = UBlueprintInstancedStructLibrary::StaticClass()->FindFunctionByName(
-		GET_FUNCTION_NAME_CHECKED(UBlueprintInstancedStructLibrary, GetInstancedStructValue));
+	// ── Step 2: Extract typed struct from FSwuiInstancedStruct ──────────
+	UFunction* GetValFn = USwuiJsonBlueprintLibrary::StaticClass()->FindFunctionByName(
+		GET_FUNCTION_NAME_CHECKED(USwuiJsonBlueprintLibrary, GetSwuiInstancedStructValue));
 	if (!GetValFn)
 	{
-		CompilerContext.MessageLog.Error(TEXT("@@ : GetInstancedStructValue not found."), this);
+		CompilerContext.MessageLog.Error(TEXT("@@ : GetSwuiInstancedStructValue not found."), this);
 		BreakAllNodeLinks();
 		return;
 	}
@@ -479,7 +478,7 @@ void UK2Node_SwuiNavigationEvent::ExpandNode(FKismetCompilerContext& CompilerCon
 	GetVal->SetFromFunction(GetValFn);
 	GetVal->AllocateDefaultPins();
 
-	// Wire FInstancedStruct → GetVal.InstancedStruct
+	// Wire FSwuiInstancedStruct → GetVal.InstancedStruct
 	Schema->TryCreateConnection(J2S->GetReturnValuePin(),
 		GetVal->FindPinChecked(TEXT("InstancedStruct")));
 

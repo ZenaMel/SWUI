@@ -3,18 +3,17 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "JsonObjectConverter.h"
-#include "StructUtils/InstancedStruct.h"
 
-FInstancedStruct USwuiJsonBlueprintLibrary::JsonToStruct(const FString& JsonPayload, const FString& StructPath)
+FSwuiInstancedStruct USwuiJsonBlueprintLibrary::JsonToStruct(const FString& JsonPayload, const FString& StructPath)
 {
 	UScriptStruct* StructDef = FindObject<UScriptStruct>(nullptr, *StructPath);
 	if (!StructDef)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SWUI: JsonToStruct - Struct '%s' not found."), *StructPath);
-		return FInstancedStruct();
+		return FSwuiInstancedStruct();
 	}
 
-	FInstancedStruct Result;
+	FSwuiInstancedStruct Result;
 	Result.InitializeAs(StructDef, nullptr);
 	void* Mem = Result.GetMutableMemory();
 	if (!Mem)
@@ -36,6 +35,15 @@ FInstancedStruct USwuiJsonBlueprintLibrary::JsonToStruct(const FString& JsonPayl
 	}
 
 	return Result;
+}
+
+void USwuiJsonBlueprintLibrary::GetSwuiInstancedStructValue(const FSwuiInstancedStruct& InstancedStruct, int32& OutValue)
+{
+	if (InstancedStruct.IsValid())
+	{
+		UScriptStruct* StructDef = InstancedStruct.GetScriptStruct();
+		StructDef->CopyScriptStruct(&OutValue, InstancedStruct.GetMemory(), 1);
+	}
 }
 
 // ── Per-field JSON extractors ──────────────────────────────────────────────

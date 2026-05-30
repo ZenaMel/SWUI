@@ -1007,6 +1007,16 @@ bool FSwuiTSGenerator::Generate(USwui* Bridge)
 					Info.StructDef = StructProp->Struct;
 				}
 			}
+			else if (const FArrayProperty* ArrayProp = CastField<const FArrayProperty>(Prop))
+			{
+				if (const FStructProperty* InnerStruct = CastField<const FStructProperty>(ArrayProp->Inner))
+				{
+					if (SwuiIsGenericStruct(InnerStruct))
+					{
+						Info.StructDef = InnerStruct->Struct;
+					}
+				}
+			}
 
 			Entry.Props.Add(MoveTemp(Info));
 		}
