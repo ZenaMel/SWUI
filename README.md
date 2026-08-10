@@ -1,3 +1,5 @@
+
+
 # SWUI
 
 **SWUI** is a web UI layer for Unreal Engine.
@@ -36,7 +38,7 @@ SWUI bridge
 Browser UI: HTML / CSS / JS / any framework
         ↓
 GameplayTag-based events back to Unreal
-````
+```
 
 ## What already works
 
@@ -136,4 +138,4 @@ The core Unreal ↔ JavaScript interop model is already working well. The curren
 
 SWUI is derived from the BLUI / SimpleWebUI lineage and keeps the CEF-backed Unreal browser integration model.
 
-Original license notices and credits are preserved according to the upstream license.
+Original license notices and credits are preserved according to the upstream license. Third-party dependencies and their licenses are documented in [CREDITS.md](CREDITS.md).
