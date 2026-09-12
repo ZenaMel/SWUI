@@ -11,16 +11,16 @@
 	"EnabledByDefault": true,
 	"CanContainContent": true,
 	"Plugins": [
-  {
-    "Name": "GameplayTagsEditor",
-    "Enabled": true
-  },
-  {
-    "Name": "Angelscript",
-    "Enabled": true,
-    "bOptional": true
-  }
-],
+		{
+			"Name": "GameplayTagsEditor",
+			"Enabled": true
+		},
+		{
+			"Name": "Angelscript",
+			"Enabled": true,
+			"Optional": true
+		}
+	],
 	"Modules": [
 		{
 			"Name": "SwuiLoader",

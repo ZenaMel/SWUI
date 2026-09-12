@@ -146,7 +146,7 @@ private:
 
 		FPlatformProcess::CreateProc(
 			TEXT("cmd.exe"),
-			*FString::Printf(TEXT("/c pnpm dev"), *ContentUI),
+			TEXT("/c pnpm dev"),
 			true, true, true, nullptr, 0, *ContentUI, nullptr);
 
 		UE_LOG(LogTemp, Log, TEXT("SWUI: Launched dev server (hidden) in %s"), *ContentUI);
